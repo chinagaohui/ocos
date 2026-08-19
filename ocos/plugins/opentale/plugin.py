@@ -1,3 +1,7 @@
+"""LEGACY-ISOLATED (U1.3, 2026-08-19): 本插件为旧嵌入路径（验证用途，S7 决议）。
+审计判定：生产代码无运行时加载（capability_registry entry_point 仅描述符字符串，无 importlib/load）；
+保留不删（历史项目依赖）；禁止新代码引用本模块。扫描豁免：scan_cross_import cross_system。
+"""
 """
 D4 OpenTale Plugin — 第一个真实 PluginBase 实现。
 
