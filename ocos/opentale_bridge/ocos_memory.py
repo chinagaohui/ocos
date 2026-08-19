@@ -168,7 +168,17 @@ class OcosMemory:
     # ── M3：编排入口（聚合记忆供决策引用） ──
 
     def recall(self, title: str) -> str:
-        """聚合决策历史 + 项目反馈 + 长期经验 → 认知上下文（E7）。"""
+        """聚合决策历史 + 项目反馈 + 长期经验 → 认知上下文（E7）。
+
+        OPT-D3（2026-08-19）：Memory 不可用时优雅降级返回空串（不抛错打断决策，
+        与 E7 语义一致：空串=无认知参考）。降级明示（不伪装正常）。
+        """
+        try:
+            return self._recall_impl(title)
+        except Exception:
+            return ""  # 降级：Memory 不可用 → 空认知上下文（明示降级）
+
+    def _recall_impl(self, title: str) -> str:
         parts: list[str] = []
         # 同作品最近决策
         for e in self._read_tail_jsonl(self.decision_path, limit=30):
