@@ -197,6 +197,11 @@ class MasterAgent:
         from ocos.opentale_bridge.ocos_memory import OcosMemory
         _memory = OcosMemory()
         _cognition = _memory.recall(intent.title)
+        # I6 Attention（U5.3）：注意力焦点注入 reasoning 上下文（生产实际路径）
+        # 只影响"认知系统看什么"，不触 Decision/Mutation/Action（Authority 冻结）
+        _af = MasterAgent._attention_focus(intent)
+        if _af:
+            _cognition = f"{_cognition}；{_af}" if _cognition else _af
         decision = OcosDecision(
             decision_id=f"d{chapter:04d}_{uuid.uuid4().hex[:8]}",
             primary_focus=focus,
@@ -236,6 +241,52 @@ class MasterAgent:
 
 
     @staticmethod
+    @staticmethod
+    def _attention_focus(intent: WritingIntent) -> str:
+        """I6 Attention（U5.3 GO，确定性版）：认知上下文选择器。
+
+        只影响 Reasoning Context（认知系统"看什么"），不触 Decision/Mutation/Action。
+        Authority 边界（冻结）：Read/Rank/Select/Influence ALLOW；Create/Approve Decision、
+        Mutate State、Execute Action、Modify Policy/Identity 全 DENY。
+        无状态、无学习、无随机——输入相同输出相同（Deterministic/Governed Attention）。
+        """
+        from ocos.opentale_bridge.ocos_activation import activate
+        activate("I6_attention")
+        from ocos.attention.candidate_selector import CandidateCollector
+        from ocos.attention.scoring import AttentionScoringEngine
+
+        collector = CandidateCollector()
+        try:
+            import json
+            import os
+            from pathlib import Path
+
+            dpath = Path(os.getenv("OCOS_DECISION_HISTORY",
+                                   str(Path.home() / ".ocos" / "decision_history.jsonl")))
+            if dpath.exists():
+                for line in [l for l in dpath.read_text(encoding="utf-8").splitlines() if l.strip()][-3:]:
+                    try:
+                        e = json.loads(line)
+                        if e.get("title") == intent.title:
+                            # event 候选：上轮决策信号（urgency = 与当前题材相关度）
+                            collector.add_event(
+                                event_id=f"dec-{e.get('decision_id','')}",
+                                urgency=0.8,
+                                summary=f"上轮 focus={e.get('focus')} tone={e.get('tone')}",
+                            )
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        engine = AttentionScoringEngine()
+        scored = engine.score_all(collector.candidates())
+        if not scored:
+            return ""
+        top = sorted(scored, key=lambda x: -x[1])[:1]
+        cand = top[0][0]
+        return f"注意力焦点: {cand.summary}（确定性选择，score={top[0][1]:.2f}）"
+
+    @staticmethod
     def _collect_cognition_context(intent: WritingIntent) -> str:
         """E7 认知循环（P1-3 轻量版）：决策基于过往决策与项目反馈。
 
@@ -273,6 +324,10 @@ class MasterAgent:
                                      f"{fb.get('chapters', 0)} 章")
             except Exception:
                 pass
+        # I6 接线（U5.3）：attention 焦点注入 reasoning 上下文（只影响"看什么"）
+        _focus = MasterAgent._attention_focus(intent)
+        if _focus:
+            parts.append(_focus)
         return "；".join(parts)
 
     @staticmethod
