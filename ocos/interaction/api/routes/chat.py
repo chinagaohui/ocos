@@ -47,7 +47,7 @@ async def chat_message(body: dict[str, Any]) -> APIResponse:
         ma = MasterAgent()
         wi = WritingIntent(
             premise=intent.get("premise") or message,
-            title=intent.get("title", ""),
+            title=intent.get("title", "") or "未命名作品",  # U3.5/F-02: 空 title 防护（决策历史不落空书名）
             genre=intent.get("genre", "general"),
             characters=intent.get("characters", []),
             roles=intent.get("roles", {}),
