@@ -116,8 +116,8 @@ class ApprovalEngine:
 
         仅当提案处于 PENDING_REVIEW 且通过安全预检时才可批准。
         """
-        from ocos.opentale_bridge.ocos_activation import activate
-        activate("I5_evolution_approval")
+        # U5.2 修正（2026-08-19）：不依赖 opentale_bridge 激活设施（import 规则）；
+        # I5 激活观测改由调用方（CLI/外部入口）负责
         if proposal.state != EvolutionState.PENDING_REVIEW:
             self._record(proposal.proposal_id, ApprovalVerdict.REJECTED,
                          f"非待审状态无法批准: {proposal.state}", tick_id)
