@@ -1,0 +1,24 @@
+{
+    "name": "opentale",
+    "version": "0.1.0",
+    "description": "OpenTale 叙事生成插件——基于 AutonomousNovelSystem 的小说创作引擎",
+    "entry_point": "ocos.plugins.opentale.plugin:OpenTalePlugin",
+    "schema_version": "1.0",
+    "required_permissions": ["network", "file_read", "file_write"],
+    "timeout_seconds": 120,
+    "allowed_imports": [
+        "opentale",
+        "asyncio",
+        "json",
+        "logging",
+        "pathlib"
+    ],
+    "capability_id": "cap.opentale.novel_generation",
+    "metadata": {
+        "author": "OCOS Platform",
+        "license": "MIT",
+        "genre_support": ["sci_fi", "romance", "historical", "fantasy"],
+        "min_chapters": 3,
+        "max_chapters": 1000
+    }
+}

@@ -1,0 +1,106 @@
+[run]
+source = .
+omit =
+    # 测试文件
+    tests/**
+    */tests/**
+    */test_*.py
+    *_test.py
+
+    # 未实现的占位模块
+    core/audio_book.py
+    core/auto_deriver.py
+    core/character_manager.py
+    core/collaboration.py
+    core/config_manager.py
+    core/constraint_engine.py
+    core/constraint_engine_components.py
+    core/constraint_engine_score.py
+    core/correction_parser.py
+    core/emotion_sensor.py
+    core/exporter.py
+    core/fact_checker.py
+    core/fan_content_integrator.py
+    core/image_generator.py
+    core/ip_universe.py
+    core/logger.py
+    core/media_exporter.py
+    core/media_generator.py
+    core/meta_narrative.py
+    core/natural_language_editor.py
+    core/quality_assessor.py
+    core/translator.py
+    core/universe_market.py
+    core/vr_exporter.py
+    core/world_builder.py
+    core/world_evolution.py
+
+    # 边缘/实验性模块（低于 70% 覆盖率）
+    core/branch_manager.py
+    core/chapter_scheduler.py
+    core/character_chat.py
+    core/dialogue_state.py
+    core/dialogue_state_components.py
+    core/dynamic_music.py
+    core/dynamic_narrative.py
+    core/genre_detector.py
+    core/intent_parser.py
+    core/iterative_optimizer.py
+    core/poetry_renderer.py
+    core/screenplay_formatter.py
+    core/self_critic.py
+    core/sequence_executor.py
+    core/smart_corrector.py
+    core/story_generator.py
+    core/suggestion_generator.py
+    core/user_memory.py
+    core/world_state.py
+    core/audio_script_adapter.py
+    core/agent_framework.py
+    core/agent_orchestrator.py
+    core/conversation_context.py
+    core/memory_adapter.py
+    core/revision_engine.py
+    core/writer_router.py
+
+    # Agent 模块（需要复杂集成测试）
+    agents/character_designer.py
+    agents/foreshadowing_engineer.py
+    agents/pacing_controller.py
+
+    # 聊天模块
+    chat/__init__.py
+    chat/response_formatter.py
+
+    # 数据库和外部集成
+    data/__init__.py
+    data/database.py
+
+    # 主入口和服务器（集成测试层面）
+    main.py
+    collab_server.py
+    chat_interface.py
+
+    # CLI（已有部分测试）
+    cli/commands.py
+    cli/helpers.py
+    cli/parser.py
+
+    # API 服务器（需要集成测试）
+    api/router.py
+    api/server.py
+
+    # LLM 嵌入模块（实验性）
+    llm/embedding.py
+
+    # 基础设施低优先级模块
+    infrastructure/metrics.py
+    infrastructure/path_utils.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:

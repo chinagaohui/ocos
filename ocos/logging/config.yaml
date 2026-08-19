@@ -1,0 +1,22 @@
+version: 1
+formatters:
+  json:
+    '()': ocos.logging.formatter.JSONFormatter
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: json
+    stream: ext://sys.stdout
+  file:
+    class: ocos.logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: ocos/logs/ocos.log
+    maxBytes: 10485760
+    backupCount: 5
+    encoding: utf-8
+loggers:
+  ocos:
+    level: DEBUG
+    handlers: [console, file]

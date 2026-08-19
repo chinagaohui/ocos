@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "ocos"
+version = "1.0.0"
+description = "Organic Cognitive Operating System — digital organism kernel"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "Proprietary"}
+authors = [
+    {name = "OCOS Team"},
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = ["-q", "--tb=short"]
+timeout = 300
+
+[tool.setuptools.packages.find]
+include = ["ocos*"]

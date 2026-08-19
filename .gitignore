@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Data (runtime-generated)
+data/
+experience/feedback/
+experience/strategies/
+experience/rating_history.json
+experience/dynamic_weights.json
+
+# Output
+output/
+
+# Runtime
+runtime/
+.mimocode/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Backup tasks
+.backup_tasks/
+.batch_progress/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Lock files
+*.lock
+!requirements.lock
+
+# Project-specific generated files
+projects/*/
+!projects/test/
+projects/test/branches.json
+write_*.log
+*.log
+projects/
+/state/
