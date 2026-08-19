@@ -202,6 +202,10 @@ class MasterAgent:
         _af = MasterAgent._attention_focus(intent)
         if _af:
             _cognition = f"{_cognition}；{_af}" if _cognition else _af
+        # I7（2026-08-20）：信念经 BeliefGate 治理后注入 reasoning（只读，不触 Decision）
+        _bf = MasterAgent._belief_context(intent)
+        if _bf:
+            _cognition = f"{_cognition}；{_bf}" if _cognition else _bf
         decision = OcosDecision(
             decision_id=f"d{chapter:04d}_{uuid.uuid4().hex[:8]}",
             primary_focus=focus,
@@ -285,6 +289,51 @@ class MasterAgent:
         top = sorted(scored, key=lambda x: -x[1])[:1]
         cand = top[0][0]
         return f"注意力焦点: {cand.summary}（确定性选择，score={top[0][1]:.2f}）"
+
+    @staticmethod
+    def _belief_context(intent: WritingIntent) -> str:
+        """I7（2026-08-20）：信念经 Governance 接入 reasoning 上下文。
+
+        BeliefGate 治理（A2 设计落地）：
+          信念源（OBSERVATION，从决策历史/反馈提取）→ BeliefGate.evaluate
+          → PASS/STRIP 文本注入 reasoning（只影响"看什么"，不触 Decision/Mutation）
+          硬约束：Belief → Decision/Mutation/事实写 全 DENY（Gate 零写接口）
+        """
+        from ocos.opentale_bridge.ocos_activation import activate
+        activate("I7_belief")
+        from ocos.opentale_bridge.belief_gate import BeliefGate, BeliefSource
+
+        # 信念源：从决策历史/反馈提取观察级信念（OBSERVATION）
+        beliefs = []
+        try:
+            import json
+            import os
+            from pathlib import Path
+            dpath = Path(os.getenv("OCOS_DECISION_HISTORY",
+                                   str(Path.home() / ".ocos" / "decision_history.jsonl")))
+            if dpath.exists():
+                for line in [l for l in dpath.read_text(encoding="utf-8").splitlines() if l.strip()][-5:]:
+                    try:
+                        e = json.loads(line)
+                        if e.get("title") == intent.title and e.get("focus"):
+                            class _B:
+                                statement = f"本作{e['focus']}方向已获验证"
+                                confidence = 0.75
+                                source = BeliefSource.OBSERVATION
+                            beliefs.append(_B())
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        if not beliefs:
+            return ""
+        gate = BeliefGate()
+        results = gate.gate_held_beliefs(beliefs)
+        if not results:
+            return ""
+        parts = [f"[信念·{r.verdict.value}] {r.statement}" for r in results[:2]]
+        return "；".join(parts)
 
     @staticmethod
     def _collect_cognition_context(intent: WritingIntent) -> str:

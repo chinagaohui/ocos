@@ -168,6 +168,7 @@ ALLOWED_IMPORTS = {
         "ocos.opentale_bridge",
         "ocos.cognitive_nutrition",
         "ocos.attention",  # U5.3/I6（2026-08-19）：Deterministic Attention 服务写作决策 reasoning 上下文（只读，Authority 冻结）
+        "ocos.agent.belief_system",  # I7（2026-08-20）：BeliefGate 读取 held beliefs（只读，Governance 接入）
     ],
     "ocos.autonomous_runtime": [
         "ocos.autonomous_runtime",
