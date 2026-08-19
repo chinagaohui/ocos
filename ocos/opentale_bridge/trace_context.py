@@ -86,7 +86,12 @@ class TraceContext:
         )
 
     @staticmethod
-    def new_root(component: str = "") -> "TraceContext":
-        """生成新的跨系统根（仅 OpenTale 入口调用；OCOS 禁止调用此方法生成根）。"""
-        return TraceContext(correlation_id=new_id("corr_"), source_system="OpenTale",
+    def new_root(component: str = "", source_system: str = "OpenTale") -> "TraceContext":
+        """生成新的跨系统根。
+
+        R1.1 契约：根由入口系统生成（OpenTale 入口 = OpenTale 生成）。
+        U4.2 修正：OCOS chat 为独立用户入口（无 OpenTale 前置）时，OCOS 作为入口
+        生成根（source_system="OCOS"）；**已收到外部 corr 时禁止重新生成**（T-04）。
+        """
+        return TraceContext(correlation_id=new_id("corr_"), source_system=source_system,
                             source_component=component)

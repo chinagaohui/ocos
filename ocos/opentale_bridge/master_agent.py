@@ -163,8 +163,10 @@ class MasterAgent:
         from ocos.opentale_bridge.ocos_activation import activate
         activate("E8_master_agent")
         activate("I4_decision_gen")
-        if trace_context is None:
-            trace_context = TraceContext(correlation_id="")
+        if trace_context is None or not getattr(trace_context, "correlation_id", ""):
+            # U4.2：OCOS 作为独立入口（chat 无 OpenTale 前置 corr）→ OCOS 生成根；
+            # 已收到外部 corr → 原样传播（T-04，禁止重新生成）
+            trace_context = TraceContext.new_root(component="interaction/chat", source_system="OCOS")
         agent_run_id = trace_context.agent_run_id or new_id("run_")  # R1.3
         focus = self.resolve_focus(intent)
         tone = self.resolve_tone(intent)

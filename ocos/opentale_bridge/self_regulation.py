@@ -137,7 +137,9 @@ class SelfRegulationLoop:
 
     # ── 5. 应用（经 Organ API，人工确认后） ──
 
-    def apply(self, project: str, chapter: int, adjustment: Any) -> dict[str, Any]:
+    def apply(self, project: str, chapter: int, adjustment: Any,
+               trace_context: Any = None) -> dict[str, Any]:
+        # U4.1: trace_context 可选——经 organ.rewrite 传播 correlation_id（CIS-Trace 连续）
         """把契约调整应用到指定章节（Organ rewrite + 调整指令）。
 
         受控开关：manual（默认）要求调用方已确认；auto 直接应用；off 拒绝。
@@ -152,17 +154,22 @@ class SelfRegulationLoop:
             # 调用方（CLI/WebChat）负责人工确认后才调用本方法
             pass
         instruction = self._adjustment_to_instruction(adjustment)
-        resp = self.organ.rewrite(project, chapter, instruction=instruction)
+        resp = self.organ.rewrite(project, chapter, instruction=instruction,
+                                  trace_context=trace_context)  # U4.1: trace 传播
         # 记忆巩固：调整历史随项目持久化（ocos_adjustments.json）——可回看的写作记忆
+        _corr = ""
+        if trace_context is not None:
+            _corr = getattr(trace_context, "correlation_id", "") or ""
         self._record_adjustment(project, chapter, adjustment, instruction,
-                                resp.get("task_id", ""), mode)
+                                resp.get("task_id", ""), mode, correlation_id=_corr)
         return {"status": "applied", "mode": mode,
                 "task_id": resp.get("task_id"),
                 "instruction": instruction}
 
     @staticmethod
     def _record_adjustment(project: str, chapter: int, adjustment: Any,
-                           instruction: str, task_id: str, mode: str) -> None:
+                           instruction: str, task_id: str, mode: str,
+                           correlation_id: str = "") -> None:
         """把调整记录追加到项目目录 ocos_adjustments.json（记忆巩固，随项目持久化）。"""
         import json
         from datetime import datetime, timezone
@@ -185,6 +192,7 @@ class SelfRegulationLoop:
             history.append({
                 "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "project": project, "chapter": chapter,
+                "correlation_id": correlation_id,  # U4.1: Trace 连续（CIS-Trace 100%）
                 "adjustment_id": getattr(adjustment, "adjustment_id", ""),
                 "triggered_by": list(getattr(adjustment, "triggered_by", [])),
                 "severity": getattr(adjustment, "severity", "info"),

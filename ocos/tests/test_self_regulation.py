@@ -9,6 +9,8 @@ mock OrganClient 章节读取，验证：
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from ocos.opentale_bridge.self_regulation import SelfRegulationLoop
@@ -30,7 +32,8 @@ class _MockOrgan:
             return {"content": "。" * 100}  # 短且无情绪（低分）
         return {"content": ("她感到温暖与希望，愤怒与委屈交替，颤抖着说出真心话。" * 25)}
 
-    def rewrite(self, project: str, chapter: int, instruction: str = "") -> dict:
+    def rewrite(self, project: str, chapter: int, instruction: str = "",
+                  trace_context: Any = None) -> dict:  # U4.1: 接受 trace_context
         return {"task_id": f"task-reg-{chapter}", "status": "accepted"}
 
 
