@@ -32,6 +32,7 @@ class EvolutionState(Enum):
     DRAFTING = "drafting"            # 正在生成提案
     ANALYZING = "analyzing"          # 影响分析中
     SANDBOXING = "sandboxing"        # 沙箱测试中
+    PENDING_REVIEW = "pending_review"  # U5.2: 安全预检通过，等待人工批准（Manual Approval）
     APPROVED = "approved"            # 治理审批通过
     MIGRATING = "migrating"          # 迁移执行中
     ACTIVE = "active"                # 进化已生效

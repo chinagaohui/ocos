@@ -99,7 +99,12 @@ class TestCE47_02_ProposalNotExecution:
 
         # Step 5: Approve
         verdict = approval.evaluate(proposal, tick_id=10)
-        assert verdict == ApprovalVerdict.APPROVED
+        # U5.2：evaluate 仅做安全预检 → 一律转人工批准（PENDING_REVIEW）
+        assert verdict == ApprovalVerdict.PENDING_REVIEW
+        # 人工批准（唯一 APPROVED 路径）
+        verdict2 = approval.manual_approve(proposal, approver="test-human", tick_id=11)
+        assert verdict2 == ApprovalVerdict.APPROVED
+        assert proposal.approved_by == "manual:test-human"
         assert proposal.state == EvolutionState.APPROVED
         assert proposal.ready_for_migration
 
@@ -331,7 +336,10 @@ class TestFullEvolutionPipeline:
 
         # 5. Approve
         verdict = approval.evaluate(proposal, tick_id=60)
-        assert verdict == ApprovalVerdict.APPROVED
+        # U5.2：安全预检 → 人工批准
+        assert verdict == ApprovalVerdict.PENDING_REVIEW
+        verdict2 = approval.manual_approve(proposal, approver="test-human", tick_id=61)
+        assert verdict2 == ApprovalVerdict.APPROVED
         assert proposal.ready_for_migration
 
         # 6. Migrate

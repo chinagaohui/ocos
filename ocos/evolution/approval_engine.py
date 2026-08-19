@@ -101,14 +101,42 @@ class ApprovalEngine:
             proposal.state = EvolutionState.REJECTED
             return ApprovalVerdict.REJECTED
 
-        # Gate 5: 全通过 → APPROVED
+        # Gate 5 (U5.2): 安全预检通过 → 一律转人工批准（PENDING_REVIEW）
+        # 老高硬约束：Evolution Proposal → Manual Approval → Decision → Authorized Apply
+        # 禁止 Cognition→自动批准→自动进化；Capability ≠ Authority, Proposal ≠ Decision
+        proposal.state = EvolutionState.PENDING_REVIEW
+        self._record(
+            proposal.proposal_id, ApprovalVerdict.PENDING_REVIEW,
+            "U5.2: 安全预检通过，等待人工批准", tick_id,
+        )
+        return ApprovalVerdict.PENDING_REVIEW
+
+    def manual_approve(self, proposal, approver: str, tick_id: int = 0) -> ApprovalVerdict:
+        """U5.2: 人工批准（唯一 APPROVED 路径——Manual Approval 保留人为权威边界）。
+
+        仅当提案处于 PENDING_REVIEW 且通过安全预检时才可批准。
+        """
+        from ocos.opentale_bridge.ocos_activation import activate
+        activate("I5_evolution_approval")
+        if proposal.state != EvolutionState.PENDING_REVIEW:
+            self._record(proposal.proposal_id, ApprovalVerdict.REJECTED,
+                         f"非待审状态无法批准: {proposal.state}", tick_id)
+            return ApprovalVerdict.REJECTED
+        if not proposal.sandbox_passed or not proposal.is_boundary_safe:
+            self._record(proposal.proposal_id, ApprovalVerdict.REJECTED,
+                         "安全预检未通过，禁止人工批准", tick_id)
+            return ApprovalVerdict.REJECTED
+        if not approver or approver.strip() == "":
+            self._record(proposal.proposal_id, ApprovalVerdict.REJECTED,
+                         "批准人必须显式指定（不可匿名批准）", tick_id)
+            return ApprovalVerdict.REJECTED
         proposal.state = EvolutionState.APPROVED
         proposal.governance_approved = True
-        proposal.approved_by = "governance"
+        proposal.approved_by = f"manual:{approver}"
 
         self._record(
             proposal.proposal_id, ApprovalVerdict.APPROVED,
-            "All checks passed", tick_id,
+            f"U5.2 人工批准 by {approver}", tick_id,
         )
         return ApprovalVerdict.APPROVED
 
