@@ -103,14 +103,11 @@ class EventArchiveManager:
         self.archives[archive.archive_id] = archive
         self.total_archived += len(events)
 
-        # 在 store 中标记为 ARCHIVED
+        # 在 store 中标记为 ARCHIVED（GAP-P2-3: pass → 真实标记）
+        # 不改事件本体（EM54-01 append-only），仅更新 header.lifecycle
         if store:
             for e in events:
-                existing = store.find(e.event_id)
-                if existing:
-                    # 替换为归档版本 (实践中通过 with_lifecycle)
-                    # 这里只标记，不修改不可变事件
-                    pass
+                store.mark_archived(e.event_id)
 
         return archive
 

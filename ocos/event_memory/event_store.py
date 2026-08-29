@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from collections import OrderedDict
-from typing import Iterator
+from typing import Any, Iterator
 import time as _time
 
 from ocos.event_memory.event_types import (
@@ -36,12 +36,20 @@ class EventStore:
         - 时间范围扫描 (range)
         - 分页遍历 (iterate)
         - 统计 (stats)
+
+    GAP-P2-3: 可选 SQLite 持久化后端。注入 connection（storage/connection
+    get_connection + schema CREATE_EVENT_STORE）后，append/append_batch
+    同步写入 event_store 表（INSERT OR IGNORE，保持 append-only 语义）；
+    load_from_db() 从库重建。不注入 → 纯内存（旧行为）。
     """
 
     # 主存储: timestamp → list of events (同一时间戳可有多个事件)
     _events: dict[float, list[CognitiveEvent]] = field(default_factory=dict)
     _by_id: dict[str, CognitiveEvent] = field(default_factory=dict)
     _headers: dict[str, EventHeader] = field(default_factory=dict)
+
+    # GAP-P2-3: 可选 SQLite 持久化后端
+    connection: Any = None
 
     # 时间范围
     _earliest: float = 0.0
@@ -70,6 +78,70 @@ class EventStore:
 
         self.total_appended += 1
         self.total_bytes_approx += len(str(event.payload)) if event.payload else 0
+        self._persist(event)
+        return True
+
+    def _persist(self, event: CognitiveEvent) -> None:
+        """GAP-P2-3: 可选 SQLite 持久化（INSERT OR IGNORE，append-only）。"""
+        if self.connection is None:
+            return
+        import json as _json
+        payload = _json.dumps(event.payload, ensure_ascii=False) if event.payload else "{}"
+        self.connection.execute(
+            "INSERT OR IGNORE INTO event_store "
+            "(event_id, event_type, payload, source, created_at, sequence) "
+            "VALUES (?, ?, ?, ?, ?, "
+            "(SELECT COALESCE(MAX(sequence), 0) + 1 FROM event_store))",
+            (
+                event.event_id,
+                event.event_type.value,
+                payload,
+                event.source,
+                _time.strftime("%Y-%m-%dT%H:%M:%S", _time.localtime(event.timestamp)),
+            ),
+        )
+        self.connection.commit()
+
+    @classmethod
+    def load_from_db(cls, connection: Any) -> "EventStore":
+        """GAP-P2-3: 从 SQLite event_store 表重建内存存储。
+
+        跨 session 持久化（EM54-05）：新进程从库恢复事件流。
+        """
+        import json as _json
+        from ocos.event_memory.event_types import CognitiveEventType
+
+        store = cls(connection=connection)
+        rows = connection.execute(
+            "SELECT event_id, event_type, payload, source, created_at FROM event_store "
+            "ORDER BY sequence"
+        ).fetchall()
+        for event_id, event_type, payload, source, created_at in rows:
+            ts = 0.0
+            if created_at:
+                try:
+                    ts = _time.mktime(_time.strptime(created_at, "%Y-%m-%dT%H:%M:%S"))
+                except ValueError:
+                    ts = 0.0
+            ev = CognitiveEvent(
+                event_id=event_id,
+                event_type=CognitiveEventType(event_type),
+                timestamp=ts,
+                source=source or "",
+                payload=_json.loads(payload),
+            )
+            store.append(ev)
+        return store
+
+    def mark_archived(self, event_id: str) -> bool:
+        """GAP-P2-3: 标记事件已归档（header.lifecycle=ARCHIVED）。
+
+        不改事件本体（EM54-01 append-only），仅更新头摘要。
+        """
+        header = self._headers.get(event_id)
+        if header is None:
+            return False
+        header.lifecycle = EventLifecyclePhase.ARCHIVED
         return True
 
     def append_batch(self, events: list[CognitiveEvent]) -> int:

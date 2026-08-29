@@ -8,7 +8,8 @@ CR55-02: Adapter Isolation — 适配器崩溃不影响主脑。
     3. 提供 validate() — 执行前验证
     4. 提供 execute() — 沙盒执行
     5. 报告健康状态 (health_check)
-    6. 记录事件到 EventLifecycle (CR55-03)
+    （GAP-P2-3: 删除"记录事件到 EventLifecycle"声称——execute 提供通用
+     on_event 回调钩子，事件接线由消费方决定，adapter 不直接依赖事件层）
 """
 
 from __future__ import annotations
