@@ -5,6 +5,7 @@ Phase 21: 身份锚点持久化——解决 AR-1。
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from datetime import datetime
@@ -30,6 +31,18 @@ CREATE TABLE IF NOT EXISTS identity (
 );
 """
 
+# GAP-P0-1: 身份跨重启连续性快照表（Phase 34E 消费）。
+# 同一 snapshot_id 保留最近 SNAPSHOT_KEEP=10 份，按插入序淘汰。
+_SNAPSHOT_KEEP = 10
+_SNAPSHOT_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS identity_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 
 class IdentitySQLiteStore:
     """IdentityAnchor SQLite 持久化存储。
@@ -51,8 +64,7 @@ class IdentitySQLiteStore:
         """创建表结构。幂等。"""
         self._conn = get_connection(self._db_path)
         self._conn.execute(_CREATE_TABLE_SQL)
-        self._conn.commit()
-        self._conn.execute(_CREATE_TABLE_SQL)
+        self._conn.execute(_SNAPSHOT_TABLE_SQL)
         self._conn.commit()
         logger.info("IdentitySQLiteStore initialized at %s", self._db_path)
 
@@ -122,3 +134,37 @@ class IdentitySQLiteStore:
         )
         self.connection.commit()
         return cur.rowcount > 0
+
+    # ── Phase 34E 身份快照（GAP-P0-1）──────────────────────────────────────
+
+    def save_snapshot(self, snapshot_id: str, payload: dict) -> None:
+        """保存身份连续性快照（JSON 序列化，按 snapshot_id 保留最近 10 份）。
+
+        此前 agent_runtime 调用本方法时该方法不存在，AttributeError 被
+        调用方 try/except 吞掉，导致 Phase 34E 跨重启连续性静默失效。
+        """
+        self.connection.execute(
+            "INSERT INTO identity_snapshots (snapshot_id, payload) VALUES (?, ?)",
+            (snapshot_id, json.dumps(payload, ensure_ascii=False)),
+        )
+        self.connection.execute(
+            """DELETE FROM identity_snapshots WHERE snapshot_id = ?
+               AND id NOT IN (
+                   SELECT id FROM identity_snapshots WHERE snapshot_id = ?
+                   ORDER BY id DESC LIMIT ?
+               )""",
+            (snapshot_id, snapshot_id, _SNAPSHOT_KEEP),
+        )
+        self.connection.commit()
+        logger.debug("Identity snapshot saved: %s", snapshot_id)
+
+    def load_snapshot(self, snapshot_id: str) -> Optional[dict]:
+        """加载该 snapshot_id 最新一份快照；不存在返回 None。"""
+        row = self.connection.execute(
+            "SELECT payload FROM identity_snapshots"
+            " WHERE snapshot_id = ? ORDER BY id DESC LIMIT 1",
+            (snapshot_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row[0])
