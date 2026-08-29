@@ -11,6 +11,8 @@ ocos.interaction.cli.commands 只依赖 ocos.daemon 门面，
 
 from __future__ import annotations
 
+from typing import Any, Optional
+
 
 def build_master_agent(agent_id: str):
     """组装真实组件 MasterAgent — 全部生产实现，零 Mock。"""
@@ -44,6 +46,7 @@ def build_health_loop(runtime=None, interval_ticks: int = 100):
     """
     import os
     from pathlib import Path
+    from typing import Any, Optional
 
     from ocos.alerts.channels import FileChannel, LogChannel
     from ocos.alerts.manager import AlertManager
@@ -63,3 +66,19 @@ def build_health_loop(runtime=None, interval_ticks: int = 100):
         homeostasis=HomeostasisManager(),
         interval_ticks=interval_ticks,
     )
+
+
+def build_perception_pipeline(sensors: Optional[list] = None):
+    """GAP-P1-3: 组装感知链 — PerceptionEngine + WorldStore + 可选传感器。
+
+    默认零传感器（零噪音）— sensors 由调用方按环境注入
+    （如 FileSensor.watch(数据目录)）。实体归属由调用方通过
+    entity_resolver 注入领域语义，否则观察被 WorldValidator 诚实拒绝。
+    """
+    from ocos.perception.pipeline import PerceptionPipeline
+    from ocos.world_model.world_store import WorldStore
+
+    pipeline = PerceptionPipeline(world=WorldStore(), infer_causality=True)
+    for sensor in sensors or []:
+        pipeline.register_sensor(sensor)
+    return pipeline

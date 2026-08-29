@@ -146,7 +146,7 @@ ALLOWED_IMPORTS = {
     "ocos.interaction.api.routes": ["ocos.interaction", "ocos.goal", "ocos.kernel",
                                      "ocos.planning", "ocos.opentale_bridge"],  # S6: WebChat 决策/器官调用
     # Phase 52: Perception System
-    "ocos.perception": ["ocos.perception"],
+    "ocos.perception": ["ocos.perception", "ocos.world_model"],  # GAP-P1-3: 感知链桥接世界模型
     # Phase 53: Active Interaction — merged with existing
     # Phase 54: Event Memory Infrastructure
     "ocos.event_memory": ["ocos.event_memory"],
@@ -179,7 +179,8 @@ ALLOWED_IMPORTS = {
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
                     "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal",
-                    "ocos.alerts", "ocos.health_examination"],  # GAP-P1-2: 健康体检告警
+                    "ocos.alerts", "ocos.health_examination",
+                    "ocos.perception", "ocos.world_model"],  # GAP-P1-2/3: daemon 装配健康监控 + 感知链
 }
 
 # 测试文件允许的 import 例外（白名单，当前 unused—保留供将来使用）
