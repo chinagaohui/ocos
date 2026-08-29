@@ -74,9 +74,10 @@ class TestCG44_02_DiscoveryNotAcceptance:
         cc = CompatibilityChecker()
         compat = cc.check(c, analysis)
 
-        # 4. Sandbox
+        # 4. Sandbox — GAP-P0-4 后 validate 做真实 import 探测（不再无条件 passed）
         sb = SandboxRunner()
-        sandbox = sb.validate(c.candidate_id)
+        sandbox = sb.validate("json")  # 标准库模块可导入 → passed
+        assert sandbox.passed is True
 
         # 5. Approve
         ae = ApprovalEngine()

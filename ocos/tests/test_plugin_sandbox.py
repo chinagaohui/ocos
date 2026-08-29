@@ -387,23 +387,15 @@ class TestSandboxLoadUnload:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestSandboxExecute:
-    def test_execute_success(self):
+    def test_execute_without_instance(self):
+        # GAP-P0-4: 无已加载插件实例 → 诚实失败（此前 stub 伪装 success=True）
         sandbox = PluginSandbox()
         pid = sandbox.load(PluginManifest(name="p", entry_point="m:Plugin"))
         result = sandbox.execute(pid, "run")
-        assert result.success is True
+        assert result.success is False
         assert result.plugin_id == pid
-        assert result.output is not None
+        assert "no plugin instance loaded" in result.error
         assert result.killed is False
-
-    def test_execute_with_params(self):
-        sandbox = PluginSandbox()
-        pid = sandbox.load(PluginManifest(name="p", entry_point="m:Plugin"))
-        result = sandbox.execute(pid, "run", params={"key": "val", "num": 42})
-        assert result.success is True
-        # 当前桩实现返回 params_keys
-        assert "key" in result.output.get("params_keys", [])
-        assert "num" in result.output.get("params_keys", [])
 
     def test_execute_nonexistent_plugin(self):
         sandbox = PluginSandbox()
@@ -413,8 +405,10 @@ class TestSandboxExecute:
     def test_execute_action_name(self):
         sandbox = PluginSandbox()
         pid = sandbox.load(PluginManifest(name="p", entry_point="m:Plugin"))
+        # GAP-P0-4: 无实例 → 诚实失败，错误信息带 action 名
         result = sandbox.execute(pid, "generate")
-        assert result.output.get("action") == "generate"
+        assert result.success is False
+        assert "generate" in result.error
 
     def test_execute_result_has_timing(self):
         sandbox = PluginSandbox()
@@ -460,8 +454,10 @@ class TestTimeoutKill:
             name="p", entry_point="m:Plugin", timeout_seconds=5,
         ))
         # 显式传更短的 timeout 覆盖 manifest 值
+        # GAP-P0-4: 无实例 → 诚实失败（无超时语义），仍带计时
         result = sandbox.execute(pid, "run", timeout=10)
-        assert result.success is True  # 桩很快，应在 10s 内完成
+        assert result.success is False
+        assert result.execution_time_ms > 0.0
 
     def test_timeout_clamped_to_max(self):
         """超过 300 的 timeout 被截断到 300。"""
@@ -494,9 +490,10 @@ class TestTimeoutKill:
         pid = sandbox.load(PluginManifest(
             name="p", entry_point="m:Plugin", timeout_seconds=3,
         ))
-        # 正常执行不会超时
+        # 正常执行不会超时；GAP-P0-4: 无实例 → 诚实失败
         result = sandbox.execute(pid, "run")
-        assert result.success is True
+        assert result.success is False
+        assert "no plugin instance loaded" in result.error
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -509,7 +506,9 @@ class TestSandboxImportHook:
         sandbox = PluginSandbox()
         pid = sandbox.load(PluginManifest(name="p", entry_point="m:Plugin"))
         result = sandbox.execute(pid, "run")
-        assert result.success is True
+        # GAP-P0-4: 无实例 → 诚实失败（hook 安装逻辑仍在 execute 内执行）
+        assert result.success is False
+        assert "no plugin instance loaded" in result.error
 
     def test_import_hook_removed_after_execute(self):
         """确认 sys.meta_path 在 execute 后移除了 hook。"""
@@ -530,8 +529,10 @@ class TestSandboxImportHook:
             entry_point="m:Plugin",
             allowed_imports=["xml"],
         ))
+        # GAP-P0-4: 无 plugin_instance → 诚实失败（不再 stub 假成功）
         result = sandbox.execute(pid, "run")
-        assert result.success is True
+        assert result.success is False
+        assert "no plugin instance loaded" in result.error
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

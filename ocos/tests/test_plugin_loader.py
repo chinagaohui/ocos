@@ -885,7 +885,7 @@ class TestEdgeCases:
     """边界条件测试。"""
 
     def test_execute_stub_fallback(self, sandbox: PluginSandbox) -> None:
-        """未设置 plugin_instance 的 slot 回退到 stub。"""
+        """未设置 plugin_instance 的 slot 诚实失败（GAP-P0-4 前 stub 假成功）。"""
         loader = PluginLoader(sandbox)
         # 直接通过 sandbox.load 注册（不通过 loader.load，不设置 plugin_instance）
         manifest = PluginManifest(
@@ -895,12 +895,10 @@ class TestEdgeCases:
         )
         pid = sandbox.load(manifest)
 
-        # 此时 slot 无 plugin_instance，execute 应回退到 stub
+        # 此时 slot 无 plugin_instance，execute 应诚实失败（不再伪装成功）
         result = sandbox.execute(pid, "some_action", {"k": "v"})
-        assert result.success
-        # stub 返回 {plugin, action, params_keys}，不是真实插件逻辑
-        assert result.output["plugin"] == "stub-test"
-        assert result.output["action"] == "some_action"
+        assert result.success is False
+        assert "no plugin instance loaded" in result.error
 
     def test_permission_enforced_by_sandbox(self, loader: PluginLoader) -> None:
         """超出 Sandbox 允许范围的权限被拒绝。"""

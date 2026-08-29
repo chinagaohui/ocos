@@ -414,16 +414,14 @@ class PluginSandbox:
                     output=output,
                 )
 
-            # 桩：直接返回 action 和 params 的摘要
-            output = {
-                "plugin": slot.manifest.name,
-                "action": action,
-                "params_keys": list(params.keys()),
-            }
+            # GAP-P0-4: 无已加载实例 → 诚实失败（此前伪装 success=True 假成功）
             return SandboxResult(
-                success=True,
+                success=False,
                 plugin_id=slot.plugin_id,
-                output=output,
+                error=(
+                    f"no plugin instance loaded for action '{action}' "
+                    f"(plugin '{slot.manifest.name}')"
+                ),
             )
         except Exception as exc:
             logger.error("Plugin _do_execute failed", component="plugin_sandbox", plugin_id=slot.plugin_id, action=action, exception=exc)

@@ -25,17 +25,40 @@ class SandboxRunner:
     max_runtime_ticks: int = 1000  # 最大沙箱运行时长
 
     def validate(self, candidate_id: str) -> SandboxResult:
-        """验证扩展（简化实现：检查是否能导入）。"""
-        # 实际实现会加载到隔离的 Python 环境
-        # 此处提供结构化框架
-        return SandboxResult(
-            candidate_id=candidate_id,
-            passed=True,
-            test_count=3,
-            passed_count=3,
-            behavioral_notes=["行为在预期范围内", "无越界操作"],
-            runtime_ticks=10,
-        )
+        """验证扩展：dry-run 隔离 import 探测（GAP-P0-4 前为无条件 passed=True 假成功）。
+
+        仅做 find_spec 探测（不执行模块代码，隔离安全）；真实隔离执行见 P2-6。
+        """
+        try:
+            import importlib.util
+
+            spec = importlib.util.find_spec(candidate_id)
+            if spec is None:
+                return SandboxResult(
+                    candidate_id=candidate_id,
+                    passed=False,
+                    test_count=1,
+                    passed_count=0,
+                    behavioral_notes=[f"无法找到模块 '{candidate_id}'（import 探测失败）"],
+                    runtime_ticks=0,
+                )
+            return SandboxResult(
+                candidate_id=candidate_id,
+                passed=True,
+                test_count=1,
+                passed_count=1,
+                behavioral_notes=[f"模块 '{candidate_id}' 可导入（dry-run import 探测）"],
+                runtime_ticks=1,
+            )
+        except Exception as exc:  # noqa: BLE001 — 探测失败一律诚实报告
+            return SandboxResult(
+                candidate_id=candidate_id,
+                passed=False,
+                test_count=1,
+                passed_count=0,
+                behavioral_notes=[f"import 探测异常: {exc}"],
+                runtime_ticks=0,
+            )
 
     def custom_validate(
         self, candidate_id: str, passed: bool = True,
