@@ -37,7 +37,25 @@ class SnapshotManager:
 
     def _conn(self):
         """获取 SQLite 连接（复用连接池）。"""
-        return get_connection(self._db_path)
+        conn = get_connection(self._db_path)
+        # GAP-P2-5: 自愈建表 — snapshots 表此前仅测试夹具手工创建, 生产路径缺失
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                version TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                is_recovered BOOLEAN DEFAULT 0,
+                data JSON NOT NULL,
+                size_kb INTEGER,
+                recovered_at TIMESTAMP,
+                agent_id TEXT DEFAULT 'master'
+            );
+            CREATE INDEX IF NOT EXISTS idx_snapshots_created_at ON snapshots(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_snapshots_recovered ON snapshots(is_recovered);
+            """
+        )
+        return conn
 
     def save(self, snapshot: AgentSnapshot) -> str:
         """原子保存 Snapshot。
@@ -81,7 +99,8 @@ class SnapshotManager:
         无记录时返回 None。
         """
         conn = self._conn()
-        conn.row_factory = None  # 使用默认 tuple 模式
+        # GAP-P2-5: 不再重置 row_factory — 共享连接池连接被改为 tuple 模式会
+        # 污染同 db 其他 store（identity_store 等）的 dict(row) 查询
         row = conn.execute(
             "SELECT data FROM snapshots ORDER BY created_at DESC LIMIT 1"
         ).fetchone()

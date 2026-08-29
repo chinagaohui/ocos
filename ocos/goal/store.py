@@ -34,7 +34,28 @@ class GoalStore:
         self._db_path = db_path
 
     def _conn(self):
-        return get_connection(self._db_path)
+        conn = get_connection(self._db_path)
+        # GAP-P2-5: 自愈建表 — goals 表此前仅测试夹具创建, 生产路径缺失
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS goals (
+                id TEXT PRIMARY KEY,
+                level TEXT NOT NULL,
+                status TEXT NOT NULL,
+                progress REAL DEFAULT 0.0,
+                description TEXT DEFAULT '',
+                priority REAL DEFAULT 5.0,
+                parent_id TEXT DEFAULT '',
+                source TEXT DEFAULT '',
+                source_id TEXT DEFAULT '',
+                deadline TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                origin_level TEXT DEFAULT 'SYSTEM',
+                authority TEXT DEFAULT 'AUTONOMOUS',
+                decision_refs TEXT DEFAULT '[]'
+            )"""
+        )
+        return conn
 
     # ── 保存 ────────────────────────────────────────────────────────
 
@@ -78,7 +99,7 @@ class GoalStore:
     def load_active(self) -> list[dict]:
         """加载所有活跃 Goal（非终止态）。"""
         conn = self._conn()
-        conn.row_factory = None
+        # GAP-P2-5: 不再重置 row_factory — 共享连接池连接改 tuple 会污染同 db 其他 store
         rows = conn.execute(
             """
             SELECT id, level, status, progress, description,
@@ -129,7 +150,7 @@ class GoalStore:
     def record_decision(self, goal_id: str, decision_id: str) -> None:
         """记录关联的 Decision ID。"""
         conn = self._conn()
-        conn.row_factory = None
+        # GAP-P2-5: 不再重置 row_factory — 共享连接池连接改 tuple 会污染同 db 其他 store
         try:
             row = conn.execute(
                 "SELECT decision_refs FROM goals WHERE id = ?", (goal_id,)
