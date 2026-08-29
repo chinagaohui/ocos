@@ -39,8 +39,8 @@ experience/dynamic_weights.json
 # Output
 output/
 
-# Runtime
-runtime/
+# Runtime（根级运行时数据目录；非锚定会误伤 ocos/runtime/ 源码）
+/runtime/
 .mimocode/
 .pytest_cache/
 .coverage
