@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from ocos.planning.models import TaskDAG, VALID_AGENT_TYPES
+from ocos.planning.models import Plan, TaskDAG, VALID_AGENT_TYPES
 
 if TYPE_CHECKING:
     pass  # AgentRegistry 通过鸭子类型访问
@@ -317,3 +317,36 @@ class PlanValidator:
                 return cycle
 
         return None
+
+
+# ── Plan 级合法性检查 (GAP-P3-6 并入, 原 planning/validator.py) ─────────────
+
+def validate_plan(plan: Plan) -> tuple[bool, str]:
+    """验证 Plan 级合法性 (Phase 27 Gate 检查)。
+
+    GAP-P3-6: 由 planning/validator.py 的 PlanValidator.validate
+    并入。验证对象为 Plan (goal_id/DAG 无环/非空/时长), 与
+    PlanValidator.validate(dag) 的 DAG 级验证互补。
+    """
+    # 1. Plan 必须关联 Goal
+    if not plan.goal_id:
+        return False, "Plan must reference a Goal"
+    # 2. DAG 必须无环
+    if not plan.dag.validate_acyclic():
+        return False, "DAG contains cycles"
+    # 3. DAG 不能为空
+    if not plan.dag.tasks:
+        return False, "DAG must contain at least one Task"
+    # 4. 估算总时长 > 0
+    if plan.estimated_total_duration <= 0:
+        return False, "estimated_total_duration must be positive"
+    return True, "ok"
+
+
+def validate_no_self_module() -> None:
+    """Gateway check: ocos.planning 不导入 ocos.self。
+
+    GAP-P3-6: 由 planning/validator.py 并入。真正的检查由
+    ocos/tests/test_import_rules.py 完成。
+    """
+    pass

@@ -11,7 +11,7 @@ from ocos.planning.decomposer import TaskDecomposer
 from ocos.planning.models import ExecutionStrategy, Plan
 from ocos.planning.strategy import StrategyEngine
 from ocos.planning.simulator import PlanSimulator
-from ocos.planning.validator import PlanValidator
+from ocos.planning.plan_validator import validate_plan
 from ocos.agent_orchestration.registry import AgentDescriptor, AgentRegistry
 from ocos.agent_orchestration.selector import AgentSelector
 from ocos.agent_orchestration.supervisor import ExecutionSupervisor
@@ -74,7 +74,7 @@ async def test_e2e_complex_novel_task():
     assert not sim_result.deadlock_detected
 
     # ── Step 6: Validate ──
-    ok, reason = PlanValidator.validate(plan)
+    ok, reason = validate_plan(plan)
     assert ok, reason
 
     # ── Step 7: Agent Orchestration ──
