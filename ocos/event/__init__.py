@@ -5,6 +5,12 @@
   → Step 1 ingest → Step 2 Attention → candidate_score → DECISION
 
 硬约束: 事件 ≠ 意图。EventBus 不直接触发 Goal。
+
+职责分工(GAP-P3-5 裁决): 本包 = 感知神经系统 (外部事件归一化
+→ Attention candidate_score, 生产: agent_runtime, Phase 34A
+契约测试锁定); ocos/events/ = 宪法 Rule 2 模块间通信总线
+(topic pub/sub, 生产: scheduler/policy_engine 等)。两包职责
+不同、并存不合并。
 """
 
 from __future__ import annotations

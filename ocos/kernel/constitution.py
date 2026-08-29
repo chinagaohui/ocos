@@ -211,7 +211,13 @@ class Constitution:
 
     @staticmethod
     def validate_event_bus_communication() -> bool:
-        """当前是否只有 Event Bus 通信（架构测试占位）。"""
+        """当前是否只有 Event Bus 通信。
+
+        GAP-P3-5 (C.1): 架构测试占位 — 真实校验由
+        ocos/tests/test_no_direct_store_access.py /
+        test_import_rules.py 的 import 规则承担, 此处仅保留
+        接口供宪法审计调用。
+        """
         return True
 
     @staticmethod
