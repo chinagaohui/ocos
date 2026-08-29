@@ -53,14 +53,13 @@ class SemanticStore:
     # ── CRUD ─────────────────────────────────────────────────────────────────
 
     def save(self, entry: KnowledgeEntry) -> None:
-        """保存 KnowledgeEntry。如果 lineaged from 旧版本，deprecate 旧版本。"""
-        # 如果一个旧版本被 superseded，标记旧版本
-        if entry.revision > 1:
-            self.connection.execute(
-                "UPDATE knowledge SET status = ? WHERE id = ?",
-                (KnowledgeStatus.SUPERSEDED.value, entry.id),
-            )
+        """保存 KnowledgeEntry（UPSERT 语义）。
 
+        knowledge 表以 id 为主键（单行模型）——同一 id 的 revision 递增
+        就地覆盖为新版本，created_at 保留首版时间（GAP-P2-1 修复：
+        原实现按多行版本链假设预标记 SUPERSEDED 再 INSERT，revision>1 时
+        必然触发 UNIQUE 冲突导致更新静默丢失）。
+        """
         self.connection.execute(
             """
             INSERT INTO knowledge (
@@ -69,6 +68,18 @@ class SemanticStore:
                 scope_counterexamples, stability, revision, status,
                 created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                statement = excluded.statement,
+                source_patterns = excluded.source_patterns,
+                confidence = excluded.confidence,
+                scope_domain = excluded.scope_domain,
+                scope_preconditions = excluded.scope_preconditions,
+                scope_limitations = excluded.scope_limitations,
+                scope_counterexamples = excluded.scope_counterexamples,
+                stability = excluded.stability,
+                revision = excluded.revision,
+                status = excluded.status,
+                updated_at = excluded.updated_at
             """,
             (
                 entry.id,
@@ -99,9 +110,16 @@ class SemanticStore:
         return row["cnt"] if row else 0
 
     def deprecate(self, entry_id: str) -> bool:
+        """弃用知识条目（ACTIVE/UNSTABLE 均可弃用，已弃用/已取代不动）。"""
         cursor = self.connection.execute(
-            "UPDATE knowledge SET status = ? WHERE id = ? AND status = ?",
-            (KnowledgeStatus.DEPRECATED.value, entry_id, KnowledgeStatus.ACTIVE.value),
+            "UPDATE knowledge SET status = ? WHERE id = ? "
+            "AND status NOT IN (?, ?)",
+            (
+                KnowledgeStatus.DEPRECATED.value,
+                entry_id,
+                KnowledgeStatus.DEPRECATED.value,
+                KnowledgeStatus.SUPERSEDED.value,
+            ),
         )
         self.connection.commit()
         return cursor.rowcount > 0

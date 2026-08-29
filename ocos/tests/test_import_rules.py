@@ -53,7 +53,7 @@ ALLOWED_IMPORTS = {
     "ocos.platform": ["ocos.kernel", "ocos.events", "ocos.models"],
     "ocos.engines": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.knowledge", "ocos.platform", "ocos.agent.retry_policy"],
     "ocos.plugins": ["ocos.kernel", "ocos.events", "ocos.platform", "ocos.engines"],
-    "ocos.knowledge": ["ocos.knowledge"],
+    "ocos.knowledge": ["ocos.knowledge", "ocos.memory.semantic"],  # GAP-P2-1: registry→semantic 镜像
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
     "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive"],
@@ -180,7 +180,7 @@ ALLOWED_IMPORTS = {
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
                     "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal",
                     "ocos.alerts", "ocos.health_examination",
-                    "ocos.perception", "ocos.world_model"],  # GAP-P1-2/3: daemon 装配健康监控 + 感知链
+                    "ocos.perception", "ocos.world_model", "ocos.knowledge"],
 }
 
 # 测试文件允许的 import 例外（白名单，当前 unused—保留供将来使用）

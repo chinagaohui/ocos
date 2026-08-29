@@ -20,6 +20,12 @@ from ocos.knowledge.store.ontology import (
     KnowledgeStatus,
     KnowledgeUnit,
 )
+from ocos.memory.semantic.models import (  # GAP-P2-1: 知识平面 → 语义记忆镜像
+    KnowledgeEntry,
+    KnowledgeScope,
+    KnowledgeStatus as SemanticStatus,
+)
+from ocos.memory.semantic.store import SemanticStore  # GAP-P2-1
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +158,21 @@ class AccessMatrix:
 
 
 class KnowledgeRegistry:
-    """知识注册表：管理 KnowledgeUnit 的存储、查询和所有权验证。"""
+    """知识注册表：管理 KnowledgeUnit 的存储、查询和所有权验证。
 
-    def __init__(self, access_matrix: AccessMatrix | None = None):
+    GAP-P2-1: 可选注入 SemanticStore 后，register/update/remove 自动同步
+    到语义记忆 knowledge 表（update 经 revision 递增自动 supersede 旧版本）。
+    registry 是权威源，镜像写入失败仅告警不阻断注册（fail-open 镜像语义）。
+    """
+
+    def __init__(
+        self,
+        access_matrix: AccessMatrix | None = None,
+        semantic_store: SemanticStore | None = None,
+    ):
         self._entries: dict[str, OwnershipEntry] = {}  # unit_id -> entry
         self._access_matrix = access_matrix or AccessMatrix()
+        self._semantic_store = semantic_store  # GAP-P2-1
 
     # ── 写入操作 ──
 
@@ -194,6 +210,7 @@ class KnowledgeRegistry:
         self._entries[unit.unit_id] = entry
         logger.info("register ok: unit=%s level=%s owner=%s scope=%s",
                     unit.unit_id, unit.level.value, owner, scope.value)
+        self._sync_to_semantic(unit)  # GAP-P2-1
         return (True, unit.unit_id)
 
     def update(
@@ -226,6 +243,7 @@ class KnowledgeRegistry:
         self._entries[unit_id] = new_entry
         logger.debug("update ok: unit=%s version=%d updates=%s",
                      unit_id, new_unit.version, set(updates.keys()))
+        self._sync_to_semantic(new_unit)  # GAP-P2-1: version+1 → save 自动 supersede 旧版
         return (True, unit_id)
 
     def remove(self, unit_id: str, requestor: str) -> tuple[bool, str]:
@@ -241,7 +259,62 @@ class KnowledgeRegistry:
 
         del self._entries[unit_id]
         logger.info("remove ok: unit=%s", unit_id)
+        self._deprecate_in_semantic(unit_id)  # GAP-P2-1
         return (True, unit_id)
+
+    # ── 语义记忆镜像（GAP-P2-1）─────────────────────────────────────────
+
+    def _sync_to_semantic(self, unit: KnowledgeUnit) -> None:
+        """知识单元 → KnowledgeEntry 镜像落库（fail-open：失败仅告警）。"""
+        if self._semantic_store is None:
+            return
+        try:
+            self._semantic_store.save(self._to_entry(unit))
+        except Exception:
+            logger.warning("semantic sync failed: unit=%s", unit.unit_id, exc_info=True)
+
+    def _deprecate_in_semantic(self, unit_id: str) -> None:
+        if self._semantic_store is None:
+            return
+        try:
+            self._semantic_store.deprecate(unit_id)
+        except Exception:
+            logger.warning("semantic deprecate failed: unit=%s", unit_id, exc_info=True)
+
+    def _to_entry(self, unit: KnowledgeUnit) -> KnowledgeEntry:
+        """KnowledgeUnit（知识平面原子）→ KnowledgeEntry（语义记忆核心单位）映射。"""
+        content = unit.content or {}
+        statement = content.get("statement")
+        if not statement:
+            import json
+
+            statement = json.dumps(content, ensure_ascii=False) if content else unit.unit_id
+        return KnowledgeEntry(
+            id=unit.unit_id,
+            statement=statement,
+            source_patterns=(unit.source,) if unit.source else (),
+            confidence=float(content.get("confidence", 0.5)),
+            scope=KnowledgeScope(
+                domain=str(content.get("domain", "general")),
+                preconditions=tuple(content.get("preconditions", []) or []),
+                limitations=tuple(content.get("limitations", []) or []),
+                counterexamples=int(content.get("counterexamples", 0) or 0),
+            ),
+            stability=float(content.get("stability", 0.8)),
+            revision=unit.version,
+            status=self._map_status(unit.status.value),
+        )
+
+    @staticmethod
+    def _map_status(unit_status: str) -> SemanticStatus:
+        """知识平面状态 → 语义记忆状态（CANDIDATE 近似 UNSTABLE=观察中）。"""
+        return {
+            "candidate": SemanticStatus.UNSTABLE,
+            "verified": SemanticStatus.ACTIVE,
+            "active": SemanticStatus.ACTIVE,
+            "deprecated": SemanticStatus.DEPRECATED,
+            "archived": SemanticStatus.DEPRECATED,
+        }.get(unit_status, SemanticStatus.ACTIVE)
 
     # ── 查询操作 ──
 

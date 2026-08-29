@@ -82,3 +82,15 @@ def build_perception_pipeline(sensors: Optional[list] = None):
     for sensor in sensors or []:
         pipeline.register_sensor(sensor)
     return pipeline
+
+
+def build_knowledge_registry(semantic_store=None):
+    """GAP-P2-1: 组装知识平面 — KnowledgeRegistry + 可选 SemanticStore 镜像。
+
+    semantic_store 缺省为 None（纯内存权威源）；生产装配应注入
+    MemoryHub.semantic（同一 db_path 的 knowledge 表），register/update/
+    remove 自动落库镜像，update 经 revision 递增就地覆盖。
+    """
+    from ocos.knowledge.store.registry import KnowledgeRegistry
+
+    return KnowledgeRegistry(semantic_store=semantic_store)
