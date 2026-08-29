@@ -21,7 +21,7 @@ from ocos.storage.connection import get_connection
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.environ.get("OCOS_DB_PATH", "ocos.db")
+DB_PATH = os.environ.get("OCOS_DB_PATH", os.path.join(os.path.expanduser("~"), ".ocos", "ocos.db"))
 
 
 class SnapshotManager:
