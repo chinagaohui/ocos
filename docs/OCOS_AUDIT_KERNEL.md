@@ -278,3 +278,30 @@ def act(self, decision: Decision) -> ActResult:
 ---
 
 *审计完成于 2026-08-28 | 基于只读审计与最新单元测试运行结果*
+
+---
+
+## 九、GAP-P2 阶段决策记录（追加，2026-08-29）
+
+### P2-1 SemanticStore 写入管道
+- KnowledgeRegistry 增加可选 semantic_store 注入；register/update/remove 三写点
+  自动同步 knowledge 表（KnowledgeUnit→KnowledgeEntry 映射）。
+- 修复 SemanticStore.save 死代码：knowledge 表 id PRIMARY KEY（单行模型），
+  原实现按多行版本链假设预标记 SUPERSEDED 再 INSERT，revision>1 必然触发
+  UNIQUE 冲突 → 更新静默丢失。改为 UPSERT（ON CONFLICT 就地覆盖，
+  created_at 保留首版时间，revision 演进）。**单行模型下无历史行，
+  版本链 = revision 数字演进，历史内容不可查（schema 决定，非缺陷）。**
+- deprecate 放宽至 ACTIVE/UNSTABLE 均可弃用（候选单元 remove 不再失效）。
+- 生产装配点：factory.build_knowledge_registry(semantic_store=MemoryHub.semantic)。
+
+### P2-2 runtime/stages 4 个占位接线
+- **event_ingestion** → EventBus.ingest(max_events) drain（可注入，缺省空）。
+- **execution_check** → TaskDAG.resolve_ready() 生成 execution_candidates
+  （ocos/task 首个生产消费者）；gateway 权限过滤保留。
+- **memory_sync** → 决策：MemoryHub 是 store 聚合门面，无"差异同步"API；
+  收敛为转发语义——注入 hub 后 get_stats() 快照注入 context.memory_changes
+  （只反映状态，不写长期记忆，符合阶段约束）。
+- **result_collection** → 决策：RuntimeKernel 不持有 ExecutionManager
+  （agent/execution_manager 属 AgentRuntime 侧）；收敛为转发语义——
+  注入后 get_history() 只读转发，不消费不清空。
+- 全部 stage 惰性注入（构造参数 Any，模块零新 import），零注入=旧行为。
