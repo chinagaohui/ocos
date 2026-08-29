@@ -277,4 +277,16 @@ python -m pytest ocos/tests/test_phase44.py tests/ -q -k "plugin or sandbox or e
 
 | 日期 | 编号 | 改动摘要 | 测试基线变化 | commit |
 |------|------|----------|--------------|--------|
-| | §0 | | | |
+| 2026-08-28 | §0 | 基线 + 在途改动归属确认 | 1971 passed 记录在案 | - |
+| 2026-08-28 | P0-1 | 身份快照静默失败修复: save_snapshot/load_snapshot(keep 10) | 全量绿 | e6c1776 |
+| 2026-08-28 | P0-2 | dream 持久化: MemoryHub 唯一 store 源 + attach_memory_hub 回填 | 全量绿 | b21512b |
+| 2026-08-28 | P0-3 | ExecutionBridge 权限检查: PermissionGateway 注入 + fail-closed | 全量绿 | 3b4a571 |
+| 2026-08-29 | P0-4 | plugin sandbox 诚实失败: 无实例不假成功 + 真实 import 探测 | 全量绿 | 54fcf6e |
+| 2026-08-29 | P1-1 | DecisionPipeline 接真实 Phase 43 链 + DecisionValidator 治理 | 全量绿 | 944c994 |
+| 2026-08-29 | P1-2 | daemon 稳态健康监控: HealthLoop 4 项 + Examiner + AlertManager + E2E | 全量绿 | 8acce0f |
+| 2026-08-29 | P1-3 | PerceptionPipeline 桥接 perception→world_model + import_rules allowlist | 全量绿 | 1ca4884 |
+| 2026-08-29 | P2-1 | KnowledgeRegistry→SemanticStore 持久化镜像(UPSERT) | 5229 passed/1 failed(organ_client 既有) | 6a63222 |
+| 2026-08-29 | P2-2 | runtime/stages 4 个占位接线 | 全量绿 | 415f4c8 |
+| 2026-08-29 | P2-3 | event_memory SQLite 化(append-only) + archive 真实标记 + 删 CR55-03 假声称 | 57 passed 零回归 | 4b11c51 |
+| 2026-08-30 | P2-4 | wisdom_store SQLite 落盘 + personalization FORMAL/BOLD 补实现 | 122 passed 零回归 | 1268495 |
+| 2026-08-30 | P2-5 | living_test 真实化: resurrection_drill 10/10 + snapshot/goal 自愈建表 + 行工厂污染修复 | 全量仅 organ_client 既有失败 | 333675b |
