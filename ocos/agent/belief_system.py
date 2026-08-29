@@ -8,9 +8,16 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+from ocos.self.statement_validator import StatementValidator
+
+if TYPE_CHECKING:
+    from ocos.memory.hub import MemoryHub
 
 
 class BeliefSource(Enum):
@@ -44,12 +51,88 @@ class Belief:
 
 
 class BeliefSystem:
-    """信念系统 — 管理置信度门控的信念集合。"""
+    """信念系统 — 管理置信度门控的信念集合。
 
-    def __init__(self, default_threshold: float = 0.6):
+    P1-A 持久化写路径（经 StatementValidator L6 门控）:
+        - 构造传入 MemoryHub（或事后 bind_hub）后，add() 的陈述
+          通过 L6 门控（六类禁止词/长度/事实主语）才写入
+          hub.belief().save()；未通过则仅保留内存，rejected_count 累加。
+        - 同一 statement 重复 add 采用与内存一致的 max 置信度合并，
+          持久化层 INSERT OR REPLACE 不产生重复行。
+    """
+
+    def __init__(self, default_threshold: float = 0.6,
+                 hub: Optional["MemoryHub"] = None):
         self._beliefs: dict[str, Belief] = {}
         self._default_threshold = default_threshold
         self._lock = threading.RLock()
+        self._hub = hub
+        self._persisted = 0
+        self._rejected = 0
+
+    # ── P1-A 持久化钩子 ───────────────────────────────────────────────────
+
+    def bind_hub(self, hub: "MemoryHub") -> None:
+        """绑定 MemoryHub（可在构造后调用 — AgentRuntime 的 hub 晚于 BeliefSystem 创建）。"""
+        self._hub = hub
+
+    @property
+    def persisted_count(self) -> int:
+        """已成功持久化的信念数。"""
+        return self._persisted
+
+    @property
+    def rejected_count(self) -> int:
+        """未通过 L6 门控而被拒持久化的信念数（内存仍保留）。"""
+        return self._rejected
+
+    def _persist(self, statement: str, confidence: float,
+                 source: "BeliefSource", evidence_ids: tuple[str, ...]) -> None:
+        """L6 门控 → 幂等写入 hub.belief()。"""
+        if self._hub is None:
+            return
+        hub = self._hub
+        if not hub.is_initialized():
+            return
+
+        valid, _reason = StatementValidator.validate(statement)
+        if not valid:
+            self._rejected += 1
+            return
+
+        from ocos.memory.belief.models import Belief as PersistedBelief, BeliefStatus, Evidence
+
+        conf = round(min(1.0, max(0.0, confidence)), 4)
+        now = datetime.now(timezone.utc)
+
+        # 幂等：同 statement 已存在的 active belief → 复用 id，置信度取 max（与内存语义一致）
+        existing = next(
+            (b for b in hub.belief.get_all_active(limit=500) if b.statement == statement),
+            None,
+        )
+        if existing is not None:
+            conf = max(existing.confidence, conf)
+
+        evd = Evidence.create(
+            source_episode_id=evidence_ids[0] if evidence_ids else "EPI-DIRECT",
+            source_pattern_id="",
+            quality=conf,
+        )
+        persisted = PersistedBelief(
+            id=existing.id if existing is not None else
+               f"BLF-{now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}",
+            statement=statement,
+            source_knowledge_ids=(),
+            evidence_ids=(evd.id,),
+            confidence=conf,
+            uncertainty=round(1.0 - conf, 4),
+            scope={"domain": source.name.lower(), "preconditions": ""},
+            status=BeliefStatus.ACTIVE if conf >= 0.6 else BeliefStatus.WEAKENED,
+            created_at=now,
+            last_updated=now,
+        )
+        hub.belief.save(persisted)
+        self._persisted += 1
 
     @property
     def belief_count(self) -> int:
@@ -57,8 +140,13 @@ class BeliefSystem:
 
     def add(self, statement: str, confidence: float,
             source: BeliefSource = BeliefSource.OBSERVATION,
-            threshold: Optional[float] = None) -> str:
-        """添加或更新信念。如已存在则合并置信度。"""
+            threshold: Optional[float] = None,
+            evidence_ids: tuple[str, ...] = ()) -> str:
+        """添加或更新信念。如已存在则合并置信度。
+
+        evidence_ids — 可选 Episode 溯源（迁移轨迹: Episode → Evidence → Belief）。
+        绑定 hub 时经 L6 门控写入持久化层。
+        """
         with self._lock:
             if statement in self._beliefs:
                 belief = self._beliefs[statement]
@@ -66,6 +154,7 @@ class BeliefSystem:
                 belief.confidence = max(belief.confidence, confidence)
                 belief.last_updated = time.time()
                 belief.source = source
+                self._persist(statement, belief.confidence, source, evidence_ids)
                 return belief.id or statement
 
             belief = Belief(
@@ -75,6 +164,7 @@ class BeliefSystem:
                 id=statement,
             )
             self._beliefs[statement] = belief
+            self._persist(statement, confidence, source, evidence_ids)
             return statement
 
     def get_held(self, threshold: Optional[float] = None) -> list[Belief]:

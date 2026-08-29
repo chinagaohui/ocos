@@ -114,8 +114,11 @@ class FailureInjector:
                     if blocked:
                         result = InjectionResult.REJECTED
                         detail = "permission change blocked by governor"
-                except Exception:
-                    pass
+                except Exception as _gov_e:
+                    # BR-04 C-2 修复（2026-08-25）：governor 不可用 = 保守拒绝。
+                    # 权限提升测试前必须过的治理闸门，失效时不能 fail-open 放行注入。
+                    result = InjectionResult.REJECTED
+                    detail = f"permission change rejected: governor unavailable ({_gov_e})"
         else:
             # 执行错误能力
             if self.on_bad_capability:

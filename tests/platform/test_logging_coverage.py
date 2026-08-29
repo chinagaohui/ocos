@@ -13,12 +13,21 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 OCOS_ROOT = PROJECT_ROOT / "ocos"
 
+# 测试/验证目录不计入生产源码覆盖率（其 .py 本身测 logger，无需自身 logger；
+# 2026-08-29 P1-D 口径修正：此前分母含 ocos/tests/ 等 115 文件导致误报 15.6%）
+NON_PRODUCTION_DIRS = {
+    "tests", "living_test", "living_verification", "health_examination",
+    "diagnosis", "capability_reality", "recovery_resilience", "os_v1",
+    "stability", "examples", "plugins",
+}
+
 
 def _py_files(root: Path) -> list[Path]:
-    """收集所有非 __pycache__ 的 .py 文件。"""
+    """收集所有非 __pycache__ 的 .py 文件（生产目录）。"""
     return sorted(
         f for f in root.rglob("*.py")
         if "__pycache__" not in str(f)
+        and f.relative_to(OCOS_ROOT).parts[0] not in NON_PRODUCTION_DIRS
     )
 
 

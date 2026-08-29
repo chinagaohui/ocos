@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from ocos.storage.connection import get_connection
 from ocos.agent.identity_anchor import IdentityAnchor
 
 logger = logging.getLogger(__name__)
@@ -48,9 +49,9 @@ class IdentitySQLiteStore:
 
     def initialize(self) -> None:
         """创建表结构。幂等。"""
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn = get_connection(self._db_path)
+        self._conn.execute(_CREATE_TABLE_SQL)
+        self._conn.commit()
         self._conn.execute(_CREATE_TABLE_SQL)
         self._conn.commit()
         logger.info("IdentitySQLiteStore initialized at %s", self._db_path)

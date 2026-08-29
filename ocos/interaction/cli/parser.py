@@ -63,6 +63,9 @@ Examples:
     # ── feedback（S8：评审反馈回流） ────────────────────────────────────
     _add_feedback_parser(subparsers)
 
+    # ── run（P0：认知引擎生产启动入口） ─────────────────────────────────
+    _add_run_parser(subparsers)
+
     return parser
 
 
@@ -245,3 +248,16 @@ def _add_feedback_parser(subparsers: argparse._SubParsersAction) -> None:
     fb.add_argument("project", type=str, help="书名")
     fb.add_argument("--base-url", type=str,
                     default="http://127.0.0.1:8000/api/organ", help="Organ API 地址")
+
+
+def _add_run_parser(subparsers: argparse._SubParsersAction) -> None:
+    """ocos run — 点亮认知引擎（P0：AgentRuntime 10 步 tick 生产入口）。"""
+    run = subparsers.add_parser("run", help="启动认知引擎（常驻 tick 循环）")
+    run.add_argument("--ticks", type=int, default=0,
+                     help="跑 N 个 tick 后退出（默认 0 = 常驻）")
+    run.add_argument("--interval", type=float, default=5.0,
+                     help="tick 间隔秒数（默认 5.0）")
+    run.add_argument("--db", type=str, default="",
+                     help="SQLite 持久化路径（默认 ~/.ocos/ocos.db）")
+    run.add_argument("--agent-id", type=str, default="ocos-master",
+                     help="Agent ID（默认 ocos-master）")

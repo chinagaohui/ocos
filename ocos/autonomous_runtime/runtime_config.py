@@ -25,7 +25,8 @@ class WakeTrigger(Enum):
     INTERNAL_TIMER = "internal_timer"        # Scheduled wake
     GOAL_VIOLATION = "goal_violation"       # Something important needs attention
     FEEDBACK_ARRIVED = "feedback_arrived"   # OpenTale chapter ready
-    CURIOSITY_SPIKE = "curiosity_spike"     # Random exploration impulse
+    # P2-B (2026-08-29): CURIOSITY_SPIKE 已并入 Regulator novelty 规则（homeostasis.py derive_drives），
+    # 该信号零消费 → 删除，不留双轨。唤醒由 ANOMALY_DETECTED + novelty 驱动目标承担。
     ANOMALY_DETECTED = "anomaly_detected"   # Something unusual
 
 

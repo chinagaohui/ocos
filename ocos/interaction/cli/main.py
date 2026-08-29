@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import sys
 import os
+from pathlib import Path
 
 from ocos.interaction.base import InteractionSession
 from ocos.interaction.context import InteractionContext
@@ -44,6 +45,7 @@ from ocos.interaction.cli.commands.organ import (
     cmd_organ_verify,
 )
 from ocos.interaction.cli.commands.plan import cmd_plan
+from ocos.interaction.cli.commands.run import cmd_run
 from ocos.interaction.cli.commands.self import cmd_self_identity, cmd_self_status
 from ocos.interaction.cli.commands.trace import cmd_trace_show
 from ocos.interaction.cli.parser import build_parser
@@ -60,8 +62,8 @@ def main(argv: list[str] | None = None) -> int:
 
     session = InteractionSession(caller="cli")
 
-    # CLI 每次调用创建新上下文，指向持久化 DB
-    db_path = os.environ.get("OCOS_DB_PATH", "ocos.db")
+    # CLI 每次调用创建新上下文，指向持久化 DB（P0：默认 ~/.ocos/ocos.db）
+    db_path = os.environ.get("OCOS_DB_PATH", str(Path.home() / ".ocos" / "ocos.db"))
     ctx = InteractionContext(db_path=db_path)
 
     try:
@@ -136,6 +138,9 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 parser.print_help()
                 return 1
+
+        elif args.command == "run":
+            return cmd_run(args, session)
 
         elif args.command == "decide":
             return cmd_decide(args, session)

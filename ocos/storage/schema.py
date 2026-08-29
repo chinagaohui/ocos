@@ -1,6 +1,6 @@
 """SQLite Schema 定义 — 所有持久化表的建表语句和数据字典。"""
 
-STORAGE_SCHEMA_VERSION = 2
+STORAGE_SCHEMA_VERSION = 3
 
 # ── 表名常量 ────────────────────────────────────────────────────────────────
 
@@ -10,6 +10,14 @@ TABLE_DEAD_LETTER_QUEUE = "dead_letter_queue"
 TABLE_CHECKPOINT = "checkpoint"
 TABLE_USER = "users"
 TABLE_SCHEMA_VERSION = "schema_version"
+
+# P1-B: 记忆域表（从各 store 提取，字节级一致）
+TABLE_EPISODES = "episodes"
+TABLE_BELIEF = "belief"
+TABLE_PATTERN = "pattern"
+TABLE_KNOWLEDGE = "knowledge"
+TABLE_IDENTITY = "identity"
+TABLE_GOAL = "goal"
 
 # ── 建表 SQL ───────────────────────────────────────────────────────────────
 
@@ -84,10 +92,142 @@ CREATE_USER = [
     "CREATE INDEX IF NOT EXISTS idx_users_name ON users(name)",
 ]
 
+# ── P1-B: 记忆域表 DDL（来源: 各 store 模块，保持字节级一致）───────────────
+
+CREATE_EPISODES = [
+    """CREATE TABLE IF NOT EXISTS episodes (
+        id              TEXT PRIMARY KEY,
+        experience_id   TEXT NOT NULL,
+        session_id      TEXT NOT NULL DEFAULT 'default',
+
+        -- 客观事实 (What, How, Result, Why)
+        context         TEXT NOT NULL DEFAULT '{}',  -- JSON
+        goal            TEXT,
+        decision        TEXT NOT NULL DEFAULT '',
+        action          TEXT NOT NULL DEFAULT '',
+        outcome         TEXT NOT NULL DEFAULT '{}',  -- JSON
+        condition       TEXT NOT NULL DEFAULT '',
+
+        -- 门控结果
+        significance_score  REAL NOT NULL DEFAULT 0.0,
+        evaluation_trace    TEXT NOT NULL DEFAULT '{}',  -- JSON (可审计)
+        source              TEXT NOT NULL DEFAULT 'decision',
+
+        -- 元数据
+        status          TEXT NOT NULL DEFAULT 'active',
+        tags            TEXT NOT NULL DEFAULT '[]',  -- JSON array
+        created_at      TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_episodes_goal ON episodes(goal, significance_score DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_episodes_created ON episodes(created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_episodes_significance ON episodes(significance_score DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_episodes_experience ON episodes(experience_id)",
+]
+
+CREATE_BELIEF = [
+    """CREATE TABLE IF NOT EXISTS belief (
+        id                      TEXT PRIMARY KEY,
+        statement               TEXT NOT NULL,
+        source_knowledge_ids     TEXT NOT NULL,  -- JSON array
+        evidence_ids            TEXT NOT NULL,  -- JSON array
+        confidence              REAL NOT NULL,
+        uncertainty             REAL NOT NULL,
+        scope                   TEXT NOT NULL,  -- JSON dict
+        status                  TEXT NOT NULL DEFAULT 'active',
+        created_at              TEXT NOT NULL,
+        last_updated            TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_belief_status   ON belief(status)",
+    "CREATE INDEX IF NOT EXISTS idx_belief_confidence ON belief(confidence)",
+    "CREATE INDEX IF NOT EXISTS idx_belief_created   ON belief(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_belief_domain    ON belief(json_extract(scope, '$.domain'))",
+]
+
+CREATE_PATTERN = [
+    """CREATE TABLE IF NOT EXISTS pattern (
+        id                      TEXT PRIMARY KEY,
+        trigger_condition       TEXT NOT NULL,
+        observed_relation       TEXT NOT NULL,
+        causal_explanation      TEXT NOT NULL,
+        confidence              REAL NOT NULL,
+        supporting_episode_count INTEGER NOT NULL,
+        source                  TEXT NOT NULL DEFAULT 'episode_aggregation',
+        status                  TEXT NOT NULL DEFAULT 'candidate',
+        created_at              TEXT NOT NULL,
+        validated_at            TEXT,             -- 仅 VALIDATED 状态
+        validation_notes        TEXT DEFAULT ''
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_pattern_status ON pattern(status)",
+    "CREATE INDEX IF NOT EXISTS idx_pattern_confidence ON pattern(confidence DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_pattern_created ON pattern(created_at)",
+]
+
+CREATE_KNOWLEDGE = [
+    """CREATE TABLE IF NOT EXISTS knowledge (
+        id                      TEXT PRIMARY KEY,
+        statement               TEXT NOT NULL,
+        source_patterns         TEXT NOT NULL DEFAULT '[]',   -- JSON array
+        confidence              REAL NOT NULL DEFAULT 0.0,
+        scope_domain            TEXT NOT NULL DEFAULT '',
+        scope_preconditions     TEXT NOT NULL DEFAULT '[]',   -- JSON array
+        scope_limitations       TEXT NOT NULL DEFAULT '[]',   -- JSON array
+        scope_counterexamples   INTEGER NOT NULL DEFAULT 0,
+        stability               REAL NOT NULL DEFAULT 0.0,
+        revision                INTEGER NOT NULL DEFAULT 1,
+        status                  TEXT NOT NULL DEFAULT 'active',
+        created_at              TEXT NOT NULL,
+        updated_at              TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_knowledge_domain ON knowledge(scope_domain, confidence DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_knowledge_confidence ON knowledge(confidence DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_knowledge_stability ON knowledge(stability DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_knowledge_status ON knowledge(status)",
+    "CREATE INDEX IF NOT EXISTS idx_knowledge_created ON knowledge(created_at DESC)",
+]
+
+CREATE_IDENTITY = [
+    """CREATE TABLE IF NOT EXISTS identity (
+        agent_id TEXT PRIMARY KEY,
+        born_at TEXT NOT NULL,
+        owner_id TEXT,
+        name TEXT NOT NULL DEFAULT 'OCOS Agent',
+        version TEXT NOT NULL DEFAULT '1.0.0',
+        self_view_json TEXT NOT NULL DEFAULT '{}',
+        state_json TEXT NOT NULL DEFAULT '{}',
+        anchor_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )""",
+]
+
+CREATE_GOAL = [
+    """CREATE TABLE IF NOT EXISTS goal (
+        goal_id         TEXT PRIMARY KEY,
+        level           INTEGER NOT NULL,
+        description     TEXT NOT NULL DEFAULT '',
+        parent_id       TEXT,
+        priority        REAL NOT NULL DEFAULT 1.0,
+        created_at      TEXT NOT NULL,
+        deadline        TEXT,
+        status          TEXT NOT NULL DEFAULT 'PENDING',
+        result_json     TEXT,
+        origin_level    TEXT NOT NULL DEFAULT 'SYSTEM',
+        authority       TEXT NOT NULL DEFAULT 'AUTONOMOUS'
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_goal_status ON goal(status)",
+    "CREATE INDEX IF NOT EXISTS idx_goal_level ON goal(level)",
+    "CREATE INDEX IF NOT EXISTS idx_goal_priority ON goal(priority DESC)",
+]
+
 STORAGE_TABLES = {
     TABLE_WORKING_MEMORY: CREATE_WORKING_MEMORY,
     TABLE_EVENT_STORE: CREATE_EVENT_STORE,
     TABLE_DEAD_LETTER_QUEUE: CREATE_DEAD_LETTER_QUEUE,
     TABLE_CHECKPOINT: CREATE_CHECKPOINT,
     TABLE_USER: CREATE_USER,
+    TABLE_EPISODES: CREATE_EPISODES,
+    TABLE_BELIEF: CREATE_BELIEF,
+    TABLE_PATTERN: CREATE_PATTERN,
+    TABLE_KNOWLEDGE: CREATE_KNOWLEDGE,
+    TABLE_IDENTITY: CREATE_IDENTITY,
+    TABLE_GOAL: CREATE_GOAL,
 }

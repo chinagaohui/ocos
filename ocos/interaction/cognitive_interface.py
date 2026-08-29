@@ -182,8 +182,10 @@ class CognitiveInterface:
                 if hasattr(cortex, "mode") and str(cortex.mode) == "SLEEPING":
                     cortex.wake()
                     logger.info("CognitiveInterface: woke AgentRuntime from sleep")
-        except Exception:
-            pass
+        except Exception as _wk_e:
+            # BR-04 B批（2026-08-25）：唤醒失败留痕，否则 SLEEPING 中
+            # agent 唤不醒无感知。
+            logger.warning("CognitiveInterface: wake failed: %s", _wk_e)
 
     def get_recent_history(self, limit: int = 20) -> list[StimulusResult]:
         return self.history[-limit:]

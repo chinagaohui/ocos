@@ -101,6 +101,12 @@ class LifeCycleOrchestrator:
         self.agent.reflect()
         self.agent.learn()
 
+        # P2-D: 空闲期主动输出（防御式降级，绝不抛）
+        try:
+            self.agent.maybe_proactive_output()
+        except Exception:
+            pass
+
         self._cycle_count += 1
         self._phase = "cognition"
         return TickResult.CYCLE_COMPLETE

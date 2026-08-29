@@ -77,8 +77,9 @@ class AttentionDrivenRetrieval:
                         score=score,
                         source="long_term",
                     ))
-        except Exception:
-            pass
+        except Exception as _lt_e:
+            # BR-04 B批（2026-08-25）：长期记忆检索降级留痕。
+            logger.warning("long-term retrieval failed: %s", _lt_e)
 
         # 从情景记忆检索
         try:
@@ -91,8 +92,9 @@ class AttentionDrivenRetrieval:
                         score=score,
                         source="episodic",
                     ))
-        except Exception:
-            pass
+        except Exception as _ep_e:
+            # BR-04 B批（2026-08-25）：情景记忆检索降级留痕。
+            logger.warning("episodic retrieval failed: %s", _ep_e)
 
         # 按分数排序 + 截断
         results.sort(key=lambda x: x.score, reverse=True)

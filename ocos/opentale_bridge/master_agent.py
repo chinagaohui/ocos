@@ -280,8 +280,12 @@ class MasterAgent:
                             )
                     except Exception:
                         continue
-        except Exception:
-            pass
+        except Exception as _dh_e:
+            # BR-04 B批（2026-08-25）：决策历史读取失败留痕——
+            # 否则"上轮决策 focus/tone"上下文缺失，跨轮次决策质量下降无感知。
+            import logging
+            logging.getLogger(__name__).warning(
+                "decision_history read failed (attention): %s", _dh_e)
         engine = AttentionScoringEngine()
         scored = engine.score_all(collector.candidates())
         if not scored:
@@ -323,8 +327,11 @@ class MasterAgent:
                             beliefs.append(_B())
                     except Exception:
                         continue
-        except Exception:
-            pass
+        except Exception as _bh_e:
+            # BR-04 B批（2026-08-25）：决策历史→信念读取失败留痕。
+            import logging
+            logging.getLogger(__name__).warning(
+                "decision_history read failed (beliefs): %s", _bh_e)
 
         if not beliefs:
             return ""
@@ -359,8 +366,11 @@ class MasterAgent:
                             parts.append(f"本作上轮决策 focus={e.get('focus')} tone={e.get('tone')}")
                     except Exception:
                         continue
-        except Exception:
-            pass
+        except Exception as _dm_e:
+            # BR-04 B批（2026-08-25）：决策记忆读取失败留痕。
+            import logging
+            logging.getLogger(__name__).warning(
+                "decision_history read failed (reasoning): %s", _dm_e)
         if intent.title:
             try:
                 fpath = Path(os.getenv("OCOS_FEEDBACK_DIR",
@@ -371,8 +381,11 @@ class MasterAgent:
                         fb = data[-1]
                         parts.append(f"评审 {fb.get('book_review_score')} 分/"
                                      f"{fb.get('chapters', 0)} 章")
-            except Exception:
-                pass
+            except Exception as _fb_e:
+                # BR-04 B批（2026-08-25）：feedback 读取失败留痕。
+                import logging
+                logging.getLogger(__name__).warning(
+                    "feedback read failed: %s", _fb_e)
         # I6 接线（U5.3）：attention 焦点注入 reasoning 上下文（只影响"看什么"）
         _focus = MasterAgent._attention_focus(intent)
         if _focus:

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from ocos.storage.connection import get_connection
 from ocos.agent.goal_types import Goal, GoalLevel, GoalStatus, GoalOriginLevel, GoalAuthority
 
 logger = logging.getLogger(__name__)
@@ -52,9 +53,9 @@ class GoalSQLiteStore:
         self._conn: Optional[sqlite3.Connection] = None
 
     def initialize(self) -> None:
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn = get_connection(self._db_path)
+        # 2026-08-29 P2-A 修复: 此前 _DDL 定义后从未执行, 建表缺失
+        # （对齐 ocos/memory/*/store.py 的 initialize 模式）。
         self._conn.executescript(_DDL)
         self._conn.commit()
         logger.info("GoalSQLiteStore initialized at %s", self._db_path)

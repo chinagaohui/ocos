@@ -327,8 +327,8 @@ def test_shared_permission_rules():
     # 6 条禁止规则
     assert len(forbidden) == 6
 
-    # 6 条允许规则
-    assert len(allowed) == 6
+    # 8 条允许规则（2026-08-23 增 analyze_quality/analyze_trend，OpenTale 生成流程调用）
+    assert len(allowed) == 8
 
 
 # ── IFACE-20: 跨包导入规则 ───────────────────────────────────────

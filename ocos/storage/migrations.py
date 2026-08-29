@@ -7,9 +7,15 @@ from typing import Optional
 
 from ocos.storage.connection import get_connection
 from ocos.storage.schema import (
+    CREATE_BELIEF,
     CREATE_CHECKPOINT,
     CREATE_DEAD_LETTER_QUEUE,
+    CREATE_EPISODES,
     CREATE_EVENT_STORE,
+    CREATE_GOAL,
+    CREATE_IDENTITY,
+    CREATE_KNOWLEDGE,
+    CREATE_PATTERN,
     CREATE_SCHEMA_VERSION,
     CREATE_USER,
     CREATE_WORKING_MEMORY,
@@ -35,6 +41,17 @@ MIGRATIONS: dict[int, tuple[str, list[str]]] = {
         "新增 users 表（身份与权限）",
         [*CREATE_USER],
     ),
+    3: (
+        "P1-B: 记忆域表（episodes/belief/pattern/knowledge/identity/goal）",
+        [
+            *CREATE_EPISODES,
+            *CREATE_BELIEF,
+            *CREATE_PATTERN,
+            *CREATE_KNOWLEDGE,
+            *CREATE_IDENTITY,
+            *CREATE_GOAL,
+        ],
+    ),
 }
 
 
@@ -45,9 +62,9 @@ def ensure_schema(db_path: str) -> None:
 
     if current_version is None:
         # 全新数据库 — 应用全部迁移
-        _apply_migration(conn, 1, MIGRATIONS[1])
-        _apply_migration(conn, 2, MIGRATIONS[2])
-        _set_version(conn, 2)
+        for version in sorted(MIGRATIONS.keys()):
+            _apply_migration(conn, version, MIGRATIONS[version])
+            _set_version(conn, version)
         return
 
     # 后续版本迁移在此追加

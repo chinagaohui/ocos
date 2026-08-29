@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from ocos.storage.connection import get_connection
 from ocos.memory.belief.models import Belief, BeliefStatus
 
 
@@ -58,10 +59,7 @@ class BeliefStore:
         self._conn: Optional[sqlite3.Connection] = None
 
     def initialize(self) -> None:
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn = get_connection(self._db_path)
         self._conn.executescript(_DDL)
 
     def close(self) -> None:

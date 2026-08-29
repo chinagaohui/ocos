@@ -7,12 +7,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from pathlib import Path
 
 _LOCK = threading.Lock()
 _ACTIVATION: dict[str, int] = {}
+
+logger = logging.getLogger(__name__)
 
 
 def _log_path() -> Path:
@@ -28,8 +31,10 @@ def activate(component_id: str) -> None:
         try:
             with open(_log_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps({"component": component_id}) + "\n")
-        except Exception:
-            pass
+        except Exception as _act_e:
+            # BR-04 C-5 修复（2026-08-25）：激活埋点自身不能失明。
+            # 审计数据写入失败必须留痕，否则激活观测的可信度无从谈起。
+            logger.warning("activation persistence FAILED for %s: %s", component_id, _act_e)
 
 
 def snapshot() -> dict[str, int]:

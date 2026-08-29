@@ -43,6 +43,7 @@ DIRECT_ACCESS_WHITELIST = {
     "ocos.engines.reflection_engine",             # Phase 19 Reflection Engine（需访问 WorkingMemory）
     "ocos.engines.prediction_engine",              # Phase 19 Prediction Engine（需访问 WorkingMemory）
     "ocos.agent.engine_bridge",                     # Phase 26 Agent-Engine Bridge（需访问 WorkingMemory）
+    "ocos.daemon.factory",                          # P1-B 生产装配层（需访问 WorkingMemory）
     "ocos.engines.writer_engine",                   # Phase 27 Writer Engine（需访问 WorkingMemory）
 }
 

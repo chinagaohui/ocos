@@ -36,13 +36,20 @@ class OrganClient:
                  timeout_seconds: float = 30.0,
                  poll_interval_seconds: float = 5.0,
                  task_timeout_seconds: float = 3600.0,
-                 trace_context: Any = None) -> None:
+                 trace_context: Any = None,
+                 auth_token: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.task_timeout_seconds = task_timeout_seconds
         # R1.5：客户端级默认 TraceContext（None = 不注入，向后兼容）
         self._default_tc = trace_context
+        # BR-03 修复（2026-08-24）：Bearer token，默认读 OCOS_OPENTALE_TOKEN。
+        # 仅 mutation 方法注入（与 OpenTale auth 中间件 mutation 拦截面对齐）
+        if auth_token is None:
+            import os
+            auth_token = os.getenv("OCOS_OPENTALE_TOKEN", "") or None
+        self.auth_token = auth_token
 
     # ── HTTP 基础 ──
 
@@ -56,6 +63,9 @@ class OrganClient:
         req = urllib.request.Request(url, data=data, method=method)
         if body is not None:
             req.add_header("Content-Type", "application/json")
+        # BR-03（2026-08-24）：mutation 请求注入 Bearer token（生产模式必需）
+        if self.auth_token and method in ("POST", "PUT", "PATCH", "DELETE"):
+            req.add_header("Authorization", f"Bearer {self.auth_token}")
         # R1.5：结构化 TraceContext 统一注入（R1.1 契约 §3-4）
         tc = trace_context or self._default_tc
         if tc is not None:

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from ocos.storage.connection import get_connection
 from ocos.memory.episode.models import Episode, EpisodeStatus
 
 
@@ -37,10 +38,7 @@ class EpisodeStore:
 
     def initialize(self) -> None:
         """创建表结构。幂等。"""
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn = get_connection(self._db_path)
         self._conn.executescript(_DDL)
 
     def close(self) -> None:
@@ -111,6 +109,15 @@ class EpisodeStore:
         cursor = self.connection.execute(
             "UPDATE episodes SET status = ? WHERE id = ? AND status = ?",
             (EpisodeStatus.ARCHIVED.value, episode_id, EpisodeStatus.ACTIVE.value),
+        )
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def mark_consolidated(self, episode_id: str) -> bool:
+        """标记 Episode 已巩固（P2-C dream 重放后置 CONSOLIDATED，幂等标记）。"""
+        cursor = self.connection.execute(
+            "UPDATE episodes SET status = ? WHERE id = ? AND status = ?",
+            (EpisodeStatus.CONSOLIDATED.value, episode_id, EpisodeStatus.ACTIVE.value),
         )
         self.connection.commit()
         return cursor.rowcount > 0

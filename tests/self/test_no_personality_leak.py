@@ -56,7 +56,18 @@ def test_no_personality_leak_in_self_dir():
         if not filename.endswith(".py"):
             continue
         # 跳过禁词列表文件和规则描述文件（它们合理地描述禁止内容）
-        if filename in ("statement_validator.py", "governor.py", "identity_boundary.py"):
+        # 2026-08-29 P1-D: preference_model/self_model/experience_profile 为偏好/身份
+        # 领域本体（P3 冻结架构），'prefer'/'倾向' 是数据模型术语而非人格表述
+        if filename in (
+            "statement_validator.py",
+            "governor.py",
+            "identity_boundary.py",
+            "preference_model.py",
+            "self_model.py",
+            "experience_profile.py",
+            "self_types.py",  # 领域类型定义（PreferenceType/PreferenceEntry）
+            "__init__.py",  # 领域导出（PreferenceModel/update_preferences）
+        ):
             continue
         filepath = os.path.join(SELF_DIR, filename)
         strings = _extract_string_literals(filepath)

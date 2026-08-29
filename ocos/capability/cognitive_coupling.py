@@ -173,8 +173,10 @@ class CognitiveCouplingBridge:
                 events = list(self.belief_manager._event_log)
                 self.belief_manager._event_log.clear()
                 return events
-        except Exception:
-            pass
+        except Exception as _ev_e:
+            # BR-04 B批（2026-08-25）：belief events drain 失败留痕，
+            # 否则信念更新丢失无感知。
+            logger.warning("belief events drain failed: %s", _ev_e)
         return []
 
     def _process_contradictions(self, events: list[dict]):
@@ -278,8 +280,9 @@ class CognitiveCouplingBridge:
                     current_metrics["cognitive_entropy"] = self.metrics.current_cognitive_entropy
                     current_metrics["pending_contradictions"] = len(self._pending_contradictions)
                     current_metrics["recent_coupling_alerts"] = len(self._recent_alerts)
-        except Exception:
-            pass
+        except Exception as _m_e:
+            # BR-04 B批（2026-08-25）：认知指标注入失败留痕。
+            logger.warning("cognitive metrics injection failed: %s", _m_e)
 
     # ── Diagnostics ──────────────────────────────────────────────────────
 

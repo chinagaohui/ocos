@@ -13,10 +13,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _base_dir() -> Path:
@@ -121,8 +124,10 @@ class OcosMemory:
                     except Exception:
                         continue
             self._atomic_write(self.longterm_path, longterm)
-        except Exception:
-            pass
+        except Exception as _con_e:
+            # BR-04 B批（2026-08-25）：长期记忆 consolidate 失败留痕，
+            # 否则成功经验固化静默丢失。
+            logger.warning("memory consolidate failed: %s", _con_e)
 
     def _last_decision_meta(self, title: str) -> tuple[str, str]:
         focus = tone = ""
@@ -147,8 +152,9 @@ class OcosMemory:
                     for e in lines:
                         f.write(json.dumps(e, ensure_ascii=False) + "\n")
                 tmp.replace(self.decision_path)
-        except Exception:
-            pass
+        except Exception as _pr_e:
+            # BR-04 B批（2026-08-25）：决策历史 prune 失败留痕。
+            logger.warning("memory prune (decision) failed: %s", _pr_e)
         try:
             # 项目反馈
             fb_dir = self._base / "feedback"
@@ -162,8 +168,9 @@ class OcosMemory:
                                          encoding="utf-8")
                     except Exception:
                         continue
-        except Exception:
-            pass
+        except Exception as _pf_e:
+            # BR-04 B批（2026-08-25）：反馈 prune 失败留痕。
+            logger.warning("memory prune (feedback) failed: %s", _pf_e)
 
     # ── M3：编排入口（聚合记忆供决策引用） ──
 

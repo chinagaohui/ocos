@@ -11,6 +11,7 @@ Phase 22-D: Supervisor async 化 — 支持 await SkillGraphExecutor.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -18,6 +19,8 @@ from typing import Any, Optional
 from ocos.agent_orchestration.registry import AgentRegistry
 from ocos.agent_orchestration.selector import AgentSelector
 from ocos.agent_orchestration.contract import ExecutionContract
+
+logger = logging.getLogger(__name__)
 from ocos.agent_orchestration.audit import ExecutionAudit, ExecutionRecord
 from ocos.agent_orchestration.fallback import FallbackHandler, FallbackResult
 from ocos.agent_orchestration.executor import AgentExecutor
@@ -153,8 +156,18 @@ class ExecutionSupervisor:
                 ]
                 if candidates:
                     fallback_agent = candidates[0]
-            except Exception:
-                pass
+                else:
+                    logger.warning(
+                        "fallback_agent_id %s configured but not found in registry",
+                        contract.fallback_agent_id,
+                    )
+            except Exception as _fb_e:
+                # BR-04 C-4 修复（2026-08-25）：容灾 fallback 查询失败不能静默丢失。
+                # 主 agent 崩溃时若无 fallback 可用，执行将无兜底——至少留痕可观测。
+                logger.warning(
+                    "fallback agent lookup failed for %s: %s",
+                    contract.fallback_agent_id, _fb_e,
+                )
 
         # ── 执行 ───────────────────────────────────────────────────
         if self.executor is not None:

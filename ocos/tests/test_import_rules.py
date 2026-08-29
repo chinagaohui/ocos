@@ -56,7 +56,7 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge": ["ocos.knowledge"],
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
-    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning"],
+    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self"],
     "ocos.auth": ["ocos.storage"],
     "ocos.recovery": ["ocos.storage"],
     # Phase 21: 新增基础设施层
@@ -128,17 +128,17 @@ ALLOWED_IMPORTS = {
     "ocos.memory": [],
     "ocos.memory.experience": ["ocos.memory.experience", "ocos.memory.episode"],
     "ocos.memory.significance": ["ocos.memory.experience", "ocos.memory.significance"],
-    "ocos.memory.episode": ["ocos.memory.experience", "ocos.memory.significance", "ocos.memory.episode"],
-    "ocos.memory.pattern": ["ocos.memory.episode", "ocos.memory.pattern"],
-    "ocos.memory.semantic": ["ocos.memory.semantic"],
-    "ocos.memory.belief": ["ocos.memory.semantic", "ocos.memory.belief"],
+    "ocos.memory.episode": ["ocos.memory.experience", "ocos.memory.significance", "ocos.memory.episode", "ocos.storage.connection"],
+    "ocos.memory.pattern": ["ocos.memory.episode", "ocos.memory.pattern", "ocos.storage.connection"],
+    "ocos.memory.semantic": ["ocos.memory.semantic", "ocos.storage.connection"],
+    "ocos.memory.belief": ["ocos.memory.semantic", "ocos.memory.belief", "ocos.storage.connection"],
     # Phase 31: Interaction Layer — Cognitive Interface
     "ocos.interaction": ["ocos.goal", "ocos.constitution", "ocos.logging",
                          "ocos.memory.episode", "ocos.memory.belief",
                          "ocos.self.identity_boundary"],
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
-                                        "ocos.opentale_bridge"],  # S4: Organ Client（写作器官驱动）
+                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage"],  # S4: Organ Client（写作器官驱动）; P1-B: 生产入口经 daemon 装配层
     "ocos.interaction.repl": ["ocos.interaction"],
     "ocos.interaction.repl.commands": ["ocos.interaction", "ocos.goal",
                                         "ocos.storage", "ocos.planning"],
@@ -174,6 +174,9 @@ ALLOWED_IMPORTS = {
         "ocos.autonomous_runtime",
         "ocos.cognitive_loop",
     ],
+    # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
+    "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
+                    "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal"],
 }
 
 # 测试文件允许的 import 例外（白名单，当前 unused—保留供将来使用）

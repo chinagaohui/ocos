@@ -9,7 +9,8 @@
   rt.stop()
 
 线程模型:
-  - _tick_thread: 定时触发 AgentRuntime.tick()
+  - _tick_thread: 定时触发 RuntimeKernel.tick_loop(max_ticks=1)（P1-C 循环收敛）
+  - 认知循环唯一宿主 = RuntimeKernel；AgentRuntime.tick 经 kernel driver 注入
   - 目标队列: thread-safe deque，tick step 6 自动消费
   - 优雅关闭: threading.Event + 最大等待 30s
 """
@@ -56,12 +57,21 @@ class ResidentRuntime:
         tick_interval: float = 5.0,
         max_cycles: int = 10_000,
         max_idle_cycles: int = 0,
+        db_path: str = ":memory:",
+        kernel: Optional[Any] = None,
     ) -> None:
         from ocos.agent.agent_runtime import AgentRuntime
         self._runtime: AgentRuntime = AgentRuntime(
             agent=agent,
             max_cycles=max_cycles,
+            db_path=db_path,
         )
+        # P1-C 循环收敛: 认知循环宿主 = RuntimeKernel（默认自建）。
+        # kernel 不 import ocos.agent — AgentRuntime.tick 经 driver 注入。
+        if kernel is None:
+            from ocos.runtime.runtime_kernel import RuntimeKernel
+            kernel = RuntimeKernel()
+        self._kernel: Any = kernel
         self._tick_interval = tick_interval
         self._max_idle_cycles = max_idle_cycles
         self._state: DaemonState = DaemonState.STOPPED
@@ -85,7 +95,11 @@ class ResidentRuntime:
         return self._runtime._cycle_count
 
     def start(self) -> None:
-        """启动 daemon — boot AgentRuntime，启动 tick 线程。"""
+        """启动 daemon — boot AgentRuntime + RuntimeKernel，启动 tick 线程。
+
+        P1-C: 启动时把 AgentRuntime.tick 注入 kernel 为 agent driver，
+        tick 线程经 kernel.tick_loop 驱动（认知循环单一宿主）。
+        """
         with self._lock:
             if self._state != DaemonState.STOPPED:
                 logger.warning("Daemon already in state %s, ignoring start.", self._state.name)
@@ -93,6 +107,11 @@ class ResidentRuntime:
             self._state = DaemonState.STARTING
             self._stop_event.clear()
             self._runtime.boot()
+            # P1-C: kernel boot + agent driver 注入（每 tick 驱动 AgentRuntime.tick）。
+            # restart 场景下 kernel 保持 RUNNING，start() 幂等跳过。
+            if self._kernel.state.name != "RUNNING":
+                self._kernel.start()
+            self._kernel.attach_agent_driver(lambda tick_id: self._runtime.tick())
             self._tick_thread = threading.Thread(
                 target=self._tick_loop, name="ocos-daemon", daemon=True,
             )
@@ -143,14 +162,14 @@ class ResidentRuntime:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _tick_loop(self) -> None:
-        """主循环 — 定时 tick，消费目标队列，直到 stop_event。"""
+        """主循环 — 经 RuntimeKernel 定时 tick（认知循环单一宿主），消费目标队列。"""
         while not self._stop_event.is_set():
             # Phase 33: 将队列中的目标导入 runtime 的 goal_store
             self._drain_goal_queue()
 
-            # 执行一次 tick
+            # P1-C: 一次认知 tick = kernel.tick_loop(1)（8 空壳 stage + agent driver）
             try:
-                self._runtime.tick()
+                self._kernel.tick_loop(max_ticks=1)
                 self._idle_ticks = 0
             except Exception:
                 logger.exception("Tick failed (cycle=%d)", self._runtime._cycle_count)

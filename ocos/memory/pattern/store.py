@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from ocos.storage.connection import get_connection
 from ocos.memory.pattern.models import PatternCandidate, PatternStatus
 
 logger = logging.getLogger(__name__)
@@ -51,9 +52,8 @@ class PatternStore:
     # ── 生命周期 ────────────────────────────────────────────────────────────
 
     def initialize(self) -> None:
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        """创建表结构。幂等。"""
+        self._conn = get_connection(self._db_path)
         self._conn.executescript(_DDL)
         logger.info("PatternStore initialized at %s", self._db_path)
 
@@ -109,6 +109,16 @@ class PatternStore:
         if row is None:
             return None
         return self._row_to_pattern(row)
+
+    def find_by_condition(
+        self, trigger_condition: str, observed_relation: str
+    ) -> Optional[PatternCandidate]:
+        """按 触发条件+观察关系 查找已有 Pattern（P2-C dream 巩固去重）。"""
+        row = self.connection.execute(
+            "SELECT * FROM pattern WHERE trigger_condition = ? AND observed_relation = ? LIMIT 1",
+            (trigger_condition, observed_relation),
+        ).fetchone()
+        return self._row_to_pattern(row) if row else None
 
     def query_by_status(
         self, status: PatternStatus, limit: int = 50

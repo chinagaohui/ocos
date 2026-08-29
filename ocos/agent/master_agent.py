@@ -18,8 +18,10 @@ Agent 是整个 OCOS 的唯一意识主体。所有 Engine 是器官，Agent 是
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from ocos.agent.state import AgentState, AgentStatus
@@ -30,6 +32,11 @@ from ocos.agent.goal_types import Goal, GoalLevel, GoalOriginLevel
 from ocos.goal.factory import ConstitutionViolationError
 from ocos.goal.enforcer import GoalOriginEnforcer
 from ocos.kernel.abi import Observation
+from ocos.memory.belief.models import Belief, BeliefStatus
+from ocos.memory.belief.store import BeliefStore
+from ocos.memory.pattern.extractor import PatternExtractor
+from ocos.memory.pattern.models import PatternStatus
+from ocos.memory.pattern.store import PatternStore
 
 
 class _DecisionWrapper:
@@ -63,6 +70,7 @@ class MasterAgent:
         state: Optional[AgentState] = None,
         snapshot_mgr: Any = None,   # Phase 21: SnapshotManager
         constitution: Any = None,   # Phase 21: BehavioralConstitution
+        permission_guard: Any = None,   # P2-D: 主动输出权限门（PermissionGuard）
         # Phase 22: Cognitive Bridge engines (optional)
         reasoning_engine: Any = None,
         planning_engine: Any = None,
@@ -77,6 +85,11 @@ class MasterAgent:
         # Phase 21: Memory consolidation (optional, injected by AgentRuntime)
         experience_builder: Any = None,
         episode_store: Any = None,
+        # P2-C: Dream consolidation stores (optional — 默认惰性创建内存存储)
+        belief_store: Any = None,
+        pattern_store: Any = None,
+        # P2-D: 主动输出通道（可选注入；默认本地日志）
+        proactive_output_callback: Any = None,
     ):
         self.agent_id = agent_id
         self.identity = identity
@@ -91,8 +104,23 @@ class MasterAgent:
         # Phase 21: Snapshot & Recovery
         self._snapshot_mgr = snapshot_mgr
         self._constitution = constitution
+        self._permission_guard = permission_guard
         self._experience_builder = experience_builder
         self._episode_store = episode_store
+
+        # P2-C: Dream consolidation stores（惰性创建内存存储，显式注入优先）
+        self._belief_store = belief_store
+        self._pattern_store = pattern_store
+        if self._belief_store is None:
+            self._belief_store = BeliefStore(db_path=":memory:")
+            self._belief_store.initialize()
+        if self._pattern_store is None:
+            self._pattern_store = PatternStore(db_path=":memory:")
+            self._pattern_store.initialize()
+
+        # P2-D: 主动输出（可选注入输出通道，默认本地日志）
+        self._proactive_output_callback = proactive_output_callback
+        self._proactive_engine: Any = None
 
         # Phase 22: Lifecycle + Control + Bridge
         self._lifecycle = LifecycleManager(agent_state=self.state)
@@ -431,8 +459,14 @@ class MasterAgent:
                     )
             except ConstitutionViolationError:
                 raise
-            except Exception:
-                pass  # Constitution 错误不应阻塞决策
+            except Exception as _con_e:
+                # BR-04 C-1 修复（2026-08-25）：宪法引擎故障必须 fail-closed。
+                # 安全机制自身不可用时，决策必须被拒绝，不能静默放行
+                # （原 fail-open 会让宪法崩了决策照过，等于拆掉最后一道闸门）。
+                self._safe_return_to_idle()
+                raise ConstitutionViolationError(
+                    f"Decision blocked: BehavioralConstitution unavailable ({_con_e})"
+                ) from _con_e
 
         # Phase 22: 通过 Bridge 执行决策
         try:
@@ -827,8 +861,164 @@ class MasterAgent:
             except Exception:
                 pass  # 合成失败不阻塞 Agent
 
+        # P2-C: Dream Consolidation — 重放当日 Episode → Belief/Pattern 巩固 + 修剪
+        try:
+            stats = self._consolidate_episodes()
+            consolidation["consolidation_stats"] = stats
+        except Exception:
+            consolidation["consolidation_stats"] = {}  # 巩固失败不阻塞睡眠
+
         self._control_loop.wake_from_sleep()
         return consolidation
+
+    # ── P2-C: Dream Consolidation ─────────────────────────────────────
+
+    _CONSOLIDATION_BATCH_LIMIT = 200  # 单次 dream 最多重放条数（防失控）
+    _BELIEF_INITIAL_CONFIDENCE = 0.6  # 新建 Belief 起点置信（≥ ACTIVE 阈值）
+    _BELIEF_STRENGTHEN_STEP = 0.1     # 每条新证据增强步长
+    _PRUNE_CONFIDENCE_FLOOR = 0.35    # 低于此置信的 Belief 修剪
+
+    def _consolidate_episodes(self) -> dict[str, Any]:
+        """重放当日未巩固 Episode → Belief/Pattern 巩固 + 弱模式修剪（CLS 慢系统闭环）。
+
+        确定性规则（无 LLM）：
+          - 重放 = 最近 ACTIVE Episodes 中 created_at ≥ 今日 0:00 者（query_by_time 天然排除
+            已 CONSOLIDATED/ARCHIVED，幂等由状态位保证）
+          - Belief 聚类键 = goal or tags[0] or "episode:{source}"
+          - 新建 Belief confidence=0.6；已存在则证据追加 + confidence 累加（min 1.0）
+          - Pattern 提取去重：同 trigger_condition+observed_relation 已存在 → 不重复插入；
+            已存在但置信 < 修剪阈值 → REJECTED（PatternStatus 无 ARCHIVED）
+          - 弱 Belief（conf < 0.35）→ weaken → archive
+          - 全部处理完 → Episode 置 CONSOLIDATED（幂等）
+        """
+        stats: dict[str, Any] = {
+            "replayed": 0,
+            "beliefs_created": 0,
+            "beliefs_strengthened": 0,
+            "patterns_created": 0,
+            "patterns_strengthened": 0,
+            "pruned": 0,
+        }
+        store = self._episode_store
+        if store is None:
+            return stats  # 无 Episode 存储 → 降级不抛
+
+        # 1. 重放今日 ACTIVE Episodes
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        episodes = [
+            ep
+            for ep in store.query_by_time(limit=self._CONSOLIDATION_BATCH_LIMIT)
+            if ep.created_at >= today_start
+        ]
+        stats["replayed"] = len(episodes)
+        if not episodes:
+            return stats
+
+        # 2. Belief 巩固：按主题聚类
+        by_topic: dict[str, list] = {}
+        for ep in episodes:
+            topic = ep.goal or (ep.tags[0] if ep.tags else f"episode:{ep.source}")
+            by_topic.setdefault(topic, []).append(ep)
+        for topic, eps in by_topic.items():
+            belief_id = "BLF-" + hashlib.sha1(topic.encode("utf-8")).hexdigest()[:12]
+            existing = self._belief_store.get(belief_id)
+            if existing is None:
+                now = datetime.now(timezone.utc)
+                belief = Belief(
+                    id=belief_id,
+                    statement=f"主题「{topic}」相关经历持续出现",
+                    source_knowledge_ids=(),
+                    evidence_ids=tuple(ep.id for ep in eps),
+                    confidence=self._BELIEF_INITIAL_CONFIDENCE,
+                    uncertainty=1.0 - self._BELIEF_INITIAL_CONFIDENCE,
+                    scope={"domain": topic},
+                    status=BeliefStatus.ACTIVE,
+                    created_at=now,
+                    last_updated=now,
+                )
+                self._belief_store.save(belief)
+                stats["beliefs_created"] += 1
+            else:
+                new_evidence = tuple(
+                    ep.id for ep in eps if ep.id not in existing.evidence_ids
+                )
+                if new_evidence:
+                    enhanced = Belief(
+                        id=existing.id,
+                        statement=existing.statement,
+                        source_knowledge_ids=existing.source_knowledge_ids,
+                        evidence_ids=existing.evidence_ids + new_evidence,
+                        confidence=min(
+                            existing.confidence
+                            + self._BELIEF_STRENGTHEN_STEP * len(new_evidence),
+                            1.0,
+                        ),
+                        uncertainty=max(1.0 - existing.confidence, 0.0),
+                        scope=existing.scope,
+                        status=existing.status,
+                        created_at=existing.created_at,
+                        last_updated=datetime.now(timezone.utc),
+                    )
+                    self._belief_store.save(enhanced)
+                    stats["beliefs_strengthened"] += 1
+
+        # 3. Pattern 提取 + 去重（同 condition 不重复插入）
+        extractor = PatternExtractor()
+        for pat in extractor.extract(episodes):
+            existing = self._pattern_store.find_by_condition(
+                pat.trigger_condition, pat.observed_relation
+            )
+            if existing is None:
+                self._pattern_store.save(pat)
+                stats["patterns_created"] += 1
+            elif existing.confidence < self._PRUNE_CONFIDENCE_FLOOR:
+                self._pattern_store.update_status(existing.id, PatternStatus.REJECTED)
+                stats["pruned"] += 1
+            else:
+                stats["patterns_strengthened"] += 1  # 已存在 → 加强计数（不重复插入）
+
+        # 4. 弱 Belief 修剪（weaken → archive，退出推理）
+        for belief in self._belief_store.query_by_status(
+            BeliefStatus.ACTIVE, limit=self._CONSOLIDATION_BATCH_LIMIT
+        ):
+            if belief.confidence < self._PRUNE_CONFIDENCE_FLOOR:
+                self._belief_store.weaken(belief.id)
+                self._belief_store.archive(belief.id)
+                stats["pruned"] += 1
+
+        # 5. 幂等标记：已重放的 Episode 置 CONSOLIDATED
+        for ep in episodes:
+            try:
+                store.mark_consolidated(ep.id)
+            except Exception:
+                pass  # 单条标记失败不阻塞
+
+        return stats
+
+    # ── P2-D: 主动输出 ────────────────────────────────────────────────
+
+    def maybe_proactive_output(self) -> Optional[str]:
+        """空闲期主动输出入口（挂 LifecycleOrchestrator._tick_idle 尾部）。
+
+        触发链与降级全部由 ProactiveEngine 承担；本方法防御式兜底：
+        任何依赖缺失/异常 → 返回 None，绝不抛。
+        """
+        try:
+            if self._proactive_engine is None:
+                from ocos.proactive import ProactiveEngine
+
+                self._proactive_engine = ProactiveEngine(
+                    goal_store=getattr(self, "_goal_store", None),
+                    attention=self.attention,
+                    permission_guard=self._permission_guard,
+                    constitution=self._constitution,
+                    output_callback=self._proactive_output_callback,
+                )
+            return self._proactive_engine.maybe_proactive_output()
+        except Exception:  # pragma: no cover - 防御兜底
+            return None
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 

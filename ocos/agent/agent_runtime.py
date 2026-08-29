@@ -287,6 +287,9 @@ class AgentRuntime:
         self._memory_hub.initialize()
         logger.info("MemoryHub initialized — %s", self._memory_hub.get_stats())
 
+        # P1-A: BeliefSystem 持久化写路径接通（L6 门控 → hub.belief.save）
+        self.beliefs.bind_hub(self._memory_hub)
+
         # Working Memory Store (Phase 21)
         if db_path != ":memory:":
             self._wm_store = SQLiteWorkingMemory(
@@ -340,6 +343,9 @@ class AgentRuntime:
 
             # ── Step 4: Goal Maintenance ─────────────────────────────
             step_log.append(self._tick_step_goal_maintenance())
+
+            # ── Step 4.5: Homeostasis Regulation（P2-A 内生目标）────────
+            step_log.append(self._tick_step_homeostasis_regulation())
 
             # ── Step 5: Execution Check ──────────────────────────────
             step_log.append(self._tick_step_execution_check())
@@ -406,8 +412,10 @@ class AgentRuntime:
                 try:
                     if self._goal_store is not None:
                         active_goals = [g.goal_id for g in self._goal_store.load_active()]
-                except Exception:
-                    pass
+                except Exception as _gs_e:
+                    # BR-04 B批（2026-08-25）：goal_store 读取失败留痕——
+                    # 否则 active_goals=[] 静默缺失，注意力/检索缺目标上下文无感知。
+                    logger.warning("goal_store.load_active failed (event loop): %s", _gs_e)
 
                 candidate_score = event.candidate_score
                 source_type = getattr(event, 'source_type', 'file_change')
@@ -474,8 +482,9 @@ class AgentRuntime:
             try:
                 if self._goal_store is not None:
                     active_goals = [g.goal_id for g in self._goal_store.load_active()]
-            except Exception:
-                pass
+            except Exception as _gs_e:
+                # BR-04 B批（2026-08-25）：goal_store 读取失败留痕。
+                logger.warning("goal_store.load_active failed (decision): %s", _gs_e)
 
             # Phase 35: 核心决策管道
             # events → score (B层内嵌) → decide (C层) → AttentionDecision[]
@@ -564,8 +573,10 @@ class AgentRuntime:
                             ttl=3600 if slot == "environmental_scan" else None,
                         )
                         wm_writes += 1
-                    except Exception:
-                        pass
+                    except Exception as _wm_e:
+                        # BR-04 B批（2026-08-25）：工作记忆写入失败留痕，
+                        # 否则缓存缺失无感知。
+                        logger.warning("wm_store.put failed (attention): %s", _wm_e)
 
             # 清空 decisions cache
             self._last_attention_decisions = []
@@ -579,6 +590,64 @@ class AgentRuntime:
 
         result["wm_writes_from_attention"] = wm_writes
         return result
+
+    def _tick_step_homeostasis_regulation(self) -> dict[str, Any]:
+        """Step 4.5: Homeostasis Regulation — 稳态偏差 → 内生目标（P2-A）。
+
+        HomeostasisManager.regulate() 推导驱力并生成 SELF 级内生目标，
+        经 GoalOriginEnforcer(Phase 25) 门控后写入 _goal_store，
+        本 tick 的 Step 6 Planning Trigger 即可消费。
+        失败降级：异常时返回 gated 状态，不中断 tick。
+        """
+        try:
+            if self._goal_store is None:
+                return {"step": "4.5", "name": "homeostasis_regulation",
+                        "status": "no_goal_store"}
+
+            from ocos.capability.homeostasis import HomeostasisManager
+            from ocos.goal.enforcer import GoalOriginEnforcer
+
+            hm = HomeostasisManager()
+            enforcer = GoalOriginEnforcer(current_phase=25)
+
+            # P2-B (2026-08-29): 好奇心注入 — Step 2 的 AttentionDecision[].score_trace.novelty
+            # 最大值作为本 tick 新信息增量；fatigue 来自 CognitiveAttentionController。
+            # 确定性来源：AttentionScoringEngine 输出（防伪造）；提取失败 → 0.0 降级不中断。
+            novelty: float | None = None
+            fatigue: float | None = None
+            try:
+                decisions = self._last_attention_decisions or []
+                if decisions:
+                    novelty = max(
+                        d.score_trace.novelty for d in decisions
+                        if d.score_trace is not None
+                    )
+                fatigue = getattr(self.attention, "fatigue", None)
+            except Exception as _p2b_e:
+                logger.debug("P2-B novelty extraction failed: %s", _p2b_e)
+
+            result = hm.regulate(
+                enforcer=enforcer,
+                novelty=novelty,
+                attention_fatigue=fatigue,
+            )
+
+            created = 0
+            for goal in result.goals:
+                self._goal_store.save(goal)
+                created += 1
+
+            return {
+                "step": "4.5", "name": "homeostasis_regulation",
+                "drives": [d.drive.value for d in result.drives],
+                "goals_created": created,
+                "gated": len(result.gated),
+                "actions": [a.name for a in result.actions],
+            }
+        except Exception as e:
+            logger.warning("Homeostasis regulation failed: %s", e)
+            return {"step": "4.5", "name": "homeostasis_regulation",
+                    "gated": True, "error": str(e)}
 
     def _tick_step_goal_maintenance(self) -> dict[str, Any]:
         """Step 4: Goal Maintenance v2 — Phase 36 Attention-aware 目标维护。
@@ -883,8 +952,9 @@ class AgentRuntime:
                     priority=0.6 if ingested["success"] else 0.3,
                     description=f"{ingested['agent']}: {ingested['description'][:60]}",
                 ))
-            except Exception:
-                pass
+            except Exception as _att_e:
+                # BR-04 B批（2026-08-25）：attention 信号推送失败留痕。
+                logger.warning("attention.push_focus failed: %s", _att_e)
 
         # ── 基础经验记录（向后兼容） ──
         try:
@@ -893,8 +963,9 @@ class AgentRuntime:
                 action="cognitive_cycle",
                 outcome="completed",
             )
-        except Exception:
-            pass
+        except Exception as _exp_e:
+            # BR-04 B批（2026-08-25）：经验记录失败留痕，否则学习输入静默丢失。
+            logger.warning("experiences.record failed: %s", _exp_e)
 
         return {
             "step": 9, "name": "result_ingest",

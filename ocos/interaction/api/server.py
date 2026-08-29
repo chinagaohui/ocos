@@ -48,6 +48,7 @@ from ocos.interaction.api.routes.memory import router as memory_router
 from ocos.interaction.api.routes.belief import router as belief_router
 from ocos.interaction.api.routes.trace import router as trace_router
 from ocos.interaction.api.routes.chat import router as chat_router  # S6: WebChat
+from ocos.interaction.api.routes.quality import router as quality_router  # 2026-08-23: 质量分析/趋势
 
 app.include_router(goal_router)
 app.include_router(plan_router)
@@ -55,6 +56,7 @@ app.include_router(memory_router)
 app.include_router(belief_router)
 app.include_router(trace_router)
 app.include_router(chat_router)
+app.include_router(quality_router)
 
 
 def main():

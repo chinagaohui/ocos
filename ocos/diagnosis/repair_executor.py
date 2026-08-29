@@ -130,8 +130,16 @@ class RepairExecutor:
         if self.finalize:
             try:
                 self.finalize()  # type: ignore
-            except Exception:
-                pass
+            except Exception as _fin_e:
+                # BR-04 C-3 修复（2026-08-25）：提交失败不能伪装成功。
+                # finalize 是修复落地的最后一步，失败必须上报而非假 SUCCESS。
+                elapsed = (_time.time() - t0) * 1000
+                return self._report(exec_id, proposal, ExecutorResult.FAILED,
+                                    error=f"finalize commit failed: {_fin_e}",
+                                    checkpoint_id=checkpoint_id,
+                                    steps_executed=steps_done,
+                                    steps_failed=1,
+                                    duration_ms=elapsed)
 
         elapsed = (_time.time() - t0) * 1000
         return self._report(exec_id, proposal, ExecutorResult.SUCCESS,
@@ -158,8 +166,12 @@ class RepairExecutor:
         if self.on_complete:
             try:
                 self.on_complete(report)  # type: ignore
-            except Exception:
-                pass
+            except Exception as _cb_e:
+                # BR-04 B批（2026-08-25）：on_complete 回调失败留痕，
+                # 否则"修好了没人知道"（通知丢失无感知）。
+                import logging
+                logging.getLogger(__name__).warning(
+                    "on_complete callback failed: %s", _cb_e)
         return report
 
 

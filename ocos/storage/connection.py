@@ -29,15 +29,35 @@ DEFAULT_PRAGMAS: list[str] = [
 
 
 def get_connection(db_path: str, timeout: float = DEFAULT_TIMEOUT) -> sqlite3.Connection:
-    """获取或创建一个 SQLite 连接。线程安全，按路径缓存。"""
+    """获取或创建一个 SQLite 连接。线程安全，按路径缓存。
+
+    :memory: 特判: 内存库不共享/不缓存, 每次返回独立连接（隔离语义）。
+    文件路径: 连接池缓存; 若缓存连接已被外部 close, 自动重建。
+    """
+    if db_path == ":memory:":
+        conn = sqlite3.connect(":memory:", timeout=timeout, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        _apply_pragmas(conn)
+        return conn
+
     abs_path = str(Path(db_path).resolve())
     with _lock:
-        if abs_path not in _connections or _connections[abs_path] is None:
+        cached = _connections.get(abs_path)
+        if cached is None or not _conn_alive(cached):
             conn = sqlite3.connect(abs_path, timeout=timeout, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             _apply_pragmas(conn)
             _connections[abs_path] = conn
         return _connections[abs_path]
+
+
+def _conn_alive(conn: sqlite3.Connection) -> bool:
+    """检查连接是否仍可用（未被外部 close）。"""
+    try:
+        conn.execute("SELECT 1")
+        return True
+    except sqlite3.Error:
+        return False
 
 
 def close_all() -> None:

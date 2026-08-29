@@ -19,6 +19,7 @@ from ocos.capability.homeostasis import (
     AlertLevel,
     ContextMetrics,
     ContextMonitor,
+    DriveType,
     GoalMetrics,
     HealthMetrics,
     HealthMonitor,
@@ -33,6 +34,7 @@ from ocos.capability.homeostasis import (
     ResourceMetrics,
     ResourceMonitor,
 )
+from ocos.kernel.goal_types import GoalLevel, GoalOriginLevel, GoalStatus
 
 
 # ── 29a1: check() ────────────────────────────────────────────────────────
@@ -420,3 +422,211 @@ class TestHistory:
         hm.clear_history()
         assert len(hm.history) == 0
         assert hm.alert_count == 0
+
+
+# ── P2-A: Regulator 内生目标引擎 ───────────────────────────────────────────
+
+
+class TestRegulatorDrives:
+    """确定性规则表：偏差 → 驱力。"""
+
+    def _reg(self):
+        from ocos.capability.homeostasis import Regulator
+        return Regulator()
+
+    def test_explore_when_idle(self):
+        snap = MonitorSnapshot()  # 全默认 = 空转状态
+        drives = self._reg().derive_drives(snap)
+        kinds = {d.drive for d in drives}
+        assert DriveType.EXPLORE in kinds
+        assert DriveType.CONNECTION in kinds
+
+    def test_restore_on_high_memory(self):
+        from ocos.capability.homeostasis import DriveType
+        snap = MonitorSnapshot(resource=ResourceMetrics(memory_percent=95))
+        drives = self._reg().derive_drives(snap)
+        assert any(d.drive == DriveType.RESTORE for d in drives)
+
+    def test_mastery_on_blocked_goals(self):
+        from ocos.capability.homeostasis import DriveType
+        snap = MonitorSnapshot(goal=GoalMetrics(active_goal_count=3, blocked_goal_count=5))
+        drives = self._reg().derive_drives(snap)
+        assert any(d.drive == DriveType.MASTERY for d in drives)
+
+    def test_reflect_on_identity_breach(self):
+        from ocos.capability.homeostasis import DriveType
+        snap = MonitorSnapshot(identity=IdentityMetrics(integrity_ok=False))
+        drives = self._reg().derive_drives(snap)
+        assert any(d.drive == DriveType.REFLECT for d in drives)
+
+    def test_no_drives_when_healthy_busy(self):
+        """健康且忙碌（有活跃目标、资源正常）→ 无强驱力。"""
+        snap = MonitorSnapshot(
+            resource=ResourceMetrics(memory_percent=50),
+            goal=GoalMetrics(active_goal_count=3, blocked_goal_count=0),
+            context=ContextMetrics(current_tokens=2000),
+        )
+        drives = self._reg().derive_drives(snap)
+        assert all(d.drive not in (DriveType.EXPLORE, DriveType.CONNECTION, DriveType.RESTORE)
+                   for d in drives)
+
+
+class TestCuriosityDrive:
+    """P2-B 好奇心驱动契约：novelty 信号 → EXPLORE（确定性规则 + 注意力预算）。"""
+
+    def _reg(self):
+        from ocos.capability.homeostasis import Regulator
+        return Regulator()
+
+    def _busy_snap(self, novelty: float, fatigue: float = 0.0):
+        """忙碌态（active=5 → 无匮乏触发），仅 novelty 驱动。"""
+        return MonitorSnapshot(
+            goal=GoalMetrics(active_goal_count=5, blocked_goal_count=0),
+            context=ContextMetrics(attention_fatigue=fatigue, novelty=novelty),
+        )
+
+    def test_novelty_high_triggers_explore(self):
+        """novelty=0.8 → EXPLORE 强度 (0.8-0.6)/0.4 = 0.5（忙碌态无匮乏）。"""
+        drives = self._reg().derive_drives(self._busy_snap(0.8))
+        explore = [d for d in drives if d.drive == DriveType.EXPLORE]
+        assert len(explore) == 1  # 单一 EXPLORE 信号，无重复
+        assert explore[0].intensity == pytest.approx(0.5)
+        assert "好奇心" in explore[0].reason
+
+    def test_novelty_max_intensity(self):
+        """novelty=1.0 → 强度 1.0（饱和）。"""
+        drives = self._reg().derive_drives(self._busy_snap(1.0))
+        explore = [d for d in drives if d.drive == DriveType.EXPLORE]
+        assert explore[0].intensity == pytest.approx(1.0)
+
+    def test_novelty_below_threshold_no_explore(self):
+        """novelty=0.3（< 0.6 阈值）→ 忙碌态无 EXPLORE（匮乏规则独立验证）。"""
+        drives = self._reg().derive_drives(self._busy_snap(0.3))
+        assert all(d.drive != DriveType.EXPLORE for d in drives)
+
+    def test_novelty_takes_max_with_scarcity(self):
+        """匮乏(0.5) + novelty(0.8 → 0.5) → 强度取较大者 = 0.5，仅一个信号。"""
+        snap = MonitorSnapshot(
+            goal=GoalMetrics(active_goal_count=0, blocked_goal_count=0),
+            context=ContextMetrics(novelty=0.8),
+        )
+        drives = self._reg().derive_drives(snap)
+        explore = [d for d in drives if d.drive == DriveType.EXPLORE]
+        assert len(explore) == 1
+        assert explore[0].intensity == pytest.approx(0.5)
+
+    def test_fatigue_suppresses_explore(self):
+        """fatigue=0.75 ≥ 0.70 → 强度 ×0.5（0.5 → 0.25），L5 防失控。"""
+        drives = self._reg().derive_drives(self._busy_snap(0.8, fatigue=0.75))
+        explore = [d for d in drives if d.drive == DriveType.EXPLORE]
+        assert explore[0].intensity == pytest.approx(0.25)
+        assert "预算抑制" in explore[0].reason
+
+    def test_fatigue_below_budget_no_suppression(self):
+        """fatigue=0.5 < 0.70 → 不抑制。"""
+        drives = self._reg().derive_drives(self._busy_snap(0.8, fatigue=0.5))
+        explore = [d for d in drives if d.drive == DriveType.EXPLORE]
+        assert explore[0].intensity == pytest.approx(0.5)
+
+    def test_regulate_novelty_injection(self):
+        """regulate(novelty=0.8) → 全链路注入：EXPLORE 目标可生成（无匮乏）。"""
+        from ocos.capability.homeostasis import HomeostasisManager
+        hm = HomeostasisManager()
+        result = hm.regulate(novelty=0.8)
+        explore = [d for d in result.drives if d.drive == DriveType.EXPLORE]
+        assert any(d.intensity == pytest.approx(0.5) for d in explore)
+        # 好奇心目标已生成（SELF 级，无门控测试场景）
+        assert len(result.goals) >= 1
+
+    def test_regulate_merge_semantics(self):
+        """regulate(novelty=None, attention_fatigue=0.9) → 只覆盖 fatigue，novelty 用采样值。"""
+        from ocos.capability.homeostasis import HomeostasisManager
+        hm = HomeostasisManager()
+        result = hm.regulate(attention_fatigue=0.9)
+        # fatigue 高 → EXPLORE 若触发也被抑制；不崩溃即验证合并语义
+        for d in result.drives:
+            if d.drive == DriveType.EXPLORE:
+                assert d.intensity <= 0.25 + 1e-9
+
+
+class TestRegulatorGoalGeneration:
+    """驱力 → SELF 级 Goal（确定性模板）。"""
+
+    def _reg(self):
+        from ocos.capability.homeostasis import Regulator
+        return Regulator()
+
+    def test_goal_is_self_origin(self):
+        from ocos.capability.homeostasis import DriveType, DriveSignal
+        goals, gated = self._reg().generate_self_goals(
+            [DriveSignal(DriveType.EXPLORE, 0.5, "r", "m")])
+        assert len(goals) == 1
+        assert goals[0].origin_level == GoalOriginLevel.SELF
+        assert goals[0].status == GoalStatus.PENDING
+        assert goals[0].level == GoalLevel.SHORT
+
+    def test_priority_below_human(self):
+        """D3: SELF 优先级恒低于 HUMAN（1.0）。"""
+        from ocos.capability.homeostasis import DriveType, DriveSignal
+        for drive_type in DriveType:
+            goals, _ = self._reg().generate_self_goals(
+                [DriveSignal(drive_type, 1.0, "r", "m")])
+            for g in goals:
+                assert g.priority < 1.0, f"{drive_type} priority {g.priority} >= 1.0"
+
+    def test_gate_rejects_goals(self):
+        from ocos.capability.homeostasis import DriveType, DriveSignal
+        goals, gated = self._reg().generate_self_goals(
+            [DriveSignal(DriveType.EXPLORE, 0.5, "r", "m")],
+            gate=lambda g: False,
+        )
+        assert goals == []
+        assert len(gated) == 1
+
+    def test_max_goals_cap(self):
+        from ocos.capability.homeostasis import DriveSignal, DriveType
+        drives = [DriveSignal(d, 0.5, "r", "m") for d in list(DriveType)[:5]]
+        goals, _ = self._reg().generate_self_goals(drives)
+        assert len(goals) <= self._reg().MAX_GOALS_PER_CYCLE
+
+    def test_metadata_carries_drive(self):
+        from ocos.capability.homeostasis import DriveSignal, DriveType
+        goals, _ = self._reg().generate_self_goals(
+            [DriveSignal(DriveType.MASTERY, 0.6, "r", "m")])
+        assert goals[0].metadata["drive"] == "MASTERY"
+
+
+class TestRegulateIntegration:
+    """HomeostasisManager.regulate() 全链路。"""
+
+    def test_regulate_returns_result(self):
+        from ocos.capability.homeostasis import RegulateResult
+        hm = HomeostasisManager()
+        result = hm.regulate()
+        assert isinstance(result, RegulateResult)
+        assert isinstance(result.drives, list)
+        assert isinstance(result.goals, list)
+        assert isinstance(result.actions, list)
+
+    def test_regulate_all_goals_self(self):
+        hm = HomeostasisManager()
+        result = hm.regulate()
+        for g in result.goals:
+            assert g.origin_level == GoalOriginLevel.SELF
+
+    def test_enforcer_phase21_gates_all_self(self):
+        """Phase 21 只允许 SYSTEM → SELF 全被门控。"""
+        from ocos.goal.enforcer import GoalOriginEnforcer
+        hm = HomeostasisManager()
+        result = hm.regulate(enforcer=GoalOriginEnforcer(current_phase=21))
+        assert result.goals == []
+        assert len(result.gated) >= 1
+
+    def test_enforcer_phase25_allows_self(self):
+        """Phase 25 放行 SELF → 门控数下降，目标保留。"""
+        from ocos.goal.enforcer import GoalOriginEnforcer
+        hm = HomeostasisManager()
+        ungated = hm.regulate()  # 无门控基线
+        gated = hm.regulate(enforcer=GoalOriginEnforcer(current_phase=25))
+        assert len(gated.goals) == len(ungated.goals)
+        assert gated.gated == []

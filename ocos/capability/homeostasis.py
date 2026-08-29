@@ -26,11 +26,18 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import Any
 
+from ocos.kernel.goal_types import (
+    Goal,
+    GoalAuthority,
+    GoalLevel,
+    GoalOriginLevel,
+    GoalStatus,
+)
 from ocos.logging import get_logger
 
 logger = get_logger(__name__)
@@ -56,6 +63,210 @@ class RegulatorAction(Enum):
     TRIGGER_SLEEP = auto()
     COMPRESS_CONTEXT = auto()
     NONE = auto()
+
+
+# ── 内生驱力（P2-A: Regulator 内生目标引擎）──────────────────────────────────
+
+
+class DriveType(Enum):
+    """内生驱力类型（升级报告 §4 五驱力）。"""
+
+    EXPLORE = "EXPLORE"      # 探索：目标匮乏时寻找新输入/新领域
+    MASTERY = "MASTERY"      # 胜任：阻塞/失败积累时攻坚与技能巩固
+    CONNECTION = "CONNECTION"  # 联结：交互稀薄时主动发起联结
+    RESTORE = "RESTORE"      # 恢复：资源高水位时整理与回收
+    REFLECT = "REFLECT"      # 反思：身份/记忆完整性受损时回溯一致性
+
+
+@dataclass(frozen=True)
+class DriveSignal:
+    """单个驱力信号（确定性推导，无 I/O）。"""
+
+    drive: DriveType
+    intensity: float  # [0.3, 1.0]
+    reason: str
+    metric: str
+
+
+@dataclass(frozen=True)
+class RegulateResult:
+    """一次 regulate() 的完整结果。"""
+
+    drives: list[DriveSignal]
+    goals: list[Goal]
+    actions: list[RegulatorAction]
+    gated: list[str]  # 被门控拒绝的目标描述
+
+
+class Regulator:
+    """调节器 — 稳态偏差 → 驱力 → 内生目标（P2-A 实现）。
+
+    确定性函数式组件：无状态、无 I/O、无 LLM。
+    输入 MonitorSnapshot，输出 DriveSignal 列表与 SELF 级 Goal 列表。
+    目标生成可挂 gate 回调（生产由 GoalOriginEnforcer 门控）。
+    """
+
+    MAX_GOALS_PER_CYCLE = 3
+    HUMAN_PRIORITY_FLOOR = 1.0  # SELF 优先级恒低于 HUMAN
+
+    def __init__(self, thresholds: HomeostasisThresholds | None = None) -> None:
+        self._thresholds = thresholds or HomeostasisThresholds()
+
+    # 驱力 → 目标模板（确定性）
+    _GOAL_TEMPLATES: dict[DriveType, tuple[str, float, GoalLevel]] = {
+        DriveType.EXPLORE: (
+            "探索新领域：识别并吸收一条当前认知盲区的新信息",
+            0.5, GoalLevel.SHORT,
+        ),
+        DriveType.MASTERY: (
+            "攻克阻塞目标：处理当前阻塞中的任务并巩固对应技能",
+            0.6, GoalLevel.SHORT,
+        ),
+        DriveType.CONNECTION: (
+            "发起一次主动联结：向用户或外部环境发起一次有意义的交互",
+            0.4, GoalLevel.SHORT,
+        ),
+        DriveType.RESTORE: (
+            "执行一次资源整理：清理低价值数据并压缩上下文",
+            0.7, GoalLevel.SHORT,
+        ),
+        DriveType.REFLECT: (
+            "进行一次身份反思：回顾近期信念与行为的一致性",
+            0.3, GoalLevel.SHORT,
+        ),
+    }
+
+    @staticmethod
+    def _clamp(value: float, lo: float = 0.3, hi: float = 1.0) -> float:
+        return max(lo, min(hi, value))
+
+    def derive_drives(self, snapshot: MonitorSnapshot) -> list[DriveSignal]:
+        """确定性规则表：偏差 → 驱力（intensity 按偏差比例映射 [0.3, 1.0]）。"""
+        t = self._thresholds
+        drives: list[DriveSignal] = []
+
+        # RESTORE — 资源高水位（内存/存储）
+        if snapshot.resource.memory_percent > t.memory_percent_max:
+            drives.append(DriveSignal(
+                DriveType.RESTORE,
+                self._clamp((snapshot.resource.memory_percent - t.memory_percent_max) / 20.0),
+                "系统内存高水位",
+                "resource.memory_percent",
+            ))
+        if snapshot.resource.storage_percent > t.storage_percent_max:
+            drives.append(DriveSignal(
+                DriveType.RESTORE,
+                self._clamp((snapshot.resource.storage_percent - t.storage_percent_max) / 15.0),
+                "系统存储高水位",
+                "resource.storage_percent",
+            ))
+
+        # EXPLORE — ① 目标匮乏（active 少且无阻塞 → 无事可做）② 好奇心（novelty 信号，P2-B）
+        # 强度取两者较大者；注意力预算（fatigue ≥ 0.70）→ ×0.5 抑制（防探索失控）。
+        explore_intensity = 0.0
+        explore_reason = ""
+        explore_source = ""
+        if snapshot.goal.active_goal_count < 2 and snapshot.goal.blocked_goal_count == 0:
+            explore_intensity = 0.5
+            explore_reason = "目标匮乏：当前无事可做"
+            explore_source = "goal.active_goal_count"
+        if snapshot.context.novelty >= 0.6:
+            novelty_intensity = self._clamp((snapshot.context.novelty - 0.6) / 0.4)
+            if novelty_intensity > explore_intensity:
+                explore_intensity = novelty_intensity
+                explore_reason = f"好奇心：新信息增量 {snapshot.context.novelty:.2f}"
+                explore_source = "context.novelty"
+        if explore_intensity > 0.0:
+            if snapshot.context.attention_fatigue >= 0.70:
+                explore_intensity *= 0.5  # 注意力预算抑制（L5 防失控）
+                explore_reason += "（注意力预算抑制 ×0.5）"
+            drives.append(DriveSignal(
+                DriveType.EXPLORE,
+                explore_intensity,
+                explore_reason,
+                explore_source,
+            ))
+
+        # MASTERY — 阻塞/失败积累
+        if snapshot.goal.blocked_goal_count > t.blocked_goal_max:
+            drives.append(DriveSignal(
+                DriveType.MASTERY,
+                self._clamp(0.4 + 0.1 * (snapshot.goal.blocked_goal_count - t.blocked_goal_max)),
+                f"阻塞目标积累：{snapshot.goal.blocked_goal_count} 个阻塞",
+                "goal.blocked_goal_count",
+            ))
+        if snapshot.health.error_rate > t.error_rate_max:
+            drives.append(DriveSignal(
+                DriveType.MASTERY,
+                self._clamp(0.4 + snapshot.health.error_rate),
+                "错误率超阈：需要技能巩固",
+                "health.error_rate",
+            ))
+
+        # CONNECTION — 交互稀薄（低 token 负载 + 低疲劳 + 无活跃目标）
+        if (
+            snapshot.context.current_tokens < 500
+            and snapshot.context.attention_fatigue < 0.1
+            and snapshot.goal.active_goal_count == 0
+        ):
+            drives.append(DriveSignal(
+                DriveType.CONNECTION,
+                0.4,
+                "交互稀薄：长期无外部联结",
+                "context.current_tokens",
+            ))
+
+        # REFLECT — 身份/记忆完整性
+        if not snapshot.identity.integrity_ok:
+            drives.append(DriveSignal(
+                DriveType.REFLECT,
+                0.7,
+                "身份完整性受损",
+                "identity.integrity_ok",
+            ))
+        if snapshot.memory.fragmentation_percent > t.memory_fragmentation_max:
+            drives.append(DriveSignal(
+                DriveType.REFLECT,
+                self._clamp(0.3 + snapshot.memory.fragmentation_percent),
+                "记忆碎片率高：需要整理反思",
+                "memory.fragmentation_percent",
+            ))
+
+        return drives
+
+    def generate_self_goals(
+        self,
+        drives: list[DriveSignal],
+        now: datetime | None = None,
+        gate: Any = None,
+    ) -> tuple[list[Goal], list[str]]:
+        """驱力 → SELF 级 Goal（确定性模板）。
+
+        gate: Callable[[Goal], bool] — 返回 False 的目标被门控拒绝（不入列表）。
+        gated: 被拒绝目标的描述列表。
+        """
+        now = now or datetime.now(timezone.utc)
+        goals: list[Goal] = []
+        gated: list[str] = []
+
+        for drive in drives[: self.MAX_GOALS_PER_CYCLE]:
+            template, priority, level = self._GOAL_TEMPLATES[drive.drive]
+            goal = Goal(
+                level=level,
+                description=template,
+                priority=min(priority, self.HUMAN_PRIORITY_FLOOR - 0.1),
+                created_at=now,
+                status=GoalStatus.PENDING,
+                origin_level=GoalOriginLevel.SELF,
+                authority=GoalAuthority.AUTONOMOUS,
+                metadata={"drive": drive.drive.value, "intensity": drive.intensity},
+            )
+            if gate is not None and not gate(goal):
+                gated.append(template)
+                continue
+            goals.append(goal)
+
+        return goals, gated
 
 
 # ── 阈值配置 ─────────────────────────────────────────────────────────────────
@@ -148,6 +359,9 @@ class ContextMetrics:
     current_tokens: int = 0
     attention_fatigue: float = 0.0
     context_switches_this_hour: int = 0
+    # P2-B (2026-08-29): 好奇心驱动 — 本 tick 感知到的最新颖信号（AttentionScoreTrace.novelty 最大值）
+    # 确定性来源：AttentionScoringEngine 输出，外部不可注入（防伪造）。
+    novelty: float = 0.0
 
 
 @dataclass
@@ -580,6 +794,54 @@ class HomeostasisManager:
                 seen.add(a)
                 unique.append(a)
         return unique
+
+    # ── Regulator 内生目标引擎（P2-A）──────────────────────────────────
+
+    def regulate(
+        self,
+        enforcer: Any | None = None,
+        now: datetime | None = None,
+        novelty: float | None = None,
+        attention_fatigue: float | None = None,
+    ) -> RegulateResult:
+        """全链路调节：check → derive_drives → generate_self_goals。
+
+        enforcer: GoalOriginEnforcer 实例（Phase 25 放行 SELF）；为 None 则无门控
+                  （测试/纯推导场景）。
+        novelty / attention_fatigue: P2-B 外部覆盖（AgentRuntime Step 4.5 注入
+                  AttentionScoringEngine 的 novelty 与 controller.fatigue）；
+                  None = 使用 check() 采样值。
+        返回 RegulateResult(drives, goals, actions, gated)。
+        """
+        snapshot = self.check()
+        if novelty is not None or attention_fatigue is not None:
+            snapshot.context = replace(
+                snapshot.context,
+                novelty=novelty if novelty is not None else snapshot.context.novelty,
+                attention_fatigue=(
+                    attention_fatigue
+                    if attention_fatigue is not None
+                    else snapshot.context.attention_fatigue
+                ),
+            )
+        report = self.health_report(snapshot)
+        actions = self.recommend_actions(report)
+
+        regulator = Regulator(thresholds=self._thresholds)
+        drives = regulator.derive_drives(snapshot)
+
+        if enforcer is not None:
+            gate = lambda goal: bool(enforcer.verify_creation(goal).allowed)
+        else:
+            gate = None
+        goals, gated = regulator.generate_self_goals(drives, now=now, gate=gate)
+
+        return RegulateResult(
+            drives=drives,
+            goals=goals,
+            actions=actions,
+            gated=gated,
+        )
 
     # ── Lifecycle / History ─────────────────────────────────────────────
 

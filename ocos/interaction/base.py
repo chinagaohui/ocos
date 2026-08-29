@@ -38,6 +38,9 @@ ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "view_belief",
     "view_self",
     "view_trace",
+    # 2026-08-23: OCOS 智脑质量分析/趋势检测（OpenTale 生成流程调用）
+    "analyze_quality",
+    "analyze_trend",
 })
 
 # 入口层禁止的操作

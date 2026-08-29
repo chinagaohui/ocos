@@ -28,6 +28,13 @@ dev = [
     "pytest>=9.0.0",
 ]
 
+# P0 (2026-08-28): 生产启动入口 — `ocos run` 点亮认知引擎
+# P0 收尾 (2026-08-29): 补全 ocos-server/ocos-shell（对齐 egg-info 残留）
+[project.scripts]
+ocos = "ocos.interaction.cli.main:main"
+ocos-server = "ocos.interaction.api.server:main"
+ocos-shell = "ocos.interaction.repl.shell:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

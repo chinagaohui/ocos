@@ -82,7 +82,13 @@ def test_memory_imports_self_contained() -> None:
         all_imports.update(_collect_imports(py_file))
 
     # Freeze §2 L6: Belief 需要 Constitution StatementValidator
-    _FREEZE_ALLOWED = {"ocos.constitution", "ocos.constitution.statement_validator"}
+    # P1-A store 下沉: memory store 共享 ocos.storage.connection（2026-08-29 P1-C 回归发现，
+    # baseline 无此 import；P1-A 引入，例外表同步）
+    _FREEZE_ALLOWED = {
+        "ocos.constitution",
+        "ocos.constitution.statement_validator",
+        "ocos.storage.connection",
+    }
 
     for imp in all_imports:
         if "." not in imp:
