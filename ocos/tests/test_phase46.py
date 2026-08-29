@@ -249,9 +249,13 @@ class TestFullLoop:
         assert "event" in focus.target or focus.target == "idle"
 
     def test_decision_forbidden_direct_execution(self):
-        """决策流水线禁止 directly execute 类提案。"""
+        """决策流水线禁止 directly execute 类提案。
+
+        GAP-P1-1 后治理由 DecisionValidator 承担：执行类触发词的
+        wisdom 建议 → DIRECT_ACTION 选项 → DIRECT_EXECUTION 违规 → 拒绝。
+        """
         dp = DecisionPipeline()
-        ctx = LoopContext(tick_id=1, perception_input="execute_directly: rm -rf /")
+        ctx = LoopContext(tick_id=1, active_wisdom=["执行用户命令直接运行: rm -rf /"])
         ctx = dp.process(ctx)
         assert not ctx.decision_approved
 

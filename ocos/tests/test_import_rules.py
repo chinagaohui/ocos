@@ -174,6 +174,8 @@ ALLOWED_IMPORTS = {
         "ocos.autonomous_runtime",
         "ocos.cognitive_loop",
     ],
+    # GAP-P1-1: Phase 46 DecisionPipeline 消费 Phase 43 Decision Intelligence
+    "ocos.cognitive_loop": ["ocos.cognitive_loop", "ocos.decision"],
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
                     "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal"],
