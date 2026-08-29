@@ -1,6 +1,15 @@
 """GoalSQLiteStore — Goal 的 SQLite 持久化存储。
 
 Phase 21: GoalStack 持久化——解决 AR-2。
+
+职责分工(GAP-P3-4 裁决): 本模块 = agent 层 Goal 对象存储
+(goal 表, 对象 API, 生产: agent/goal_stack/agent_runtime);
+ocos/goal/store.py = goal 域包持久化(goals 表, 原生参数 API,
+生产: goal_monitor/api/routes/goal/runtime/stages)。两套 schema
+有互斥字段(本表独有 result_json/INTEGER level; goal 域表独有
+progress/source/source_id/updated_at/decision_refs/TEXT level),
+无损合并需 schema 超集 + 调用点迁移 + 数据迁移, 超出 GAP-P3
+纯重构范围 → 两套并存, 统一收敛留待后续阶段。
 """
 
 from __future__ import annotations
