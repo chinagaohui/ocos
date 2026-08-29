@@ -71,15 +71,6 @@ class RetryPolicy:
         return max(0.1, delay + jitter_amount)
 
 
-def with_retry(
-    fn: Callable[..., dict[str, Any]],
-    cb_state: CircuitBreakerState,
-    policy: RetryPolicy = RetryPolicy(),
-) -> Callable[..., dict[str, Any]]:
-    """装饰器或包装器：为引擎调用添加重试 + 断路器。"""
-    raise NotImplementedError("Use safe_execute() instead.")
-
-
 def safe_execute(
     fn: Callable[[], dict[str, Any]],
     cb_state: CircuitBreakerState,
