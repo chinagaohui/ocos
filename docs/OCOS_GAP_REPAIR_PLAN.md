@@ -290,3 +290,14 @@ python -m pytest ocos/tests/test_phase44.py tests/ -q -k "plugin or sandbox or e
 | 2026-08-29 | P2-3 | event_memory SQLite 化(append-only) + archive 真实标记 + 删 CR55-03 假声称 | 57 passed 零回归 | 4b11c51 |
 | 2026-08-30 | P2-4 | wisdom_store SQLite 落盘 + personalization FORMAL/BOLD 补实现 | 122 passed 零回归 | 1268495 |
 | 2026-08-30 | P2-5 | living_test 真实化: resurrection_drill 10/10 + snapshot/goal 自愈建表 + 行工厂污染修复 | 全量仅 organ_client 既有失败 | 333675b |
+| 2026-08-30 | P3-1 | stability/ 三件套删除 (生产零引用) + retry_policy 弃用桩 with_retry 删 | 定向 8 passed | 10b12ca |
+| 2026-08-30 | P3-2 | persistence/ 核查: 非重复实现 (通用快照框架 vs agent SQLite) → 降级分工 docstring | phase51 87 契约测试过 | 54f69e1 |
+| 2026-08-30 | P3-3 | crash_recovery 核查: 进程级 vs agent 轻量, 非重复 → 降级分工 docstring | recovery + phase21/58 测试过 | 5c06ea5 |
+| 2026-08-30 | P3-4 | goal_store 两套核查: 表字段互斥 (result_json vs progress/decision_refs) → 降级分工 docstring; C.7 核查取消 (decision_loop 生产在用, 顶层 belief.py 不存在) | goal 6 测试过 | 9fb9a78 |
+| 2026-08-30 | P3-5 | event/ vs events/ 分工 docstring (感知 vs 宪法总线); C.1 constitution 占位标注; event_store 测试契约锁定保留 | event 6 测试过 | b349c53 |
+| 2026-08-30 | P3-6 | planning/validator.py 真合并入 plan_validator.py: validate_plan() 入口 + 删 48 行重复 + 迁移 2 测试 | 定向 12 passed 零回归 | 3f03794 |
+| 2026-08-30 | P3-7 | capability_reality 核查: Phase 45 抽象层 vs Phase 55 真实层分层 → 降级分工 docstring | phase55/58 定向过 | cd556bb |
+| 2026-08-30 | P3-8 | 三套注意力裁决: 分层确认 (引擎/控制器/编排) + 冻结面不动 → 裁决文档; C.3/C.4 清理 | 定向 44 passed (单跑竞态通过) | 9f2ed15 |
+| 2026-08-30 | P3-C5 | engines/__init__ manifest 统一导出 + writer_engine 补 __manifest__ | writer/planning 测试过 | 8204b16 |
+| 2026-08-30 | P3-C6+F1 | snapshot 默认路径收敛 ~/.ocos/ocos.db + stub/placeholder 复查清单存档 | phase21 测试过 | e8c09ac |
+| 2026-08-30 | P3-F2 | 全量回归 | 唯一失败 = organ_client 既有超时, P3 零回归 | (见下) |
