@@ -647,3 +647,18 @@ class WriterEngine:
         if not self._traces:
             return None
         return list(self._traces.values())[-1]
+
+
+# ── Engine Manifest (GAP-P3 C.5) ─────────────────────────────────────────────
+from ocos.platform.engine_manifest import EngineManifest
+
+__manifest__ = EngineManifest(
+    engine_id="writer_engine",
+    name="Writer Engine",
+    version="1.0.0",
+    engine_class="ocos.engines.writer_engine.WriterEngine",
+    capabilities=["writing", "prose_generation"],
+    dependencies=[],
+    singleton=True,
+    auto_load=True,
+)
