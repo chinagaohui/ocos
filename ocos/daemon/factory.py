@@ -35,3 +35,31 @@ def build_master_agent(agent_id: str):
         execution_manager=ExecutionManager(),
         state=AgentState(),
     )
+
+
+def build_health_loop(runtime=None, interval_ticks: int = 100):
+    """GAP-P1-2: 装配稳态健康监控 — AlertManager(Log+File) + CognitiveExaminer。
+
+    文件通道落盘 ~/.ocos/alerts/alerts.log（每行一个 JSON）。
+    """
+    import os
+    from pathlib import Path
+
+    from ocos.alerts.channels import FileChannel, LogChannel
+    from ocos.alerts.manager import AlertManager
+    from ocos.capability.homeostasis import HomeostasisManager
+    from ocos.daemon.health_loop import HealthLoop
+    from ocos.health_examination.cognitive_examiner import CognitiveExaminer
+
+    alerts = AlertManager()
+    alerts.register_channel(LogChannel())
+    alerts_dir = Path(os.environ.get("OCOS_ALERTS_DIR", str(Path.home() / ".ocos" / "alerts")))
+    alerts.register_channel(FileChannel(str(alerts_dir / "alerts.log")))
+
+    return HealthLoop(
+        runtime=runtime,
+        examiner=CognitiveExaminer(),
+        alerts=alerts,
+        homeostasis=HomeostasisManager(),
+        interval_ticks=interval_ticks,
+    )

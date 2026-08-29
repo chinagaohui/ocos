@@ -59,6 +59,7 @@ class ResidentRuntime:
         max_cycles: int = 10_000,
         max_idle_cycles: int = 0,
         kernel: Optional[Any] = None,
+        health_loop: Optional[Any] = None,  # GAP-P1-2: 周期健康体检（daemon.health_loop.HealthLoop）
     ) -> None:
         from ocos.agent.agent_runtime import AgentRuntime
         self._runtime: AgentRuntime = AgentRuntime(
@@ -72,6 +73,7 @@ class ResidentRuntime:
             from ocos.runtime.runtime_kernel import RuntimeKernel
             kernel = RuntimeKernel()
         self._kernel: Any = kernel
+        self._health_loop: Optional[Any] = health_loop  # GAP-P1-2
         self._tick_interval = tick_interval
         self._max_idle_cycles = max_idle_cycles
         self._state: DaemonState = DaemonState.STOPPED
@@ -92,7 +94,15 @@ class ResidentRuntime:
 
     @property
     def cycle_count(self) -> int:
+        """当前 tick 周期数（与 runtime 同步）。"""
         return self._runtime._cycle_count
+
+    def attach_health_loop(self, health_loop: Any) -> None:
+        """GAP-P1-2: 绑定周期健康体检（须在 start() 前调用）。"""
+        self._health_loop = health_loop
+        bind = getattr(health_loop, "bind", None)
+        if bind is not None:
+            bind(self._runtime)
 
     def start(self) -> None:
         """启动 daemon — boot AgentRuntime + RuntimeKernel，启动 tick 线程。
@@ -173,6 +183,13 @@ class ResidentRuntime:
                 self._idle_ticks = 0
             except Exception:
                 logger.exception("Tick failed (cycle=%d)", self._runtime._cycle_count)
+
+            # GAP-P1-2: 周期健康体检（HealthLoop 内部按 interval_ticks 节流）
+            if self._health_loop is not None:
+                try:
+                    self._health_loop.tick()
+                except Exception:
+                    logger.exception("Health loop tick failed")
 
             # 降速逻辑（可选）
             if self._max_idle_cycles > 0 and self._idle_ticks >= self._max_idle_cycles:

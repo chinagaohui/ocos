@@ -51,12 +51,15 @@ def cmd_run(args, session) -> int:
     agent = build_master_agent(args.agent_id)
 
     from ocos.daemon import ResidentRuntime
+    from ocos.daemon.factory import build_health_loop
 
     rt = ResidentRuntime(
         agent,
         tick_interval=args.interval,
         db_path=db_path,
     )
+    # GAP-P1-2: 周期健康体检（AlertManager Log+File 通道 → ~/.ocos/alerts/）
+    rt.attach_health_loop(build_health_loop())
     rt.start()
     print(f"  runtime  : RUNNING (cycle={rt.cycle_count})")
 

@@ -178,7 +178,8 @@ ALLOWED_IMPORTS = {
     "ocos.cognitive_loop": ["ocos.cognitive_loop", "ocos.decision"],
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
-                    "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal"],
+                    "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal",
+                    "ocos.alerts", "ocos.health_examination"],  # GAP-P1-2: 健康体检告警
 }
 
 # 测试文件允许的 import 例外（白名单，当前 unused—保留供将来使用）
