@@ -55,11 +55,13 @@ class ContentAnalyzer:
     """可扩展的内容分析器基类。
 
     子类重写 score_novelty / score_relevance / score_urgency。
-    B2 提供四个内置实现：
+    B2 提供三个内置实现：
     - DefaultContentAnalyzer（关键词计数基线）
-    - SemanticContentAnalyzer（占位，备模型集成）
     - FrequencyAnalyzer（去重/频率衰减）
     - UrgencyKeywordAnalyzer（关键词触发）
+
+    GAP-P3-8 (C.3): 移除 docstring 中 SemanticContentAnalyzer
+    的"占位承诺" — 该分析器从未实现, 避免误导后续集成。
     """
 
     def score_novelty(

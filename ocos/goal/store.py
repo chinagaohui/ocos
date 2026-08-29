@@ -3,6 +3,15 @@
 Phase 21.02: Goal Persistence
 Phase 22: Goal Origin Model v1.0 集成 (origin_level + authority)
 
+职责分工(GAP-P3-4 裁决): 本模块 = goal 域包持久化(goals 表,
+原生参数 API, 生产: goal_monitor/api/routes/goal/runtime/stages);
+ocos/agent/goal_store.py = agent 层 Goal 对象存储(goal 表,
+对象 API, 生产: agent/goal_stack/agent_runtime)。两套 schema 有
+互斥字段(本表独有 progress/source/source_id/updated_at/
+decision_refs/TEXT level; agent 表独有 result_json/INTEGER
+level), 无损合并需 schema 超集 + 调用点迁移 + 数据迁移, 超出
+GAP-P3 纯重构范围 → 两套并存, 统一收敛留待后续阶段。
+
 操作:
 - save: 保存 Goal 到 SQLite (含 origin_level, authority)
 - load_active: 加载所有活跃 (非终止态) 的 Goal

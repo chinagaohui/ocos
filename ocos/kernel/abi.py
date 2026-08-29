@@ -138,7 +138,7 @@ class EventType(str, Enum):
 class Event:
     """Event Bus 的基本消息单元。"""
     event_id: str = dataclasses.field(default_factory=lambda: uuid.uuid4().hex)
-    event_type: EventType = EventType.SCHEDULER_TICK  # placeholder
+    event_type: EventType = EventType.SCHEDULER_TICK  # 默认 tick 类型, 调用方应显式指定 (GAP-P3-8 C.4)
     source: str = ""  # 产生事件的模块名
     timestamp: str = dataclasses.field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()

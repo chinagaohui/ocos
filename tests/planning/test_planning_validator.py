@@ -9,7 +9,7 @@
 """
 
 import pytest
-from ocos.planning.validator import PlanValidator
+from ocos.planning.plan_validator import validate_no_self_module, validate_plan
 from ocos.planning.models import Task, TaskDAG, ExecutionStrategy, Plan
 
 
@@ -44,7 +44,7 @@ def _plan(
 
 def test_validate_with_goal():
     dag = _dag("A", "B", edges=[("A", "B")])
-    ok, reason = PlanValidator.validate(_plan(dag))
+    ok, reason = validate_plan(_plan(dag))
     assert ok
 
 
@@ -56,7 +56,7 @@ def test_validate_with_no_goal():
 # ── 27-V02: no self import ──────────────────────────────────────────
 
 def test_validate_no_self_module():
-    PlanValidator.validate_no_self_module()
+    validate_no_self_module()
     # 真正的检查在 test_import_rules.py
 
 
@@ -64,7 +64,7 @@ def test_validate_no_self_module():
 
 def test_validate_valid_dag():
     dag = _dag("A", "B", "C", edges=[("A", "B"), ("B", "C")])
-    ok, reason = PlanValidator.validate(_plan(dag))
+    ok, reason = validate_plan(_plan(dag))
     assert ok
     assert reason == "ok"
 
@@ -73,7 +73,7 @@ def test_validate_valid_dag():
 
 def test_validate_cyclic_dag():
     dag = _dag("A", "B", "C", edges=[("A", "B"), ("B", "C"), ("C", "A")])
-    ok, reason = PlanValidator.validate(_plan(dag))
+    ok, reason = validate_plan(_plan(dag))
     assert not ok
     assert "cycle" in reason
 
@@ -82,6 +82,6 @@ def test_validate_cyclic_dag():
 
 def test_validate_empty_dag():
     dag = TaskDAG()
-    ok, reason = PlanValidator.validate(_plan(dag))
+    ok, reason = validate_plan(_plan(dag))
     assert not ok
     assert "at least one Task" in reason

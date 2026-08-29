@@ -2,6 +2,12 @@
 
 OCOS 的真实能力层 — 将抽象能力 (ocos/capability/) 连接到真实世界。
 
+职责分工(GAP-P3-7 裁决): 本包 = 真实能力层 (Phase 55, 可执行
+能力注册 CapabilityDescriptor + shell/fs 适配器, 连接真实世界);
+ocos/capability/ = 抽象能力神经系统 (Phase 45, Capability 对象
+注册/状态/路由)。两包是两个正式 Phase 的分层设计, 注册表 API
+不同 (CapabilityDescriptor vs Capability), 非重复实现 → 不合并。
+
 核心原则:
     CR55-01: Capability ≠ Execution — 注册不代表已执行
     CR55-02: Adapter Isolation — 适配器崩溃不影响主脑
