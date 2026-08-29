@@ -18,6 +18,7 @@ TABLE_PATTERN = "pattern"
 TABLE_KNOWLEDGE = "knowledge"
 TABLE_IDENTITY = "identity"
 TABLE_GOAL = "goal"
+TABLE_WISDOM = "wisdom_items"
 
 # ── 建表 SQL ───────────────────────────────────────────────────────────────
 
@@ -218,6 +219,18 @@ CREATE_GOAL = [
     "CREATE INDEX IF NOT EXISTS idx_goal_priority ON goal(priority DESC)",
 ]
 
+CREATE_WISDOM = [
+    """CREATE TABLE IF NOT EXISTS wisdom_items (
+        user_id TEXT NOT NULL,
+        wisdom_id TEXT NOT NULL,
+        principle TEXT NOT NULL,
+        state TEXT NOT NULL,
+        source_patterns TEXT NOT NULL DEFAULT '[]',
+        evidence TEXT NOT NULL DEFAULT '[]',
+        PRIMARY KEY (user_id, wisdom_id)
+    )""",
+]
+
 STORAGE_TABLES = {
     TABLE_WORKING_MEMORY: CREATE_WORKING_MEMORY,
     TABLE_EVENT_STORE: CREATE_EVENT_STORE,
@@ -230,4 +243,5 @@ STORAGE_TABLES = {
     TABLE_KNOWLEDGE: CREATE_KNOWLEDGE,
     TABLE_IDENTITY: CREATE_IDENTITY,
     TABLE_GOAL: CREATE_GOAL,
+    TABLE_WISDOM: CREATE_WISDOM,
 }

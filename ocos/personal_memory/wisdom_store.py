@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from ocos.personal_memory.wisdom_types import (
     WisdomItem,
@@ -40,6 +40,62 @@ class WisdomStore:
     _collections: dict[str, WisdomCollection] = field(default_factory=dict)
     """user_id → WisdomCollection"""
 
+    connection: Optional[Any] = None
+    """GAP-P2-4: 可选 SQLite 连接。注入后 add/promote 同步落盘。"""
+
+    def _persist_item(self, user_id: str, wisdom: WisdomItem) -> None:
+        """GAP-P2-4: 写入 wisdom_items 表（INSERT OR IGNORE + state 覆盖）。"""
+        if self.connection is None:
+            return
+        import json as _json
+        self.connection.execute(
+            "INSERT OR IGNORE INTO wisdom_items "
+            "(user_id, wisdom_id, principle, state, source_patterns, evidence) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                wisdom.wisdom_id,
+                wisdom.principle,
+                wisdom.state.value,
+                _json.dumps(list(wisdom.source_patterns), ensure_ascii=False),
+                _json.dumps(
+                    [e.__dict__ for e in wisdom.evidence], ensure_ascii=False
+                ),
+            ),
+        )
+        self.connection.execute(
+            "UPDATE wisdom_items SET state=? WHERE user_id=? AND wisdom_id=?",
+            (wisdom.state.value, user_id, wisdom.wisdom_id),
+        )
+        self.connection.commit()
+
+    @classmethod
+    def load_from_db(cls, connection: Any) -> "WisdomStore":
+        """GAP-P2-4: 从 wisdom_items 表重建内存存储（跨 session 持久化）。"""
+        import json as _json
+        from ocos.personal_memory.wisdom_types import (
+            WisdomEvidence,
+        )
+
+        store = cls(connection=connection)
+        rows = connection.execute(
+            "SELECT user_id, wisdom_id, principle, state, source_patterns, evidence "
+            "FROM wisdom_items"
+        ).fetchall()
+        for user_id, wisdom_id, principle, state, source_patterns, evidence in rows:
+            coll = store.get_or_create_collection(user_id)
+            item = WisdomItem(
+                wisdom_id=wisdom_id,
+                principle=principle,
+                state=WisdomState(state),
+                source_patterns=tuple(_json.loads(source_patterns or "[]")),
+                evidence=[
+                    WisdomEvidence(**e) for e in _json.loads(evidence or "[]")
+                ],
+            )
+            coll.items[wisdom_id] = item
+        return store
+
     # ── 集合管理 ──
 
     def get_or_create_collection(self, user_id: str) -> WisdomCollection:
@@ -58,6 +114,7 @@ class WisdomStore:
         """添加新智慧条目。"""
         coll = self.get_or_create_collection(user_id)
         coll.add(wisdom)
+        self._persist_item(user_id, wisdom)
 
     def get_wisdom(self, user_id: str, wisdom_id: str) -> Optional[WisdomItem]:
         """获取特定智慧。"""
@@ -103,7 +160,10 @@ class WisdomStore:
         wisdom = self.get_wisdom(user_id, wisdom_id)
         if wisdom is None:
             return False
-        return wisdom.promote_to(new_state, tick_id)
+        ok = wisdom.promote_to(new_state, tick_id)
+        if ok:
+            self._persist_item(user_id, wisdom)
+        return ok
 
     def deprecate_wisdom(self, user_id: str, wisdom_id: str, tick_id: int) -> bool:
         """废弃一条智慧。"""

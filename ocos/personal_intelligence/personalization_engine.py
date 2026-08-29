@@ -50,8 +50,9 @@ class PersonalizationEngine:
         suffix = ""
 
         if sig.interaction_style == InteractionStyle.FORMAL:
-            # Formal: 先生/女士，结构化
-            pass
+            # Formal: 结构化前缀（GAP-P2-4: pass → 确定性中文映射）
+            prefix = "结构化总结：\n\n"
+            suffix = "\n\n如需进一步探讨，请随时告知。"
         elif sig.interaction_style == InteractionStyle.COLLABORATIVE:
             prefix = "Let me think through this with you:\n\n"
         elif sig.interaction_style == InteractionStyle.SOCRATIC:
@@ -77,13 +78,13 @@ class PersonalizationEngine:
         if len(options) > max_options:
             options = options[:max_options]
 
-        # 基于风险偏好排序
+        # 基于风险偏好排序（GAP-P2-4: BOLD pass → 反转，高回报在前）
         if sig.risk_tolerance == RiskTolerance.CONSERVATIVE:
-            # 保守用户 — 已知方案在前
-            pass  # already in order
-        elif sig.risk_tolerance == RiskTolerance.BOLD:
-            # 冒险用户 — 高回报方案在前（假设顺序）
+            # 保守用户 — 已知方案在前（原顺序即低风险优先）
             pass
+        elif sig.risk_tolerance == RiskTolerance.BOLD:
+            # 冒险用户 — 反转顺序，高回报方案在前
+            options = list(reversed(options))
 
         return options
 
