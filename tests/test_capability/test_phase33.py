@@ -20,7 +20,7 @@ class TestPhase33Daemon:
 
     def test_start_stop_lifecycle(self):
         from ocos.daemon import ResidentRuntime, DaemonState
-        rt = ResidentRuntime(_make_agent(), tick_interval=0.1, max_cycles=10)
+        rt = ResidentRuntime(_make_agent(), db_path=":memory:", tick_interval=0.1, max_cycles=10)
         assert rt.state == DaemonState.STOPPED
 
         rt.start()
@@ -32,7 +32,7 @@ class TestPhase33Daemon:
 
     def test_daemon_runs_ticks(self):
         from ocos.daemon import ResidentRuntime
-        rt = ResidentRuntime(_make_agent(), tick_interval=0.1, max_cycles=100)
+        rt = ResidentRuntime(_make_agent(), db_path=":memory:", tick_interval=0.1, max_cycles=100)
         rt.start()
         time.sleep(0.6)
         assert rt.cycle_count >= 3  # at least 3 ticks in 0.6s with 0.1s interval
@@ -40,7 +40,7 @@ class TestPhase33Daemon:
 
     def test_submit_goal_while_running(self):
         from ocos.daemon import ResidentRuntime
-        rt = ResidentRuntime(_make_agent(), tick_interval=0.1, max_cycles=100)
+        rt = ResidentRuntime(_make_agent(), db_path=":memory:", tick_interval=0.1, max_cycles=100)
         rt.start()
         time.sleep(0.2)
 
@@ -53,7 +53,7 @@ class TestPhase33Daemon:
 
     def test_goal_processed_count(self):
         from ocos.daemon import ResidentRuntime
-        rt = ResidentRuntime(_make_agent(), tick_interval=0.1, max_cycles=100)
+        rt = ResidentRuntime(_make_agent(), db_path=":memory:", tick_interval=0.1, max_cycles=100)
         rt.start()
         rt.submit_goal("g1", domain="development")
         rt.submit_goal("g2", domain="research")
@@ -66,7 +66,7 @@ class TestPhase33Daemon:
 
     def test_stop_clears_cycles(self):
         from ocos.daemon import ResidentRuntime
-        rt = ResidentRuntime(_make_agent(), tick_interval=0.05, max_cycles=100)
+        rt = ResidentRuntime(_make_agent(), db_path=":memory:", tick_interval=0.05, max_cycles=100)
         rt.start()
         time.sleep(0.4)
         cycles_before = rt.cycle_count
@@ -77,7 +77,7 @@ class TestPhase33Daemon:
 
     def test_resume_after_restart(self):
         from ocos.daemon import ResidentRuntime
-        rt = ResidentRuntime(_make_agent(), tick_interval=0.05, max_cycles=100)
+        rt = ResidentRuntime(_make_agent(), db_path=":memory:", tick_interval=0.05, max_cycles=100)
         rt.start()
         time.sleep(0.2)
         cycles1 = rt.cycle_count

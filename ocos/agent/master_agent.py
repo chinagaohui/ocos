@@ -878,6 +878,18 @@ class MasterAgent:
     _BELIEF_STRENGTHEN_STEP = 0.1     # 每条新证据增强步长
     _PRUNE_CONFIDENCE_FLOOR = 0.35    # 低于此置信的 Belief 修剪
 
+    def attach_memory_hub(self, hub: Any) -> None:
+        """GAP-P0-2: 绑定持久化 MemoryHub 的 store（覆盖 :memory: 惰性默认）。
+
+        生产路径由 AgentRuntime 在初始化 MemoryHub 后回填，保证 dream 巩固
+        产物（Belief/Pattern/Episode）写入文件库而非进程内存。
+        """
+        if hub is None:
+            return
+        self._episode_store = hub.episode
+        self._belief_store = hub.belief
+        self._pattern_store = hub.pattern
+
     def _consolidate_episodes(self) -> dict[str, Any]:
         """重放当日未巩固 Episode → Belief/Pattern 巩固 + 弱模式修剪（CLS 慢系统闭环）。
 

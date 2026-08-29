@@ -54,10 +54,10 @@ class ResidentRuntime:
     def __init__(
         self,
         agent: Any,
+        db_path: str,  # GAP-P0-2: 必传 — 杜绝伪持久化（默认 :memory: 曾致巩固产物进程退出即丢）
         tick_interval: float = 5.0,
         max_cycles: int = 10_000,
         max_idle_cycles: int = 0,
-        db_path: str = ":memory:",
         kernel: Optional[Any] = None,
     ) -> None:
         from ocos.agent.agent_runtime import AgentRuntime

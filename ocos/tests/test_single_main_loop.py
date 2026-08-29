@@ -105,7 +105,7 @@ def _make_agent():
 def test_t3_daemon_ticks_through_kernel():
     from ocos.daemon import ResidentRuntime
 
-    rt = ResidentRuntime(_make_agent(), tick_interval=0.05, max_cycles=100)
+    rt = ResidentRuntime(_make_agent(), db_path=":memory:", tick_interval=0.05, max_cycles=100)
     rt.start()
     try:
         import time

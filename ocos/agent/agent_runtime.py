@@ -290,6 +290,11 @@ class AgentRuntime:
         # P1-A: BeliefSystem 持久化写路径接通（L6 门控 → hub.belief.save）
         self.beliefs.bind_hub(self._memory_hub)
 
+        # GAP-P0-2: 统一 MemoryHub 为唯一 store 来源 → 回填 Agent 的 dream 巩固 store
+        # （生产路径此前 MasterAgent 惰性建 :memory: store，信念/模式进程退出即丢）
+        if hasattr(self.agent, "attach_memory_hub"):
+            self.agent.attach_memory_hub(self._memory_hub)
+
         # Working Memory Store (Phase 21)
         if db_path != ":memory:":
             self._wm_store = SQLiteWorkingMemory(
