@@ -2,6 +2,12 @@
 
 OCOS v1.1 核心基础设施 — 让认知智能跨越关机，持续存在。
 
+职责分工(GAP-P3-2 裁决): 本包 = 通用多域快照框架(JSON 落盘,
+Phase 51 契约测试锁定, register_provider/take/restore 多域 API);
+ocos/snapshot/ = agent 专用快照(SQLite, 生产路径在用,
+resurrection_drill 演练依赖)。两套并存、职责不重叠, 不作合并;
+统一抽象收敛留待后续阶段, 不在 GAP-P3 范围内。
+
 核心能力:
     - Snapshot: 全系统状态快照 (Runtime/Cognitive/Memory/World)
     - Checkpoint: 增量检查点
