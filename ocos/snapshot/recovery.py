@@ -3,6 +3,13 @@
 Phase 21.01: Agent Snapshot System
 
 从最新 Snapshot 恢复 Agent 完整状态。
+
+职责分工(GAP-P3-3 裁决): 本模块 = agent 轻量快照恢复
+(CrashRecovery.recover 从最新 AgentSnapshot 恢复, master_agent
+生产路径在用); ocos/recovery/crash_recovery.py = 进程级完整
+恢复管理器(recover_checkpoint/replay_events/reattempt_dlq,
+依赖 storage 三件套, 由 tests/recovery 契约锁定)。两套同名
+CrashRecovery 职责不同、并存不合并; 命名统一留待后续阶段。
 """
 
 from __future__ import annotations

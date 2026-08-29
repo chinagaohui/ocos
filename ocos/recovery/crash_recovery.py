@@ -5,6 +5,15 @@
 - 从 EventStore 重放丢失的事件
 - 将未处理的死信重新入队
 - 提供恢复报告
+
+职责分工(GAP-P3-3 裁决): 本模块 = 进程级完整恢复管理器
+(recover_checkpoint/replay_events/reattempt_dlq, 依赖 storage
+三件套 checkpoint/event_store/dead_letter_queue, 由
+tests/recovery/test_crash_recovery.py 契约锁定);
+ocos/snapshot/recovery.py = agent 轻量快照恢复(CrashRecovery.
+recover 从最新 AgentSnapshot 恢复, master_agent 生产路径在用)。
+两套同名 CrashRecovery 职责不同、并存不合并; 命名统一留待
+后续阶段。
 """
 
 from __future__ import annotations
