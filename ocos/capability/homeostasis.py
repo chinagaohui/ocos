@@ -13,7 +13,7 @@ Freeze §HOMEOSTASIS_MODEL v1.0 — Homeostasis 是数字生命体区别于普�
     │   ├── ContextMonitor   Token 消耗/疲劳度
     │   └── IdentityMonitor  身份完整性检查
     ├── Thresholds（告警阈值配置）
-    ├── Regulator（调节动作 — Phase 29 为 stub，由后续 Phase 实现）
+    ├── Regulator（调节动作 — 已实现，见 :101）
     └── HealthReport（健康报告）
 
 约束:
@@ -555,7 +555,7 @@ class HomeostasisManager:
     """稳态管理器（HOMEOSTASIS_MODEL v1.0）。
 
     始终运行、优先级高于 Goal 的底层模块。
-    集成 6 个 Monitor + Threshold + HealthReport + Regulator stub。
+    集成 6 个 Monitor + Threshold + HealthReport + Regulator（已实现）。
 
     用法:
         hm = HomeostasisManager()
@@ -753,7 +753,7 @@ class HomeostasisManager:
         )
         return max(0.0, min(100.0, 100.0 + penalty))
 
-    # ── Regulator stub ──────────────────────────────────────────────────
+    # ── Regulator（已实现）──────────────────────────────────────────────
 
     def recommend_actions(self, report: HealthReport | None = None) -> list[RegulatorAction]:
         """从健康报告推导调节动作（Phase 29: 返回动作列表，由后续 Phase 实现执行逻辑）。"""

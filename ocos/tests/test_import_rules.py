@@ -56,7 +56,7 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge": ["ocos.knowledge"],
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
-    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self"],
+    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive"],
     "ocos.auth": ["ocos.storage"],
     "ocos.recovery": ["ocos.storage"],
     # Phase 21: 新增基础设施层
@@ -64,7 +64,7 @@ ALLOWED_IMPORTS = {
     "ocos.goal": ["ocos.agent", "ocos.storage"],
     "ocos.constitution": ["ocos.goal", "ocos.agent", "ocos.kernel"],
     # Phase 23: Capability 层
-    "ocos.capability": ["ocos.logging", "ocos.agent", "ocos.platform", "ocos.constitution", "ocos.contracts.feedback_abi", "ocos.contracts.attention_abi"],
+    "ocos.capability": ["ocos.logging", "ocos.agent", "ocos.platform", "ocos.constitution", "ocos.contracts.feedback_abi", "ocos.contracts.attention_abi", "ocos.kernel"],
     "ocos.task": ["ocos.logging"],
     # Phase 24: Memory Belief → Constitution
     "ocos.memory.belief": ["ocos.constitution"],

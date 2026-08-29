@@ -14,12 +14,29 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+from typing import Optional
 
 from ocos.capability.capability_types import (
     ExecutionRequest, ExecutionStatus, RawResult,
 )
 from ocos.capability.adapter_manager import AdapterManager
+from ocos.capability.permission_gateway import (
+    CallerIdentity, PermissionGateway,
+)
+
+logger = logging.getLogger("ocos.capability.execution_bridge")
+
+
+@dataclass(frozen=True)
+class _BridgeContract:
+    """ExecutionRequest → PermissionGateway 兼容视图（桥内私有适配，不改 gateway）。"""
+
+    contract_id: str
+    agent_id: str
+    action: str
+    input_spec: dict
 
 
 @dataclass
@@ -27,6 +44,7 @@ class ExecutionBridge:
     """执行桥——能力调用 → 权限 → 执行 → 结果。"""
 
     adapter: AdapterManager = field(default_factory=AdapterManager)
+    permission_gateway: Optional[PermissionGateway] = None  # GAP-P0-3: 缺省 fail-closed
 
     def set_registry(self, registry: object) -> None:
         """共享注册表——使 Bridge 的 Router 与 Selector 使用同一 Registry。"""
@@ -36,12 +54,10 @@ class ExecutionBridge:
         """执行能力调用。
 
         完整路径:
-            1. Permission Check → 如有 Phase 39 PermissionGateway 则检查
+            1. Permission Check → PermissionGateway.validate（缺 gateway 时 fail-closed）
             2. Adapter → 统一接口
             3. External Agent → 实际执行
             4. Result → RawResult
-
-        目前无实际 PermissionGateway 注入，默认为允许。
         """
         # Step 1: Permission check
         if not self._check_permission(request):
@@ -67,10 +83,33 @@ class ExecutionBridge:
             )
 
     def _check_permission(self, request: ExecutionRequest) -> bool:
-        """权限检查——可接入 Phase 39 PermissionGateway。"""
-        # 未来接入: from ocos.permission import PermissionGateway
-        # 当前默认允许所有注册能力
-        return True
+        """权限检查——GAP-P0-3: 接入 PermissionGateway.validate。
+
+        无 gateway 配置 → fail-closed（拒绝 + 审计日志），不保留 allow-all 兜底。
+        """
+        if self.permission_gateway is None:
+            logger.warning(
+                "ExecutionBridge fail-closed: no permission_gateway configured "
+                "(request_id=%s capability_id=%s)",
+                request.request_id, request.capability_id,
+            )
+            return False
+        contract = _BridgeContract(
+            contract_id=request.request_id,
+            agent_id=request.capability_id,
+            action=request.capability_id,
+            input_spec={
+                "payload": request.input_payload,
+                "context": request.context,
+            },
+        )
+        result = self.permission_gateway.validate(
+            contract,
+            caller=CallerIdentity(
+                caller_id="ocos.execution_bridge", source="internal",
+            ),
+        )
+        return result.allowed
 
     def execute_batch(
         self, requests: list[ExecutionRequest],

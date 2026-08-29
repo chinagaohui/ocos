@@ -16,6 +16,7 @@ from ocos.capability import (
     AdapterManager, LifecycleManager,
     ExecutionBridge, ResultInterpreter,
 )
+from ocos.capability.permission_gateway import PermissionGateway  # GAP-P0-3
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -242,7 +243,7 @@ class TestFullPipeline:
         assert selection.selected.capability_id == "cap:codex"
 
         # Step 2: Router + Adapter + ExecutionBridge
-        bridge = ExecutionBridge()
+        bridge = ExecutionBridge(permission_gateway=PermissionGateway())  # GAP-P0-3: 显式注入
         bridge.set_registry(registry)
         bridge.adapter.register_all_default()
 
@@ -306,7 +307,7 @@ class TestFullPipeline:
             "cap:b", "b", CapabilityType.TESTING,
             state=CapabilityState.AVAILABLE,
         ))
-        bridge = ExecutionBridge()
+        bridge = ExecutionBridge(permission_gateway=PermissionGateway())  # GAP-P0-3: 显式注入
         bridge.set_registry(registry)
         bridge.adapter.register_all_default()
 
