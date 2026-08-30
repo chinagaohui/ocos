@@ -295,5 +295,7 @@ def _add_run_parser(subparsers: argparse._SubParsersAction) -> None:
                      help="tick 间隔秒数（默认 5.0）")
     run.add_argument("--db", type=str, default="",
                      help="SQLite 持久化路径（默认 ~/.ocos/ocos.db）")
+    run.add_argument("--watch-dir", type=str, default="",
+                     help="PW-5.1: 感知监听目录（可多次传入则逗号分隔）")
     run.add_argument("--agent-id", type=str, default="ocos-master",
                      help="Agent ID（默认 ocos-master）")

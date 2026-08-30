@@ -839,6 +839,8 @@ class AgentRuntime:
                     self._active_dag = dag
                     self._dag_cursor = 0
                     self._dag_total = len(dag.tasks)
+                    # PW-4.4: 同步 ocos.task 执行期镜像（Stage ⑤ 消费）
+                    self._sync_task_mirror(dag)
                     decomposed = 1
                 except Exception as inner_e:
                     logger.warning("Planning decomposition failed: %s", inner_e)
@@ -852,6 +854,32 @@ class AgentRuntime:
             }
         except Exception as e:
             return {"step": 6, "name": "planning_trigger", "error": str(e)}
+
+    def _sync_task_mirror(self, planning_dag: Any) -> None:
+        """PW-4.4: 规划 DAG → ocos.task 执行期 TaskDAG 镜像。
+
+        供 RuntimeKernel Stage ⑤ (ExecutionCheckStage) resolve_ready()
+        生成执行候选 — ocos.task 的首个生产消费者。
+        """
+        try:
+            from ocos.task import TaskDAG as ExecDAG, TaskStatus
+            mirror = ExecDAG()
+            for tid, task in planning_dag.tasks.items():
+                mirror.add_task(task_id=tid,
+                                name=getattr(task, "description", "")[:60])
+                for dep in (getattr(task, "inputs", None) or ()):
+                    try:
+                        mirror.add_dependency(tid, dep)
+                    except Exception:
+                        pass  # 环/缺依赖 → 跳过该边（诚实降级）
+            self._task_mirror = mirror
+        except Exception as e:
+            logger.debug("task mirror sync failed: %s", e)
+
+    @property
+    def task_mirror(self) -> Any:
+        """PW-4.4: 执行期任务镜像（RuntimeKernel 注入用）。"""
+        return getattr(self, "_task_mirror", None)
 
     def attach_decision_bridge(self, bridge: Any) -> None:
         """R4-A: 挂载决策执行铰链 (公开装配入口, 供 daemon.factory 调用)。

@@ -199,3 +199,8 @@ W5: 5.1/5.2 独立; 5.3 裁决随 W2/W4 落地后执行
 | 2026-08-30 | PW-2.3 | Governor 守门: 链接层冻结域标记检查（禁域连待批都进不了）; SelfGovernor.evaluate 全量接入待 belief 证据链打通（依赖 W1→belief 沉淀） | 同上 | (本批) |
 | 2026-08-30 | PW-3.1 | diagnosis 上电: daemon/repair_link（SystemProbe→FaultDetector→RepairProposer→可逆提案入待批; 记忆膨胀确定性检测→归档修剪提案）; system_repair custom handler + RepairExecutor checkpoint/rollback + 白名单步骤（REINDEX/清缓存/重连/归档, 未白名单自动回滚）; HealthLoop 每 100 tick 诊断循环 | 5286+7 绿 | (本批) |
 | 2026-08-30 | PW-3.2 | 韧性演练脚本 scripts/resilience_drill.py: 注入 40 条陈旧损伤→诊断检出→归档修复→恢复验证→评分 10/10 | 同上 | (本批) |
+| 2026-08-30 | PW-4.2 | digital_world 上电: bridge file_op custom handler（file_read/write/delete, approval_id 强制, 受保护路径拒绝）| 5281+绿 | (本批) |
+| 2026-08-30 | PW-4.4 | task+runtime_scheduler 上电: AgentRuntime 任务镜像(Step 6 规划→ocos.task DAG, Stage⑤ resolve_ready); ResidentRuntime 背压(max_queue_size=50 诚实拒绝)+PriorityQueue 上电 | 同上 | (本批) |
+| 2026-08-30 | PW-5.1 | perception 传感器上电: --watch-dir → FileSensor(目录重扫描捕获新建文件)+file_semantics 解析器(实体=路径, 状态=exists/size)→世界模型接受落库 | 同上 | (本批) |
+| 2026-08-30 | PW-4.3 | **裁决: 延后** — agent_orchestration 并行执行触碰 step 7 的单任务/tick 认知序列化约束（Phase 36 冻结语义），需要先解冻或设计并行安全的 DAG 调度；维持 EchoAgent 顺序回退 | - | - |
+| 2026-08-30 | PW-5.3 | 裁决落地: auth/belief.py/agent_orchestration_autonomous/os_v1 路由层维持 Deprecated（已在 AUDIT_KERNEL 登记）; audit/ 接 CI 列为可选 | - | - |

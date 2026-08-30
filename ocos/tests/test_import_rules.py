@@ -57,7 +57,7 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
     "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity",
-                         "ocos.evolution", "ocos.extension"],
+                         "ocos.evolution", "ocos.extension", "ocos.task"],
                          # PW-2: 自我迭代治理链上电
     "ocos.extension": ["ocos.extension", "ocos.operations"],
                          # PW-2.2: 沙箱真隔离复用 operations 闸门
@@ -146,7 +146,7 @@ ALLOWED_IMPORTS = {
                          # UX 自我认知 + PW-1.2 风格画像 + PW-1.4 内视执行史
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
-                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution"],  # S4: Organ Client（写作器官驱动）; P1-B: 生产入口经 daemon 装配层
+                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution", "ocos.perception"],  # S4: Organ Client（写作器官驱动）; P1-B: 生产入口经 daemon 装配层
     "ocos.interaction.repl": ["ocos.interaction"],
     "ocos.interaction.repl.commands": ["ocos.interaction", "ocos.goal",
                                         "ocos.storage", "ocos.planning",
@@ -189,7 +189,7 @@ ALLOWED_IMPORTS = {
     "ocos.execution": ["ocos.autonomous_runtime", "ocos.agent_orchestration",
                        "ocos.interaction", "ocos.capability_reality",
                        "ocos.storage",
-                       "ocos.operations", "ocos.event_memory",
+                       "ocos.operations", "ocos.event_memory", "ocos.digital_world",
                        "ocos.agent", "ocos.daemon"],
                        # PW-2.1 治理化应用 + PW-3.1 系统修复执行
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装

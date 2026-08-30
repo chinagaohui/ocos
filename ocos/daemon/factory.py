@@ -99,17 +99,41 @@ def build_health_loop(runtime=None, interval_ticks: int = 100):
     )
 
 
-def build_perception_pipeline(sensors: Optional[list] = None):
+def build_perception_pipeline(sensors: Optional[list] = None,
+                              file_semantics: bool = False):
     """GAP-P1-3: 组装感知链 — PerceptionEngine + WorldStore + 可选传感器。
 
     默认零传感器（零噪音）— sensors 由调用方按环境注入
-    （如 FileSensor.watch(数据目录)）。实体归属由调用方通过
-    entity_resolver 注入领域语义，否则观察被 WorldValidator 诚实拒绝。
+    （如 FileSensor.watch(数据目录)）。
+    PW-5.1: file_semantics=True 时为文件观察注入实体/状态解析器
+    （entity=文件路径, state=exists/size），观察才会被 WorldValidator 接受。
     """
     from ocos.perception.pipeline import PerceptionPipeline
     from ocos.world_model.world_store import WorldStore
 
-    pipeline = PerceptionPipeline(world=WorldStore(), infer_causality=True)
+    entity_resolver = None
+    state_resolver = None
+    if file_semantics:
+        def _file_meta(obs) -> dict:
+            """文件观察的语义载荷: content（dict）或 metadata。"""
+            for src_attr in ("content", "metadata"):
+                v = getattr(obs, src_attr, None)
+                if isinstance(v, dict) and v.get("operation"):
+                    return v
+            return {}
+
+        def entity_resolver(obs):
+            return _file_meta(obs).get("path") or None
+
+        def state_resolver(obs):
+            meta = _file_meta(obs)
+            if meta.get("operation") == "created":
+                return {"exists": True, "size": meta.get("size", 0)}
+            return None
+
+    pipeline = PerceptionPipeline(world=WorldStore(), infer_causality=True,
+                                  entity_resolver=entity_resolver,
+                                  state_resolver=state_resolver)
     for sensor in sensors or []:
         pipeline.register_sensor(sensor)
     return pipeline

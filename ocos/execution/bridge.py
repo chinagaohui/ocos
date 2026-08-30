@@ -167,6 +167,9 @@ class DecisionBridge:
         # PW-3.1: 系统修复提案的人工批准执行器
         self._dispatcher.register_custom_handler(
             "system_repair", self._handler_system_repair)
+        # PW-4.2: 文件操作执行器（digital_world file_ops, 需审批）
+        self._dispatcher.register_custom_handler(
+            "file_op", self._handler_file_op)
         return self
 
     # ── 决策执行入口 ──────────────────────────────────────────────────────
@@ -508,6 +511,43 @@ class DecisionBridge:
         if not self._db_path:
             return {"ok": False, "error": "no db_path — 无法执行数据级修复"}
         return execute_system_repair(payload, self._db_path)
+
+    def _handler_file_op(self, action) -> dict:
+        """PW-4.2: 文件操作 — digital_world/file_ops 宽语义后端。
+
+        仅经审批触达（file_write/delete 属 APPROVAL_REQUIRED）；
+        受保护路径（/etc、~/.ssh 等）由 file_ops 内建拒绝。
+        """
+        payload = action.payload or {}
+        op_type = payload.get("op_type", "")
+        target = payload.get("target", "")
+        if not target:
+            return {"ok": False, "error": "empty target"}
+        if not payload.get("approval_id"):
+            return {"ok": False,
+                    "error": "file op requires approval_id（必须经审批流触达）"}
+        try:
+            from ocos.digital_world.base import DigitalOperation
+            from ocos.digital_world import file_ops
+            handlers = {"file_read": file_ops.file_read,
+                        "file_write": file_ops.file_write,
+                        "file_delete": file_ops.file_delete}
+            handler = handlers.get(op_type)
+            if handler is None:
+                return {"ok": False,
+                        "error": f"unsupported file op: {op_type}"}
+            op = DigitalOperation(
+                op_id=f"OP-{uuid.uuid4().hex[:10]}", op_type=op_type,
+                target=target, requester=self._agent_id,
+                params=payload.get("params", {}) or {},
+                approval_id=payload.get("approval_id"))
+            result = handler(op)
+            return {"ok": result.status == "success",
+                    "status": result.status,
+                    "output": (result.output or "")[:300],
+                    "error": result.error or ""}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def execute_approved(self, action_type_name: str,
                          payload: dict | None = None):

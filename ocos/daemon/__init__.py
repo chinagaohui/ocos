@@ -86,6 +86,14 @@ class ResidentRuntime:
             except Exception as e:
                 logger.warning("GoalStore unavailable, goal claim disabled: %s", e)
         # UX-P2: 用户消息收件箱（ocos say → daemon 消费 → 感知事件）
+        # PW-4.4: 目标队列背压阈值 + runtime_scheduler PriorityQueue 上电
+        self.max_queue_size: int = 50
+        self._priority_queue: Any = None
+        try:
+            from ocos.runtime_scheduler.priority_queue import PriorityQueue
+            self._priority_queue = PriorityQueue()
+        except Exception as e:
+            logger.debug("PriorityQueue unavailable: %s", e)
         self._user_inbox: Any = None
         self._responder: Any = None
         if db_path and db_path != ":memory:":
@@ -181,17 +189,35 @@ class ResidentRuntime:
             self._state = DaemonState.STOPPED
             logger.info("ResidentRuntime daemon stopped. %d goals processed.", self._goal_processed)
 
-    def submit_goal(self, description: str, domain: str = "development") -> int:
+    def submit_goal(self, description: str, domain: str = "development",
+                    priority: int = 2) -> int:
         """提交目标到 daemon 队列（线程安全）。
 
-        返回当前队列长度。
+        PW-4.4 背压: 队列满（max_queue_size）时诚实拒绝（返回 -1）。
+        priority 对齐 runtime_scheduler.Priority（0=CRITICAL…3=LOW）。
+        返回当前队列长度；被背压拒绝返回 -1。
         """
+        with self._lock:
+            if len(self._goal_queue) >= self.max_queue_size:
+                logger.warning("Goal queue full (%d) — backpressure rejecting: %s",
+                               len(self._goal_queue), description[:40])
+                return -1
         goal = QueuedGoal(description=description, domain=domain)
         with self._lock:
             self._goal_queue.append(goal)
             self._goal_submitted += 1
+            if self._priority_queue is not None:
+                try:
+                    from ocos.runtime_scheduler.scheduler_types import SchedulerTask
+                    self._priority_queue.push(SchedulerTask(
+                        task_id=f"GOALQ-{int(time.time() * 1000)}",
+                        stage="goal_queue", priority=priority,
+                        fn=lambda: description))
+                except Exception as e:
+                    logger.debug("priority queue push failed: %s", e)
             n = len(self._goal_queue)
-            logger.info("Goal queued: %s (domain=%s, queue=%d)", description, domain, n)
+            logger.info("Goal queued: %s (domain=%s, priority=%d, queue=%d)",
+                        description, domain, priority, n)
             return n
 
     def get_status(self) -> dict[str, Any]:

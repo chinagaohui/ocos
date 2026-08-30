@@ -46,6 +46,7 @@ class FileSensor:
     ))
 
     _watch_paths: list[Path] = field(default_factory=list)
+    _watch_dirs: list[Path] = field(default_factory=list)   # PW-5.1: 目录重扫描
     _snapshots: dict[str, dict] = field(default_factory=dict)  # path → {mtime, size}
 
     def watch(self, path: str | Path) -> None:
@@ -56,9 +57,11 @@ class FileSensor:
             self._snapshot(p)
 
     def watch_directory(self, path: str | Path) -> None:
-        """监控目录下所有文件。"""
+        """监控目录下所有文件（PW-5.1: 记录目录, poll 时重扫描新文件）。"""
         p = Path(path).expanduser().resolve()
         if p.is_dir():
+            if p not in self._watch_dirs:
+                self._watch_dirs.append(p)
             for f in p.rglob("*"):
                 if f.is_file():
                     self.watch(f)
@@ -69,6 +72,19 @@ class FileSensor:
             return []
 
         observations: list[Observation] = []
+
+        # PW-5.1: 目录重扫描 — 注册后新建的文件直接产出"新建"观察
+        # （先入快照基线再报会永远看不到新文件）
+        for d in self._watch_dirs:
+            try:
+                for f in d.rglob("*"):
+                    if f.is_file() and f not in self._watch_paths:
+                        self.watch(f)   # 建立基线
+                        obs_new = self._new_file_observation(f)
+                        if obs_new is not None:
+                            observations.append(obs_new)
+            except OSError:
+                pass  # 目录消失/权限 — 单目录失败不阻断
 
         try:
             for path in self._watch_paths:
@@ -85,6 +101,24 @@ class FileSensor:
         self.health.last_poll_at = _time.time()
         self.health.observations_collected += len(observations)
         return observations
+
+    def _new_file_observation(self, path: Path):
+        """PW-5.1: 新建文件观察（复用 _check_file 的 Observation 形态）。"""
+        try:
+            stat = path.stat()
+            now = _time.time()
+            return Observation(
+                id=f"file-new-{now}",
+                modality=SensorModality.FILE,
+                type=ObservationType.CHANGE,
+                content={"path": str(path), "operation": "created",
+                         "size": stat.st_size},
+                confidence=0.9,
+                source_sensor=self.config.sensor_name,
+                raw_payload={"file": str(path), "change": "created"},
+            )
+        except Exception:
+            return None
 
     def _check_file(self, path: Path) -> Observation | None:
         """检查单个文件的变化。"""

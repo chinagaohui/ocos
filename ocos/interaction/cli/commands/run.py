@@ -65,9 +65,22 @@ def cmd_run(args, session) -> int:
     build_execution_bridge(agent, db_path=db_path)
     print("  bridge   : DecisionBridge 已挂载 (AUTO 真实执行 / ASK 待批)")
     print("             审批: 另开终端 ocos approvals list / approve <id>")
-    # AUD-F1: 感知管线 — 默认零传感器（零噪音零写入），传感器经 build_perception_pipeline(sensors=[...]) 注入
-    rt.attach_perception_pipeline(build_perception_pipeline(sensors=[]))
-    print("  perception: 感知管线已挂载 (0 sensors — 经 FileSensor 注入后生效)")
+    # AUD-F1/PW-5.1: 感知管线 — 默认零传感器；--watch-dir 注入 FileSensor
+    watch_dirs = [d.strip() for d in (args.watch_dir or "").split(",") if d.strip()]
+    sensors = []
+    if watch_dirs:
+        try:
+            from ocos.perception.file_sensor import FileSensor
+            fs = FileSensor()
+            for wd in watch_dirs:
+                fs.watch_directory(wd)
+            sensors.append(fs)
+        except Exception as e:
+            print(f"  perception: FileSensor 注入失败: {e}")
+    rt.attach_perception_pipeline(
+        build_perception_pipeline(sensors=sensors, file_semantics=bool(sensors)))
+    print(f"  perception: 感知管线已挂载 ({len(sensors)} sensor, "
+          f"watch={watch_dirs or '无'})")
     print("  engines  : reasoner/planner/decision/reflection/learning 已注册 (AUD-F9)")
     print("  hint     : 另开终端 — ocos status | ocos say --wait '...' | ocos approvals list")
     print("               Web 聊天: ocos-server 后访问 http://127.0.0.1:8900/ui")
