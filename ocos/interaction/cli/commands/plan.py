@@ -51,6 +51,30 @@ def cmd_plan(args, session: InteractionSession) -> int:
             print(f"  {i}. [{task.task_type}] {task.description} "
                   f"(agent={task.agent_type}, ~{task.estimated_duration}s)")
         print("-" * 50)
+
+        # AUD-F8: DAG 落库（plan_dag 表, goal_id 关联）
+        import json as _json
+        from dataclasses import asdict
+        from ocos.goal.store import GoalStore
+        from ocos.interaction.cli.paths import resolve_db_path
+        dag_snapshot = {
+            tid: {
+                "description": dag.tasks[tid].description,
+                "task_type": dag.tasks[tid].task_type,
+                "agent_type": dag.tasks[tid].agent_type,
+                "inputs": list(dag.tasks[tid].inputs or ()),
+                "estimated_duration": dag.tasks[tid].estimated_duration,
+            }
+            for tid in tasks
+        }
+        store = GoalStore(db_path=resolve_db_path())
+        store.save_plan_dag(
+            goal_id=goal.id,
+            dag_json=_json.dumps(dag_snapshot, ensure_ascii=False),
+            strategy=strategy.value,
+            task_count=len(tasks),
+        )
+        print(f"Plan persisted: goal_id={goal.id}")
     except Exception as e:
         print(f"Planning:")
         print(f"  - Decomposer error: {e}")

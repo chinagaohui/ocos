@@ -1,6 +1,6 @@
 """SQLite Schema 定义 — 所有持久化表的建表语句和数据字典。"""
 
-STORAGE_SCHEMA_VERSION = 3
+STORAGE_SCHEMA_VERSION = 4  # AUD-F8: plan_dag（CLI plan 落库）
 
 # ── 表名常量 ────────────────────────────────────────────────────────────────
 
@@ -200,6 +200,20 @@ CREATE_IDENTITY = [
     )""",
 ]
 
+
+# AUD-F8 (2026-08-30): plan_dag — CLI plan 分解结果落库（goal_id 关联 goals 表）
+CREATE_PLAN_DAG = [
+    """CREATE TABLE IF NOT EXISTS plan_dag (
+        plan_id     TEXT PRIMARY KEY,
+        goal_id     TEXT NOT NULL,
+        dag_json    TEXT NOT NULL,
+        strategy    TEXT,
+        task_count  INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_plan_dag_goal ON plan_dag(goal_id)",
+]
+
 CREATE_GOAL = [
     """CREATE TABLE IF NOT EXISTS goal (
         goal_id         TEXT PRIMARY KEY,
@@ -243,5 +257,6 @@ STORAGE_TABLES = {
     TABLE_KNOWLEDGE: CREATE_KNOWLEDGE,
     TABLE_IDENTITY: CREATE_IDENTITY,
     TABLE_GOAL: CREATE_GOAL,
+    "plan_dag": CREATE_PLAN_DAG,
     TABLE_WISDOM: CREATE_WISDOM,
 }

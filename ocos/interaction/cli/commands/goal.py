@@ -40,10 +40,26 @@ def cmd_goal_create(args, session: InteractionSession) -> int:
         print(f"Goal validation failed: {e}")
         return 1
 
-    # 4. 记录会话
+    # 4. 落库（AUD-F8: goal 域持久化 — goals 表, goal 域包 GoalStore）
+    from ocos.goal.store import GoalStore
+    from ocos.interaction.cli.paths import resolve_db_path
+    store = GoalStore(db_path=resolve_db_path())
+    store.save(
+        goal_id=goal.id,
+        level="USER",
+        status=goal.status.name,  # auto() 枚举: 存名字而非数字值
+        description=goal.objective,
+        priority=float(goal.priority),
+        source=goal.caller,
+        origin_level="HUMAN",   # caller="cli" 白名单 → 人类来源目标
+        authority="FRAMEWORK",
+    )
+    db_path = resolve_db_path()
+
+    # 5. 记录会话
     session.record_goal(goal.id)
 
-    # 5. 输出
+    # 6. 输出
     print(f"Goal created: {goal.id}")
     print(f"  Status:   {goal.status.value}")
     print(f"  Domain:   {goal.domain.value}")
@@ -53,27 +69,42 @@ def cmd_goal_create(args, session: InteractionSession) -> int:
         print(f"  Constraints:")
         for c in goal.constraints:
             print(f"    - {c}")
+    print(f"  Persisted: {db_path}")
 
     return 0
 
 
 def cmd_goal_status(args, session: InteractionSession) -> int:
     """ocos goal status <goal_id>"""
-    # 目前 Kernel 没有持久化 goal store — 只能返回基本格式
+    # AUD-F8: 查询持久化 goal（goals 表）
+    from ocos.goal.store import GoalStore
+    from ocos.interaction.cli.paths import resolve_db_path
+    store = GoalStore(db_path=resolve_db_path())
+    row = store.load(args.goal_id)
     print(f"Goal ID: {args.goal_id}")
-    print(f"  Note: Persistent goal store not yet implemented in Kernel.")
-    print(f"  Goal ID format validated: {'GOAL-' in args.goal_id}")
+    if row is None:
+        print("  Not found in persistent store.")
+        print(f"  Goal ID format validated: {'GOAL-' in args.goal_id}")
+    else:
+        print(f"  Level:    {row.get('level')}")
+        print(f"  Status:   {row.get('status')}")
+        print(f"  Progress: {row.get('progress')}")
+        print(f"  Description: {row.get('description')}")
+        print(f"  Created:  {row.get('created_at')}")
     session.record_query()
     return 0
 
 
 def cmd_goal_list(args, session: InteractionSession) -> int:
     """ocos goal list"""
-    print("Goals listed in this session:")
-    if not session.goals_created:
-        print("  (none — goals are session-scoped; persistent store TBD)")
-    else:
-        for gid in session.goals_created:
-            print(f"  - {gid}")
+    from ocos.goal.store import GoalStore
+    from ocos.interaction.cli.paths import resolve_db_path
+    store = GoalStore(db_path=resolve_db_path())
+    rows = store.load_active()
+    print(f"Active goals in persistent store: {len(rows)}")
+    for row in rows:
+        print(f"  - {row.get('id')}  [{row.get('status')}]  {str(row.get('description'))[:60]}")
+    if session.goals_created:
+        print(f"(session created: {', '.join(session.goals_created)})")
     session.record_query()
     return 0

@@ -27,12 +27,12 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB = str(Path.home() / ".ocos" / "ocos.db")
+from ocos.interaction.cli.paths import DEFAULT_DB, resolve_db_path  # AUD-F8: 单一来源
 
 
 def cmd_run(args, session) -> int:
     """ocos run [--ticks N] [--interval S] [--db PATH] [--agent-id ID]"""
-    db_path = args.db or os.environ.get("OCOS_DB_PATH", DEFAULT_DB)
+    db_path = resolve_db_path(args.db)
     if db_path != ":memory:":
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 

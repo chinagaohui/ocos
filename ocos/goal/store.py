@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 from datetime import datetime, timezone
 
 from ocos.storage.connection import get_connection
@@ -45,9 +46,13 @@ class GoalStore:
     def _conn(self):
         conn = get_connection(self._db_path)
         # GAP-P2-5: 自愈建表 — goals 表此前仅测试夹具创建, 生产路径缺失
+        # AUD-F8 修复: 补齐 save() 实际写入的 agent_id/metadata 列（此前缺失致
+        # 自愈表上 INSERT 报 no such column）; plan_dag 同步自愈（CLI 独立运行时
+        # 未经 run.py ensure_schema）
         conn.execute(
             """CREATE TABLE IF NOT EXISTS goals (
                 id TEXT PRIMARY KEY,
+                agent_id TEXT DEFAULT 'master',
                 level TEXT NOT NULL,
                 status TEXT NOT NULL,
                 progress REAL DEFAULT 0.0,
@@ -59,11 +64,30 @@ class GoalStore:
                 deadline TEXT DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                metadata TEXT,
                 origin_level TEXT DEFAULT 'SYSTEM',
                 authority TEXT DEFAULT 'AUTONOMOUS',
                 decision_refs TEXT DEFAULT '[]'
             )"""
         )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS plan_dag (
+                plan_id     TEXT PRIMARY KEY,
+                goal_id     TEXT NOT NULL,
+                dag_json    TEXT NOT NULL,
+                strategy    TEXT,
+                task_count  INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT NOT NULL
+            )"""
+        )
+        # AUD-F8: 旧库升级 — legacy goals 表缺列时 ALTER 补列（PRAGMA 检查）
+        existing = {
+            r[1] for r in conn.execute("PRAGMA table_info(goals)").fetchall()
+        }
+        for col, ddl in (("agent_id", "TEXT DEFAULT 'master'"),
+                         ("metadata", "TEXT")):
+            if existing and col not in existing:
+                conn.execute(f"ALTER TABLE goals ADD COLUMN {col} {ddl}")
         return conn
 
     # ── 保存 ────────────────────────────────────────────────────────
@@ -104,6 +128,18 @@ class GoalStore:
             raise
 
     # ── 加载 ────────────────────────────────────────────────────────
+
+    def load(self, goal_id: str) -> dict | None:
+        """按 id 加载单个 goal（AUD-F8: CLI goal status 查询）。"""
+        conn = self._conn()
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT * FROM goals WHERE id = ?", (goal_id,)
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
     def load_active(self) -> list[dict]:
         """加载所有活跃 Goal（非终止态）。"""
@@ -155,6 +191,38 @@ class GoalStore:
             raise
 
     # ── Decision 关联 ───────────────────────────────────────────────
+
+    def save_plan_dag(self, goal_id: str, dag_json: str, strategy: str,
+                      task_count: int, plan_id: str | None = None) -> None:
+        """保存 plan 分解结果（AUD-F8: plan_dag 表, schema v4）。"""
+        import uuid
+        from datetime import datetime, timezone as _tz
+        conn = self._conn()
+        try:
+            conn.execute(
+                """INSERT OR REPLACE INTO plan_dag
+                   (plan_id, goal_id, dag_json, strategy, task_count, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (plan_id or f"PLAN-{uuid.uuid4().hex[:8]}", goal_id, dag_json,
+                 strategy, task_count,
+                 datetime.now(_tz.utc).isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def load_plan_dag(self, goal_id: str) -> dict | None:
+        """加载 goal 的最新 plan 分解结果（AUD-F8）。"""
+        conn = self._conn()
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT * FROM plan_dag WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1",
+                (goal_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
     def record_decision(self, goal_id: str, decision_id: str) -> None:
         """记录关联的 Decision ID。"""
