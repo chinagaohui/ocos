@@ -47,7 +47,7 @@ def test_evolution(scenario: EvolutionScenario | None = None) -> DayResult:
         except Exception:
             detected = False
     else:
-        detected = True  # assume detection works
+        detected = False  # AUD-F4: 钩子缺失 → 无法验证
     result.add("evolution:issue_detected", detected)
 
     # 2. Proposal
@@ -62,7 +62,7 @@ def test_evolution(scenario: EvolutionScenario | None = None) -> DayResult:
     result.add("evolution:proposal_created", proposed)
 
     # 3. Analysis + Sandbox
-    analyzed_correctly = True
+    analyzed_correctly = False  # AUD-F4: 钩子缺失 → 无法验证
     if sc.analyzer and proposed:
         try:
             analysis = sc.analyzer({"type": "performance_fix"})
@@ -72,7 +72,7 @@ def test_evolution(scenario: EvolutionScenario | None = None) -> DayResult:
     result.add("evolution:analyzed", analyzed_correctly)
 
     # 4. Sandbox
-    sandboxed = True
+    sandboxed = False  # AUD-F4
     if sc.sandbox and proposed:
         try:
             sandboxed = sc.sandbox({"type": "performance_fix"})
@@ -81,7 +81,7 @@ def test_evolution(scenario: EvolutionScenario | None = None) -> DayResult:
     result.add("evolution:sandbox_passed", sandboxed)
 
     # 5. Migration
-    migrated = True
+    migrated = False  # AUD-F4
     if sc.migrator and sandboxed:
         try:
             migrated = sc.migrator({"type": "performance_fix"})

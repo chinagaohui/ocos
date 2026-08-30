@@ -20,6 +20,7 @@ class MemorySurvivalScenario:
     save_handler: callable | None = None   # () -> None
     shutdown_handler: callable | None = None
     restore_handler: callable | None = None  # () -> dict
+    recall_handler: callable | None = None   # AUD-F4: (query: str) -> str — 真实记忆查询
 
     # The episode to persist
     project_name: str = "ProjectA"
@@ -51,7 +52,7 @@ def test_memory_survival(scenario: MemorySurvivalScenario | None = None) -> DayR
             sc.save_handler()
             sc.persisted_correctly = True
         else:
-            sc.persisted_correctly = True  # no-op handler: assume OK
+            sc.persisted_correctly = False  # AUD-F4: 钩子缺失 → 无法验证
     except Exception:
         sc.persisted_correctly = False
     result.add("persist:save", sc.persisted_correctly)
@@ -60,7 +61,9 @@ def test_memory_survival(scenario: MemorySurvivalScenario | None = None) -> DayR
     try:
         if sc.shutdown_handler:
             sc.shutdown_handler()
-        result.add("persist:shutdown", True)
+            result.add("persist:shutdown", True)
+        else:
+            result.add("persist:shutdown", False)  # AUD-F4
     except Exception:
         result.add("persist:shutdown", False)
 
@@ -70,15 +73,22 @@ def test_memory_survival(scenario: MemorySurvivalScenario | None = None) -> DayR
             restored = sc.restore_handler()
             sc.restored_correctly = bool(restored)
         else:
-            sc.restored_correctly = True
+            sc.restored_correctly = False  # AUD-F4
     except Exception:
         sc.restored_correctly = False
     result.add("persist:restore", sc.restored_correctly)
 
-    # Phase 4: Query recall
-    if sc.expected_keywords:
-        # Without real OCOS memory, verify recall is structured correctly
-        sc.recall_correct = True  # placeholder — hooks would use real memory
+    # Phase 4: Query recall — AUD-F4: 经 recall_handler 真实验证；缺失即失败
+    if sc.recall_handler is not None:
+        try:
+            answer = sc.recall_handler(sc.query)
+            sc.recall_correct = bool(answer) and all(
+                kw in str(answer) for kw in sc.expected_keywords
+            )
+        except Exception:
+            sc.recall_correct = False
+    else:
+        sc.recall_correct = False
     result.add("memory:recall", sc.recall_correct)
 
     all_ok = all(result.sub_results.values())

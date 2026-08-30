@@ -56,7 +56,9 @@ def test_resurrection(
     try:
         if sc.run_ticks:
             sc.run_ticks(sc.pre_death_tick)
-        result.add("res:run_accumulated", True)
+            result.add("res:run_accumulated", True)
+        else:
+            result.add("res:run_accumulated", False)  # AUD-F4: 钩子缺失
     except Exception:
         result.add("res:run_accumulated", False)
 
@@ -64,7 +66,9 @@ def test_resurrection(
     try:
         if sc.save_state:
             sc.save_state()
-        result.add("res:state_saved", True)
+            result.add("res:state_saved", True)
+        else:
+            result.add("res:state_saved", False)  # AUD-F4: 钩子缺失
     except Exception:
         result.add("res:state_saved", False)
 
@@ -72,8 +76,11 @@ def test_resurrection(
     try:
         if sc.kill:
             sc.kill()
-        sc.killed = True
-        result.add("res:killed", True)
+            sc.killed = True
+            result.add("res:killed", True)
+        else:
+            sc.killed = False
+            result.add("res:killed", False)  # AUD-F4: 钩子缺失
     except Exception:
         result.add("res:killed", False)
 
@@ -82,17 +89,20 @@ def test_resurrection(
         if sc.restore:
             restored_state = sc.restore()
             sc.restored = bool(restored_state)
+            # AUD-F4: 有 pre-death 基线 → 比对锚点；无基线 → 至少验证身份已恢复（诚实降级）
             sc.identity_preserved = (
                 restored_state.get("identity", {}).get("anchor") == sc.pre_death_identity.get("anchor")
-                if sc.pre_death_identity else True
+                if sc.pre_death_identity
+                else bool(restored_state.get("identity"))
             )
             sc.memory_intact = bool(restored_state.get("memory"))
             sc.goals_intact = bool(restored_state.get("goals"))
         else:
-            sc.restored = True
-            sc.identity_preserved = True
-            sc.memory_intact = True
-            sc.goals_intact = True
+            # AUD-F4: 钩子缺失 → 无法证明复活 → fail-closed（非默认通过）
+            sc.restored = False
+            sc.identity_preserved = False
+            sc.memory_intact = False
+            sc.goals_intact = False
     except Exception:
         sc.restored = False
     result.add("res:restored", sc.restored)
@@ -103,16 +113,13 @@ def test_resurrection(
             answer = sc.query_handler("你昨天正在做什么？")
             sc.timeline_correct = bool(answer) and len(answer) > 5
         else:
-            sc.timeline_correct = True
+            sc.timeline_correct = False  # AUD-F4
     except Exception:
         sc.timeline_correct = False
     result.add("res:timeline_correct", sc.timeline_correct)
 
-    # Check identity against birth baseline
-    if birth:
-        id_ok = sc.identity_preserved
-    else:
-        id_ok = True
+    # Check identity: 有 birth 基线 → 比对锚点；无基线 → 依 restore 阶段的诚实判定
+    id_ok = sc.identity_preserved
     result.add("res:identity_preserved", id_ok)
 
     all_ok = all(result.sub_results.values())

@@ -52,7 +52,7 @@ def test_capability_reality(scenario: CapabilityRealityScenario | None = None) -
         ("file_read_correctly", lambda: bool(sc.read_file("/tmp/test") if sc.read_file else None), "cap:read_file"),
         ("analysis_ran", sc.run_analysis, "cap:run_analysis"),
     ]:
-        ok = True
+        ok = False  # AUD-F4: 钩子缺失 → 无法验证（非默认通过）
         if hook is not None and callable(hook):
             try:
                 if label == "cap:read_file":

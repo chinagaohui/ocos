@@ -64,8 +64,8 @@ def test_basic_life(scenario: BasicLifeScenario | None = None) -> DayResult:
                 result.add(f"writing:{label}", False)
                 writing_ok = False
         else:
-            # Without a real OCOS backend, simulate pass
-            result.add(f"writing:{label}", True)
+            # AUD-F4: 钩子缺失 → 无法验证 → fail-closed（诚实失败，非模拟通过）
+            result.add(f"writing:{label}", False)
 
     # Task 2: Coding chain
     for label in ["selector", "adapter", "executor", "interpreter"]:
@@ -77,7 +77,7 @@ def test_basic_life(scenario: BasicLifeScenario | None = None) -> DayResult:
             except Exception:
                 result.add(f"coding:{label}", False)
         else:
-            result.add(f"coding:{label}", True)
+            result.add(f"coding:{label}", False)
 
     # Task 3: Continuous dialogue (check context retention)
     context_ok = (

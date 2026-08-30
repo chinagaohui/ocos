@@ -104,16 +104,25 @@ class TestBirthCheck:
 # ══════════════════════════════════════════════════
 
 class TestBasicLife:
-    def test_vanilla_passes(self):
+    def test_vanilla_fails_without_hooks(self):
+        """AUD-F4: 钩子缺失 → fail-closed（诚实失败，不再模拟通过）。"""
         r = test_basic_life()
-        assert r.passed
+        assert not r.passed
         assert r.day == LivingTestDay.BASIC_LIFE
 
-    def test_scenario_with_handlers(self):
+    def test_scenario_with_all_handlers_passes(self):
         called = []
         sc = BasicLifeScenario(
             perception_handler=lambda: called.append("perc"),
+            interaction_handler=lambda: called.append("inter"),
             decision_handler=lambda: called.append("dec"),
+            capability_handler=lambda: called.append("cap"),
+            opentale_handler=lambda: called.append("tale"),
+            memory_handler=lambda: called.append("mem"),
+            selector_handler=lambda: called.append("sel"),
+            adapter_handler=lambda: called.append("adp"),
+            executor_handler=lambda: called.append("exe"),
+            interpreter_handler=lambda: called.append("itp"),
         )
         r = test_basic_life(sc)
         assert r.passed
@@ -148,9 +157,10 @@ class TestBasicLife:
 # ══════════════════════════════════════════════════
 
 class TestMemorySurvival:
-    def test_vanilla_passes(self):
+    def test_vanilla_fails_without_hooks(self):
+        """AUD-F4: 钩子缺失 → fail-closed（诚实失败，不再模拟通过）。"""
         r = test_memory_survival()
-        assert r.passed
+        assert not r.passed
         assert r.day == LivingTestDay.MEMORY_SURVIVAL
 
     def test_all_phases_execute(self):
@@ -159,6 +169,7 @@ class TestMemorySurvival:
             save_handler=lambda: setattr(sc, '_s', True),
             shutdown_handler=lambda: setattr(sc, '_h', True),
             restore_handler=lambda: {"ok": True},
+            recall_handler=lambda q: "因为决定使用SQLite作为缓存，满足早期快速验证需求",
         )
         r = test_memory_survival(sc)
         assert r.passed
@@ -325,6 +336,7 @@ class TestLongRuntime:
 class TestResurrection:
     def test_full_cycle_success(self):
         sc = ResurrectionScenario(
+            run_ticks=lambda n: [{"tick": i} for i in range(n)],
             save_state=lambda: None,
             kill=lambda: None,
             restore=lambda: {
