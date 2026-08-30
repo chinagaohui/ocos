@@ -180,9 +180,9 @@ def _decide(pid: str, approved: bool) -> APIResponse:
     # 诚实执行：有 handler → dispatch；无 → blocked 可见
     import json
     payload = json.loads(row.get("payload_json") or "{}")
-    bridge = DecisionBridge(pending_store=store)
+    bridge = DecisionBridge(pending_store=store, db_path=_db())
     bridge.attach_default_handlers()
-    dispatched = bridge.dispatcher.dispatch_by_name(row["action_type"], payload)
+    dispatched = bridge.execute_approved(row["action_type"], payload)
     if dispatched is not None and dispatched.status == "done":
         store.mark_executed(pid, result_summary=str(dispatched.result)[:500])
         return APIResponse(success=True, message="executed",

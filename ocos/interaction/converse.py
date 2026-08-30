@@ -194,6 +194,38 @@ class ChatResponder:
         except Exception as e:
             out["wisdom"] = f"unavailable: {e}"
 
+        # PW-1.3: 连续性检查点（最近一次 dream 的报告）
+        try:
+            from ocos.agent.continuity_trigger import load_continuity
+            out["continuity"] = load_continuity()
+        except Exception as e:
+            out["continuity"] = f"unavailable: {e}"
+
+        # PW-1.2: 风格画像
+        try:
+            out["style_profile"] = self._style_profile()
+        except Exception as e:
+            out["style_profile"] = f"unavailable: {e}"
+
+        # PW-1.4: 执行史（event_memory 最近记录）
+        try:
+            from ocos.event_memory.event_store import EventStore
+            from ocos.event_memory.event_types import CognitiveEventType
+            from ocos.storage.connection import get_connection
+            store = EventStore.load_from_db(
+                get_connection(self._db_path))
+            recent = sorted(store._events.items(), key=lambda kv: kv[0],
+                            reverse=True)[:5]
+            out["execution_history"] = [
+                {"time": datetime.fromtimestamp(ts).isoformat()[:19],
+                 "events": [{"type": ev.event_type.value,
+                             "source": ev.source,
+                             "summary": str(ev.payload)[:80]}
+                            for ev in evs]}
+                for ts, evs in recent]
+        except Exception as e:
+            out["execution_history"] = f"unavailable: {e}"
+
         out["self_knowledge"] = (
             _SELF_KNOWLEDGE.read_text(encoding="utf-8")[-400:]
             if _SELF_KNOWLEDGE.exists() else "（暂无 — 可通过自省提案积累）")
@@ -298,6 +330,43 @@ class ChatResponder:
 
     # ── 回复 ─────────────────────────────────────────────────────────
 
+    def _style_profile(self) -> str:
+        """PW-1.2: 从对话统计派生主人沟通风格（PersonalizationEngine 画像）。
+
+        统计近期用户消息平均长度 → CognitiveSignature.interaction_style：
+        短消息（<15 字）= DIRECT（回复精炼）；长消息（>60 字）= FORMAL
+        （结构化）；中间 = COLLABORATIVE。personalize_response 依此微调回复。
+        """
+        try:
+            from ocos.memory.hub import MemoryHub
+            from ocos.personal_intelligence.personalization_engine import (
+                PersonalizationEngine,
+            )
+            from ocos.personal_intelligence.cognitive_signature import (
+                InteractionStyle,
+            )
+            hub = MemoryHub(self._db_path)
+            hub.initialize()
+            lengths = [len(str(getattr(ep, "context", {}).get("content", "")))
+                       for ep in hub.episode.query_by_time(limit=10)
+                       if getattr(ep, "source", "") == "conversation"]
+            engine = PersonalizationEngine()
+            if lengths:
+                avg = sum(lengths) / len(lengths)
+                if avg < 15:
+                    engine.signature.interaction_style = InteractionStyle.DIRECT
+                elif avg > 60:
+                    engine.signature.interaction_style = InteractionStyle.FORMAL
+                else:
+                    engine.signature.interaction_style = (
+                        InteractionStyle.COLLABORATIVE)
+            style = engine.signature.interaction_style.name
+            self._style_engine = engine
+            return style
+        except Exception as e:
+            logger.debug("style profile failed: %s", e)
+            return "DIRECT"
+
     def _has_real_llm(self) -> bool:
         """env 或 ~/.ocos/config.json 任一有 key 即认为接入语言核心。"""
         if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"):
@@ -321,10 +390,20 @@ class ChatResponder:
                 )
                 # deepseek-v4-flash 等推理模型: reasoning 阶段消耗 token 预算,
                 # 预算太小会只产出 reasoning_content 而无正文 → 给足余量
+                style = self._style_profile()
                 reply = asyncio.run(tg._provider.generate(
-                    prompt, system_prompt=_SYSTEM_PROMPT,
+                    prompt + f"\n（主人沟通风格画像: {style} — 按此调整回复详略）",
+                    system_prompt=_SYSTEM_PROMPT,
                     temperature=0.6, max_tokens=2000))
-                out = {"reply": reply.strip(), "provider": tg._provider.name,
+                reply = reply.strip()
+                # PW-1.2: personalize_response 依画像微调（DIRECT=原样）
+                try:
+                    style_engine = getattr(self, "_style_engine", None)
+                    if style_engine is not None:
+                        reply = style_engine.personalize_response(reply)
+                except Exception:
+                    pass
+                out = {"reply": reply, "provider": tg._provider.name,
                        "mock": False}
             except Exception as e:
                 # 注: ocos.logging 封装的 .exception() 会因 extra 撞 'exc_info'

@@ -119,6 +119,7 @@ class DecisionBridge:
         audit: Optional[ExecutionAudit] = None,
         agent_id: str = "decision_bridge",
         pending_store: Optional[Any] = None,    # AUD-F12: PendingStore (SQLite 持久化)
+        db_path: Optional[str] = None,          # PW-1.4: 执行留痕 event_memory
     ) -> None:
         self._dispatcher = dispatcher or ActionDispatcher()
         self._guard = guard or PermissionGuard()
@@ -126,6 +127,8 @@ class DecisionBridge:
         self._agent_id = agent_id
         self._registry: Any = None
         self._pending_store = pending_store     # AUD-F12: 有 store 则跨进程存活
+        self._db_path = db_path
+        self._lifecycle_store: Any = None       # PW-1.4: event_memory EventStore（惰性）
         self._pending: list[dict] = []          # 无 store 时的内存回退（诚实降级）
         self._reports: list[BridgeReport] = []
 
@@ -445,6 +448,12 @@ class DecisionBridge:
     # ── 审计 ──────────────────────────────────────────────────────────────
 
     def _audit_action(self, dispatched: DispatchedAction) -> None:
+        self._record_lifecycle(
+            "action", (dispatched.action_type.name
+                       if hasattr(dispatched.action_type, "name")
+                       else str(dispatched.action_type)),
+            {"status": dispatched.status,
+             "summary": self._summarize(dispatched)[:200]})
         contract_id = f"BRIDGE-{uuid.uuid4().hex[:8]}"
         if dispatched.status == "done":
             self._audit.log_complete(
@@ -457,6 +466,8 @@ class DecisionBridge:
             )
 
     def _audit_record(self, contract_id: str, status: str, summary: str) -> None:
+        self._record_lifecycle("result", self._agent_id,
+                               {"status": status, "summary": summary[:200]})
         if status == "completed":
             self._audit.log_complete(contract_id, self._agent_id, summary)
         else:
@@ -482,6 +493,65 @@ class DecisionBridge:
                     return val
             return DecisionBridge._extract_decision_text(based)
         return ""
+
+    def execute_approved(self, action_type_name: str,
+                         payload: dict | None = None):
+        """PW-1.4: 审批后的统一执行入口 — dispatch + 生命周期留痕。
+
+        approvals（CLI/API/REPL）统一走这里, 保证每笔批准动作都有
+        ExecutionAudit + event_memory 留痕。
+        """
+        dispatched = self.dispatcher.dispatch_by_name(
+            action_type_name, payload)
+        if dispatched is None:
+            self._record_lifecycle(
+                "result", self._agent_id,
+                {"status": "blocked", "summary": f"no executor: {action_type_name}"})
+            return dispatched
+        self._record_lifecycle(
+            "action", (action_type_name
+                       if isinstance(action_type_name, str)
+                       else action_type_name),
+            {"status": dispatched.status,
+             "summary": self._summarize(dispatched)[:200]})
+        return dispatched
+
+    # ── PW-1.4: 执行生命周期留痕（event_memory） ─────────────────────────
+
+    def _record_lifecycle(self, event_type: str, source: str,
+                          payload: Any) -> None:
+        """能力执行 → event_memory 生命周期事件（SQLite 持久化, 失败不阻断）。"""
+        try:
+            if not self._db_path or self._db_path == ":memory:":
+                return
+            from ocos.event_memory.event_store import EventStore
+            from ocos.event_memory.event_types import (
+                CognitiveEvent, CognitiveEventType, EventConfidence,
+            )
+            from ocos.storage.connection import get_connection
+            if self._lifecycle_store is None:
+                conn = get_connection(self._db_path)
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS event_store (
+                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                        event_id TEXT UNIQUE,
+                        event_type TEXT,
+                        payload TEXT,
+                        source TEXT,
+                        created_at TEXT
+                    )""")
+                conn.commit()
+                self._lifecycle_store = EventStore(connection=conn)
+            etype = (CognitiveEventType(event_type)
+                     if event_type in [e.value for e in CognitiveEventType]
+                     else CognitiveEventType.ACTION)
+            self._lifecycle_store.append(CognitiveEvent(
+                event_id=f"EVT-{uuid.uuid4().hex[:12]}",
+                event_type=etype, source=source,
+                payload=payload, confidence=EventConfidence.CERTAIN,
+            ))
+        except Exception as e:
+            logger.debug("lifecycle record failed: %s", e)
 
     # ── 待批队列 ──────────────────────────────────────────────────────────
 

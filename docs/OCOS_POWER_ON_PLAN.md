@@ -189,4 +189,8 @@ W5: 5.1/5.2 独立; 5.3 裁决随 W2/W4 落地后执行
 
 | 日期 | 编号 | 改动摘要 | 测试基线变化 | commit |
 |------|------|----------|--------------|--------|
-| | | | |
+| 2026-08-30 | PW-4.1 | operations 上电: RUN_COMMAND/HTTP_FETCH (ASK)+SandboxOps/SearchOps handler+关键词识别; 黑名单实测拦截 | 5272+绿 | 460ce7e |
+| 2026-08-30 | PW-1.1 | wisdom_trigger: dream 巩固→Episode 聚类→Pattern→智慧候选落盘+上下文/内视回注 | 同上 | 460ce7e |
+| 2026-08-30 | PW-1.3 | continuity_trigger: dream 连续性检查点（生命记忆图/时间线/知识老化/身份漂移）落盘 ~/.ocos/continuity.json; 内视消费 | 同上 | (本批) |
+| 2026-08-30 | PW-1.2 | PersonalizationEngine 上电: 对话统计→InteractionStyle 画像→提示词风格指令+personalize_response 后处理 | 同上 | (本批) |
+| 2026-08-30 | PW-1.4 | event_memory 上电: bridge.execute_approved 统一审批执行入口+生命周期留痕(自愈建表); 内视执行史; 三审批点接入 | 5281 绿 | (本批) |

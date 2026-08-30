@@ -17,7 +17,7 @@ def _store_and_bridge():
 
     db_path = resolve_db_path()
     store = PendingStore(db_path=db_path)
-    bridge = DecisionBridge(pending_store=store)
+    bridge = DecisionBridge(pending_store=store, db_path=_db())
     bridge.attach_default_handlers()
     return store, bridge, db_path
 
@@ -59,7 +59,7 @@ def cmd_approvals_approve(args, session) -> int:
     # 尝试真实执行 — 有 handler 的动作 dispatch；无 executor 的诚实 blocked
     action_type = row["action_type"]
     payload = json.loads(row["payload_json"] or "{}")
-    dispatched = bridge.dispatcher.dispatch_by_name(action_type, payload)
+    dispatched = bridge.execute_approved(action_type, payload)
     if dispatched is not None and dispatched.status == "done":
         store.mark_executed(args.pending_id,
                             result_summary=str(dispatched.result)[:500], executed=True)

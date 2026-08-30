@@ -56,7 +56,7 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge": ["ocos.knowledge", "ocos.memory.semantic"],  # GAP-P2-1: registry→semantic 镜像
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
-    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", ],
+    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity", ],
     "ocos.auth": ["ocos.storage"],
     "ocos.recovery": ["ocos.storage"],
     # Phase 21: 新增基础设施层
@@ -137,7 +137,9 @@ ALLOWED_IMPORTS = {
                          "ocos.self.identity_boundary",
                          "ocos.storage", "ocos.agent", "ocos.execution",
                          "ocos.engines",
-                         "ocos.capability_reality"],  # UX-P2: UserInbox/ChatResponder 自我认知
+                         "ocos.capability_reality", "ocos.event_memory",
+                         "ocos.event", "ocos.personal_intelligence"],
+                         # UX 自我认知 + PW-1.2 风格画像 + PW-1.4 内视执行史
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
                                        "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution"],  # S4: Organ Client（写作器官驱动）; P1-B: 生产入口经 daemon 装配层
@@ -183,7 +185,7 @@ ALLOWED_IMPORTS = {
     "ocos.execution": ["ocos.autonomous_runtime", "ocos.agent_orchestration",
                        "ocos.interaction", "ocos.capability_reality",
                        "ocos.storage",
-                       "ocos.operations"],  # PW-4.1: 沙盒/HTTP 闸门执行层
+                       "ocos.operations", "ocos.event_memory"],  # PW-4.1 闸门 + PW-1.4 留痕
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
                     "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal",

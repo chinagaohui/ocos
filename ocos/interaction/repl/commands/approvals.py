@@ -39,9 +39,9 @@ class ReplApprovalsCommand:
                 row = store.get(pid)
                 payload = __import__("json").loads(row["payload_json"] or "{}")
                 from ocos.execution.bridge import DecisionBridge
-                bridge = DecisionBridge(pending_store=store)
+                bridge = DecisionBridge(pending_store=store, db_path=self._ctx.db_path)
                 bridge.attach_default_handlers()
-                dispatched = bridge.dispatcher.dispatch_by_name(
+                dispatched = bridge.execute_approved(
                     row["action_type"], payload)
                 if dispatched is not None and dispatched.status == "done":
                     store.mark_executed(pid, result_summary=str(dispatched.result)[:500])

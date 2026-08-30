@@ -869,13 +869,32 @@ class MasterAgent:
             consolidation["consolidation_stats"] = {}  # 巩固失败不阻塞睡眠
 
         # PW-1.1: Wisdom Consolidation — 成败经验聚类 → 智慧候选（CLS 慢通路）
+        hub = getattr(self, "_memory_hub_ref", None)
         try:
-            from ocos.agent.wisdom_trigger import consolidate_wisdom
-            hub = getattr(self, "_memory_hub_ref", None)
             if hub is not None:
+                from ocos.agent.wisdom_trigger import consolidate_wisdom
                 consolidation["wisdom_stats"] = consolidate_wisdom(hub)
         except Exception:
             consolidation["wisdom_stats"] = {}  # 智慧提炼失败不阻塞睡眠
+
+        # PW-1.3: Continuity Checkpoint — 身份连续性 + 知识老化（落盘内视）
+        try:
+            if hub is not None:
+                from ocos.agent.continuity_trigger import (
+                    run_continuity_checkpoint,
+                )
+                wisdom_n = (consolidation.get("wisdom_stats") or {}).get(
+                    "wisdom_total", 0)
+                report = run_continuity_checkpoint(
+                    hub, tick_id=consolidation.get("items_processed", 0) or 0,
+                    wisdom_count=wisdom_n)
+                consolidation["continuity"] = {
+                    "checkpoint_id": report["checkpoint_id"],
+                    "anomalies": report["identity_anomalies"],
+                    "severity": report["identity_severity"],
+                }
+        except Exception:
+            consolidation["continuity"] = {}  # 连续性检查失败不阻塞睡眠
 
         self._control_loop.wake_from_sleep()
         return consolidation

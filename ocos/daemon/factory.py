@@ -154,7 +154,8 @@ def build_execution_bridge(agent: Any = None, agent_id: str = "decision_bridge",
         from ocos.execution.pending import PendingStore
         pending_store = PendingStore(db_path=db_path)
 
-    bridge = DecisionBridge(agent_id=agent_id, pending_store=pending_store)
+    bridge = DecisionBridge(agent_id=agent_id, pending_store=pending_store,
+                            db_path=db_path)
     try:
         bridge.attach_default_handlers()
     except Exception as e:  # noqa: BLE001 — 能力发现失败不阻断装配
