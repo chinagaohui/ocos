@@ -69,11 +69,20 @@ def _task_ids(records, supervisor):
 
 @pytest.fixture
 def pipeline_supervisor():
-    """含完整 registry 的 supervisor（用于管线测试）。"""
+    """含完整 registry 的 supervisor（用于管线测试）。
+
+    AUD-F11: 回退 _execute_agent 已改诚实失败 — 管线测试注入 stub executor。
+    """
     registry = make_full_registry()
+
+    class _StubExecutor:
+        def execute(self, contract):
+            return True, f"executed {contract.task_id}", None
+
     return ExecutionSupervisor(
         registry=registry,
         selector=AgentSelector(registry),
+        executor=_StubExecutor(),
     )
 
 
@@ -314,9 +323,14 @@ async def test_fallback_agent_pipeline():
         success_rate=0.95,
     ))
 
+    class _StubExecutor:
+        def execute(self, contract):
+            return True, f"executed {contract.task_id}", None
+
     sup = ExecutionSupervisor(
         registry=registry,
         selector=AgentSelector(registry),
+        executor=_StubExecutor(),  # AUD-F11: 回退执行器已诚实失败, 注入 stub 测 fallback 策略
     )
 
     dag = TaskDAG()

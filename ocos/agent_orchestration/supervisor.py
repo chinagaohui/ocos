@@ -30,12 +30,16 @@ from ocos.planning.models import Task, Plan, TaskStatus
 # ── 回退 Agent 执行器（当无 AgentExecutor 注入时） ──
 
 def _execute_agent(agent_id: str, contract: ExecutionContract) -> tuple[bool, str]:
-    """回退模拟 Agent 执行（生产环境替换为 AgentExecutor）。
+    """回退行为（AUD-F11, 2026-08-30）: 诚实失败。
 
-    Returns:
-        (success, result_summary_or_error)
+    此前无 AgentExecutor 注入时返回假成功（"completed task"）——
+    一旦被生产接线即伪装完成。现改为诚实失败：任务未执行，
+    由调用方（FallbackHandler/审计）按失败处理。
     """
-    return True, f"Agent {agent_id} completed task {contract.task_id}"
+    return False, (
+        f"no AgentExecutor injected — task {contract.task_id} NOT executed "
+        f"(agent {agent_id})"
+    )
 
 
 # ── ExecutionSupervisor ───────────────────────────────────────────

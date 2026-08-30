@@ -31,9 +31,16 @@ def supervisor() -> ExecutionSupervisor:
     r.register(AgentDescriptor(agent_id="A3", agent_type="writer",
                                 capabilities=("generation",),
                                 success_rate=0.70))
+
+    class _StubExecutor:
+        """AUD-F11: 回退执行器已改诚实失败 — 注入 stub 才能测 completed 路径。"""
+        def execute(self, contract):
+            return True, f"executed {contract.task_id}", None
+
     return ExecutionSupervisor(
         registry=r,
         selector=AgentSelector(r),
+        executor=_StubExecutor(),
     )
 
 
@@ -116,7 +123,9 @@ def test_agent_fn_is_callable():
     from ocos.agent_orchestration.contract import ExecutionContract
     c = ExecutionContract.create(task_id="T1", agent_id="A1")
     ok, result = _execute_agent("A1", c)
-    assert ok
+    # AUD-F11: 回退行为 = 诚实失败（无 AgentExecutor 注入 → 任务未执行）
+    assert not ok
+    assert "NOT executed" in result
 
 
 # ── 22-D01: sync wrappers ────────────────────────────────────────
