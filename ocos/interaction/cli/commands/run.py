@@ -52,12 +52,17 @@ def cmd_run(args, session) -> int:
 
     from ocos.daemon import ResidentRuntime
     from ocos.daemon.factory import build_health_loop
+    from ocos.daemon.factory import build_execution_bridge
 
     rt = ResidentRuntime(
         agent,
         tick_interval=args.interval,
         db_path=db_path,
     )
+    # R4-A: 决策执行铰链 — 自治决策 → capability_reality 真实执行 (AUTO) / 待批 (ASK)
+    build_execution_bridge(agent)
+    print("  bridge   : DecisionBridge 已挂载 (AUTO 真实执行 / ASK 待批)")
+    print("             注意: ASK 待批队列暂无消费方 (R4-B Outbox 未建), 待批动作不会被执行")
     # GAP-P1-2: 周期健康体检（AlertManager Log+File 通道 → ~/.ocos/alerts/）
     rt.attach_health_loop(build_health_loop())
     rt.start()

@@ -95,26 +95,41 @@ class EngineAdapter:
 
 ENGINE_REGISTRY: dict[str, type] = {}
 
-try:
-    from ocos.engines.planning_engine import PlanningEngine
-    ENGINE_REGISTRY["planner"] = PlanningEngine
-    ENGINE_REGISTRY["planning_engine"] = PlanningEngine
-except ImportError:
-    logger.debug("PlanningEngine not available.")
 
-try:
-    from ocos.engines.reasoning_engine import ReasoningEngine
-    ENGINE_REGISTRY["reasoner"] = ReasoningEngine
-    ENGINE_REGISTRY["reasoning_engine"] = ReasoningEngine
-except ImportError:
-    logger.debug("ReasoningEngine not available.")
+def _ensure_engines_registered() -> None:
+    """幂等注册内置引擎。
 
-try:
-    from ocos.engines.writer_engine import WriterEngine
-    ENGINE_REGISTRY["writer"] = WriterEngine
-    ENGINE_REGISTRY["writer_engine"] = WriterEngine
-except ImportError:
-    logger.debug("WriterEngine not available.")
+    模块级调用一次 (常规导入顺序); EngineBridge.__init__ 再兜底调用一次 —
+    当 ocos.engines 包先于本模块被导入时 (engines/__init__ → writer_engine
+    → ocos.agent.__init__ → engine_bridge 的循环链), 模块级注册会因
+    writer_engine 尚未初始化完成而静默失败, 兜底注册保证 writer 可用。
+    """
+    if "planner" not in ENGINE_REGISTRY:
+        try:
+            from ocos.engines.planning_engine import PlanningEngine
+            ENGINE_REGISTRY["planner"] = PlanningEngine
+            ENGINE_REGISTRY["planning_engine"] = PlanningEngine
+        except ImportError:
+            logger.debug("PlanningEngine not available.")
+
+    if "reasoner" not in ENGINE_REGISTRY:
+        try:
+            from ocos.engines.reasoning_engine import ReasoningEngine
+            ENGINE_REGISTRY["reasoner"] = ReasoningEngine
+            ENGINE_REGISTRY["reasoning_engine"] = ReasoningEngine
+        except ImportError:
+            logger.debug("ReasoningEngine not available.")
+
+    if "writer" not in ENGINE_REGISTRY:
+        try:
+            from ocos.engines.writer_engine import WriterEngine
+            ENGINE_REGISTRY["writer"] = WriterEngine
+            ENGINE_REGISTRY["writer_engine"] = WriterEngine
+        except ImportError:
+            logger.debug("WriterEngine not available.")
+
+
+_ensure_engines_registered()
 
 
 class EngineBridge:
@@ -133,6 +148,8 @@ class EngineBridge:
     ):
         self._event_bus = event_bus or EventBus()
         self._working_memory = working_memory or WorkingMemory(event_bus=self._event_bus)
+        # 兜底: 循环导入 (engines 包先导入) 时模块级注册会静默失败, 此处治愈
+        _ensure_engines_registered()
         self._adapters: dict[str, EngineAdapter] = {}
         self._engine_types: dict[str, type] = dict(ENGINE_REGISTRY)
         # Phase 23-A: 延迟创建的 CapabilityRegistry

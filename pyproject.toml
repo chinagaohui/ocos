@@ -36,7 +36,9 @@ ocos-server = "ocos.interaction.api.server:main"
 ocos-shell = "ocos.interaction.repl.shell:main"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# 2026-08-30: ocos/tests 并入默认全量 — 此前 R4-A 的测试与架构守卫
+# (test_import_rules 等) 不在 CI 主链路, 两次漏网 (假成功/循环导入) 均因此
+testpaths = ["tests", "ocos/tests"]
 python_files = ["test_*.py"]
 addopts = ["-q", "--tb=short"]
 timeout = 300

@@ -94,3 +94,28 @@ def build_knowledge_registry(semantic_store=None):
     from ocos.knowledge.store.registry import KnowledgeRegistry
 
     return KnowledgeRegistry(semantic_store=semantic_store)
+
+
+def build_execution_bridge(agent: Any = None, agent_id: str = "decision_bridge"):
+    """R4-A: 组装 DecisionBridge — 自治决策 → 真实任务执行铰链。
+
+    装配: ActionDispatcher + PermissionGuard + ExecutionAudit +
+    AdapterDiscovery 扫描的真实 capability_reality 能力 (注册为 handlers)。
+    返回 bridge 实例; 调用方负责 attach 到 AgentRuntime._decision_bridge。
+    """
+    from ocos.execution.bridge import DecisionBridge
+
+    bridge = DecisionBridge(agent_id=agent_id)
+    try:
+        bridge.attach_default_handlers()
+    except Exception as e:  # noqa: BLE001 — 能力发现失败不阻断装配
+        import logging
+        logging.getLogger(__name__).warning(
+            "DecisionBridge capability discovery failed: %s", e)
+    if agent is not None:
+        attach = getattr(agent, "attach_decision_bridge", None)
+        if attach is not None:
+            attach(bridge)
+        else:  # 裸对象兜底 (仅测试用) — 生产 AgentRuntime 走公开方法
+            agent._decision_bridge = bridge
+    return bridge

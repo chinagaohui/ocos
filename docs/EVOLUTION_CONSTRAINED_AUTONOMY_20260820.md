@@ -72,3 +72,20 @@ Decision 唯一 Mutation Authority（I-6 保持）
 - U5.2 的"禁止自动批准"是**第一版约束**（能力未验证前一律人工）
 - ③ 的"受约束自主"是**治理成熟后的受控放开**（低风险域 + 五条件 + 可回滚 + 审计），**高风险/权威域约束不变**
 - 若未来发现自主进化异常 → 一键回滚（rollback_engine）+ 收紧自主域（改 AUTO_GOVERNED_DOMAINS 一处）
+
+## 六、R4-A 执行回路豁免登记（2026-08-30）
+
+DecisionBridge（`ocos/execution/bridge.py`）的三个 AUTO handler
+（CONSOLIDATE_MEMORY / REFLECT / FEEDBACK_PROCESS）会在执行时写文件。
+按 §二 的分级它们属"写操作应人工"，此处登记为**受限豁免**，条件为：
+
+| 豁免条件 | 内容 |
+|:---|:---|
+| 写入范围 | 仅 `~/.ocos/executions/` 沙盒目录（filesystem adapter safe_roots 内） |
+| 内容性质 | 自身执行记录（consolidation/reflection/feedback JSON），不触碰用户数据与代码 |
+| 可回滚 | 文件级，直接删除即可 |
+| 审计 | 每次写入经 ExecutionAudit 落库 |
+| 不适用 | DAG 的 create/modify/execute 类任务**不享受此豁免**，一律 ASK 待批 |
+
+若上述任一条件被突破（如写入范围扩大、内容含外部数据），豁免自动失效，
+对应动作降级为 manual。登记人：审计回路复查。

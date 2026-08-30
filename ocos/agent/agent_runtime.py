@@ -117,6 +117,9 @@ class AgentRuntime:
         self._recent_results: list[dict[str, Any]] = []
         self._result_cursor: int = 0  # Phase 32: cursor for step 9 ingestion
         self._orchestrator: Any = None
+        # R4-A: DecisionBridge (自治决策 → 真实执行铰链), 由 factory 装配
+        self._decision_bridge: Any = None
+        self._last_core_loop_result: dict = {}
         # Phase 32: Attention wiring
         self._attention: Any = None
         # Phase 35: Attention decisions cache (step 2 → step 3)
@@ -835,6 +838,14 @@ class AgentRuntime:
         except Exception as e:
             return {"step": 6, "name": "planning_trigger", "error": str(e)}
 
+    def attach_decision_bridge(self, bridge: Any) -> None:
+        """R4-A: 挂载决策执行铰链 (公开装配入口, 供 daemon.factory 调用)。
+
+        挂载后 step 7 的 TaskDAG 任务与 step 8 的决策输出优先经
+        DecisionBridge 风险分级执行; 未挂载或裸构造实例保持既有行为。
+        """
+        self._decision_bridge = bridge
+
     def _tick_step_core_loop(self) -> dict[str, Any]:
         """Step 7: Core Loop — 优先执行 TaskDAG，无 DAG 时回退认知循环。
 
@@ -847,6 +858,36 @@ class AgentRuntime:
                 tid = order[self._dag_cursor]
                 task = self._active_dag.tasks[tid]
                 try:
+                    # R4-A: 真实任务优先经 DecisionBridge 执行
+                    # (只读 analyze/verify → AUTO 真实执行; create/modify/execute → ASK 待批)
+                    # getattr: 兼容 __new__ 裸构造实例 (Phase 31 合约), 避免静默 AttributeError
+                    bridge = getattr(self, "_decision_bridge", None)
+                    if bridge is not None:
+                        dag_result = bridge.execute_dag_task(task)
+                        dag_status = dag_result.get("status", "")
+                        if dag_status != "echo_fallback":
+                            # completed/failed/pending_approval 诚实透传, 不把失败伪装成待批
+                            self._task_statuses[tid] = (
+                                dag_status if dag_status in ("completed", "failed", "pending_approval")
+                                else "pending_approval"
+                            )
+                            self._recent_results.append({
+                                "task_id": tid,
+                                "description": task.description,
+                                "agent": task.agent_type,
+                                "output": str(dag_result)[:200],
+                                "success": dag_status == "completed",
+                            })
+                            self._dag_cursor += 1
+                            return {
+                                "step": 7, "name": "core_loop",
+                                "strategy": "dag_execution",
+                                "task": tid,
+                                "progress": f"{self._dag_cursor}/{self._dag_total}",
+                                "execution": dag_status,
+                                "output": str(dag_result)[:200],
+                            }
+                    # 既有 EchoAgent 回退 (无能力匹配 / bridge 未装配)
                     from ocos.capability.echo_agent import EchoAgent
                     agent = EchoAgent(prefix=task.agent_type.capitalize())
                     result = agent.execute(
@@ -872,6 +913,7 @@ class AgentRuntime:
                         "output": output[:200],
                     }
                 except Exception as e:
+                    logger.warning("core_loop task %s execution failed: %s", tid, e)
                     self._task_statuses[tid] = "failed"
                     self._dag_cursor += 1
                     return {"step": 7, "name": "core_loop", "task": tid, "error": str(e)}
@@ -885,6 +927,8 @@ class AgentRuntime:
         if hasattr(self, "loop") and self.loop is not None:
             try:
                 result = self.loop.execute_single()
+                # R4-A: 缓存决策结果供 step 8 Dispatch 经 DecisionBridge 执行
+                self._last_core_loop_result = result if isinstance(result, dict) else {}
                 return {"step": 7, "name": "core_loop", "status": result.get("status", "unknown")}
             except Exception as e:
                 return {"step": 7, "name": "core_loop", "error": str(e)}
@@ -915,10 +959,22 @@ class AgentRuntime:
         except Exception as e:
             logger.debug("Gateway dispatch scan skipped: %s", e)
 
+        # ── R4-A: DecisionBridge — 决策输出 → 真实执行 (AUTO) / 待批 (ASK) ──
+        bridge_stats: dict | None = None
+        decision_bridge = getattr(self, "_decision_bridge", None)
+        last_result = getattr(self, "_last_core_loop_result", None)
+        if decision_bridge is not None and last_result:
+            try:
+                report = decision_bridge.process(last_result)
+                bridge_stats = report.summary()
+            except Exception as e:
+                logger.warning("DecisionBridge process failed: %s", e)
+
         return {
             "step": 8, "name": "dispatch",
             "status": "via_core_loop",
             "gateway": gateway_stats,
+            "bridge": bridge_stats,
         }
 
     def _tick_step_result_ingest(self) -> dict[str, Any]:

@@ -176,11 +176,15 @@ ALLOWED_IMPORTS = {
     ],
     # GAP-P1-1: Phase 46 DecisionPipeline 消费 Phase 43 Decision Intelligence
     "ocos.cognitive_loop": ["ocos.cognitive_loop", "ocos.decision"],
+    # R4-A: 执行铰链 — 决策输出 → dispatcher 风险分级 → capability_reality 沙盒执行
+    "ocos.execution": ["ocos.autonomous_runtime", "ocos.agent_orchestration",
+                       "ocos.interaction", "ocos.capability_reality"],
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
                     "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal",
                     "ocos.alerts", "ocos.health_examination",
-                    "ocos.perception", "ocos.world_model", "ocos.knowledge"],
+                    "ocos.perception", "ocos.world_model", "ocos.knowledge",
+                    "ocos.execution"],
 }
 
 # 测试文件允许的 import 例外（白名单，当前 unused—保留供将来使用）
