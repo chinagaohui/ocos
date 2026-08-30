@@ -64,7 +64,7 @@ def cmd_run(args, session) -> int:
     # R4-A: 决策执行铰链 — 自治决策 → capability_reality 真实执行 (AUTO) / 待批 (ASK)
     build_execution_bridge(agent, db_path=db_path)
     print("  bridge   : DecisionBridge 已挂载 (AUTO 真实执行 / ASK 待批)")
-    print("             注意: ASK 待批队列暂无消费方 (R4-B Outbox 未建), 待批动作不会被执行")
+    print("             审批: 另开终端 ocos approvals list / approve <id>")
     # AUD-F1: 感知管线 — 默认零传感器（零噪音零写入），传感器经 build_perception_pipeline(sensors=[...]) 注入
     rt.attach_perception_pipeline(build_perception_pipeline(sensors=[]))
     print("  perception: 感知管线已挂载 (0 sensors — 经 FileSensor 注入后生效)")
