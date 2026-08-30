@@ -80,9 +80,12 @@ class ChatResponder:
         return "\n".join(lines)
 
     def _has_real_llm(self) -> bool:
+        """env 或 ~/.ocos/config.json 任一有 key 即认为接入语言核心。"""
         import os
-        return bool(os.environ.get("ANTHROPIC_API_KEY")
-                    or os.environ.get("OPENAI_API_KEY"))
+        if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"):
+            return True
+        from ocos.engines.text_generator import _read_llm_config
+        return bool(_read_llm_config().get("api_key"))
 
     # ── 回复 ─────────────────────────────────────────────────────────
 
@@ -100,13 +103,18 @@ class ChatResponder:
                 f"【用户消息】\n{message}\n\n"
                 "请以 OCOS 的身份回复这条消息。"
             )
+            # deepseek-v4-flash 等推理模型: reasoning 阶段消耗 token 预算,
+            # 预算太小会只产出 reasoning_content 而无正文 → 给足余量
             reply = asyncio.run(tg._provider.generate(
                 prompt, system_prompt=_SYSTEM_PROMPT,
-                temperature=0.6, max_tokens=400))
+                temperature=0.6, max_tokens=2000))
             provider = tg._provider.name
             return {"reply": reply.strip(), "provider": provider, "mock": False}
         except Exception as e:
-            logger.exception("LLM reply failed — falling back to state reply")
+            # 注: ocos.logging 封装的 .exception() 会因 extra 撞 'exc_info'
+            # 而崩溃 — 用 error(exception=...) 签名
+            logger.error("LLM reply failed, falling back to state reply",
+                         exception=e)
             fallback = self._state_reply(message, context)
             fallback["reply"] = f"（LLM 调用失败: {e}）\n" + fallback["reply"]
             return fallback

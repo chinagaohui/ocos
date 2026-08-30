@@ -222,10 +222,21 @@ class AnthropicProvider(LLMProvider):
 
 
 class OpenaiProvider(LLMProvider):
-    """OpenAI API 提供商。"""
+    """OpenAI API 提供商（兼容 DeepSeek 等OpenAI-compatible 端点）。
 
-    def __init__(self) -> None:
-        self._api_key = os.environ.get("OPENAI_API_KEY", "")
+    配置优先级: 构造参数 > 环境变量 > ~/.ocos/config.json 的 llm 段
+    （{"llm": {"api_key", "base_url", "model"}}）。
+    """
+
+    def __init__(self, api_key: str = "", base_url: str = "",
+                 model: str = "") -> None:
+        cfg = _read_llm_config()
+        self._api_key = (api_key or os.environ.get("OPENAI_API_KEY", "")
+                         or cfg.get("api_key", ""))
+        self._base_url = (base_url or os.environ.get("OPENAI_BASE_URL", "")
+                          or cfg.get("base_url", "") or None)
+        self._model = (model or os.environ.get("OPENAI_MODEL", "")
+                       or cfg.get("model", "") or "gpt-4o")
 
     @property
     def name(self) -> str:
@@ -250,14 +261,14 @@ class OpenaiProvider(LLMProvider):
         except ImportError:
             raise RuntimeError("openai package not installed: pip install openai")
 
-        client = AsyncOpenAI(api_key=self._api_key)
+        client = AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
         response = await client.chat.completions.create(
-            model="gpt-4o",
+            model=self._model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -399,6 +410,17 @@ class GenerationResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+def _read_llm_config() -> dict:
+    """读取 ~/.ocos/config.json 的 llm 段（环境变量优先于配置文件）。"""
+    path = os.path.join(os.path.expanduser("~"), ".ocos", "config.json")
+    try:
+        import json
+        with open(path, encoding="utf-8") as f:
+            return (json.load(f) or {}).get("llm", {}) or {}
+    except (OSError, ValueError):
+        return {}
+
+
 class TextGenerator:
     """文本生成主类 — 管理 Provider + Prompt 构建。"""
 
@@ -413,10 +435,11 @@ class TextGenerator:
 
     @staticmethod
     def _auto_provider() -> LLMProvider:
-        """自动选择可用提供商。"""
+        """自动选择可用提供商（env 或 ~/.ocos/config.json 任一有 key 即启用）。"""
         if os.environ.get("ANTHROPIC_API_KEY"):
             return AnthropicProvider()
-        if os.environ.get("OPENAI_API_KEY"):
+        if (os.environ.get("OPENAI_API_KEY")
+                or _read_llm_config().get("api_key")):
             return OpenaiProvider()
         logger.info("No API keys found, using MockProvider")
         return MockProvider()
