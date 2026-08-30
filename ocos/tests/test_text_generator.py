@@ -246,7 +246,12 @@ class TestOpenaiProvider:
         assert p.available is False
 
     @pytest.mark.asyncio
-    async def test_generate_raises_without_key(self):
+    async def test_generate_raises_without_key(self, monkeypatch):
+        # LLM 接入后 ~/.ocos/config.json 可能带 key — 隔离到无 key 环境
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.setattr("ocos.engines.text_generator._read_llm_config",
+                            lambda: {})
         p = OpenaiProvider()
         with pytest.raises(RuntimeError, match="OPENAI_API_KEY not set"):
             await p.generate("prompt")

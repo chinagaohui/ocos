@@ -12,8 +12,16 @@ from ocos.models.process import TransformProcess, ProcessType, ProcessState
 
 
 @pytest.fixture
-def engine():
-    """WriterEngine fixture（无 opentale 依赖）。"""
+def engine(monkeypatch):
+    """WriterEngine fixture（无 opentale 依赖 + 强制 Mock 路径）。
+
+    LLM 接入（UX-LLM）后, ~/.ocos/config.json 有 key 时 TextGenerator 会
+    自动选真实 Provider — 本 fixture 的用例锁定 Mock 路径, 故隔离配置。
+    """
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr("ocos.engines.text_generator._read_llm_config",
+                        lambda: {})
     event_bus = EventBus()
     wm = WorkingMemory(event_bus=event_bus)
     eng = WriterEngine(event_bus=event_bus, working_memory=wm)
