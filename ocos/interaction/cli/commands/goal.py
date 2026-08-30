@@ -53,6 +53,7 @@ def cmd_goal_create(args, session: InteractionSession) -> int:
         source=goal.caller,
         origin_level="HUMAN",   # caller="cli" 白名单 → 人类来源目标
         authority="FRAMEWORK",
+        metadata={"domain": args.domain},  # UX-1: daemon 认领时按域分解
     )
     db_path = resolve_db_path()
 
@@ -61,7 +62,7 @@ def cmd_goal_create(args, session: InteractionSession) -> int:
 
     # 6. 输出
     print(f"Goal created: {goal.id}")
-    print(f"  Status:   {goal.status.value}")
+    print(f"  Status:   {goal.status.name}")
     print(f"  Domain:   {goal.domain.value}")
     print(f"  Priority: {goal.priority}")
     print(f"  Caller:   {goal.caller}")
@@ -70,6 +71,7 @@ def cmd_goal_create(args, session: InteractionSession) -> int:
         for c in goal.constraints:
             print(f"    - {c}")
     print(f"  Persisted: {db_path}")
+    print(f"  Next: 运行中的 daemon 将自动认领 (ocos run) | ocos goal status {goal.id}")
 
     return 0
 

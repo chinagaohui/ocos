@@ -82,6 +82,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "plan":
             return cmd_plan(args, session)
 
+        elif args.command == "status":
+            from ocos.interaction.cli.commands.status import cmd_status
+            return cmd_status(args, session)
+
         elif args.command == "approvals":
             from ocos.interaction.cli.commands.approvals import (
                 cmd_approvals_list, cmd_approvals_approve, cmd_approvals_deny,

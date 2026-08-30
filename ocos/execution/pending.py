@@ -12,6 +12,10 @@ DecisionBridge 的 ASK 类动作（写章节/网络检索/高危 DAG 任务）�
 
 审批不二次过 PermissionGuard 语义双检（人工决策即 authority），
 但每次决定/执行必须落 ExecutionAudit。
+
+连接纪律（UX-1）: get_connection 返回按路径共享的池化连接 —
+禁止 close()、禁止改 row_factory（会毒化同库其它 store），
+查询一律用位置列。
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 from ocos.storage.connection import get_connection
 
@@ -44,6 +48,16 @@ CREATE TABLE IF NOT EXISTS pending_actions (
 CREATE INDEX IF NOT EXISTS idx_pending_actions_status ON pending_actions(status);
 """
 
+_COLS = ("id, action_type, target, payload_json, text, source, "
+         "status, queued_at, decided_at, decided_by, executed_at, result_summary")
+
+
+def _row_to_dict(row) -> dict:
+    keys = ["id", "action_type", "target", "payload_json", "text", "source",
+            "status", "queued_at", "decided_at", "decided_by",
+            "executed_at", "result_summary"]
+    return dict(zip(keys, row))
+
 
 class PendingStore:
     """待批动作持久化存储（pending_actions 表, schema v4）。"""
@@ -62,79 +76,58 @@ class PendingStore:
         """入队待批动作，返回 pending id。"""
         pid = f"PEND-{uuid.uuid4().hex[:8]}"
         conn = self._conn()
-        try:
-            conn.execute(
-                """INSERT INTO pending_actions
-                   (id, action_type, target, payload_json, text, source,
-                    status, queued_at)
-                   VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
-                (pid, action_type, target,
-                 json.dumps(payload or {}, ensure_ascii=False),
-                 text[:200], source,
-                 datetime.now(timezone.utc).isoformat()),
-            )
-            conn.commit()
-            logger.info("PendingStore: %s enqueued (%s)", pid, action_type)
-            return pid
-        finally:
-            conn.close()
+        conn.execute(
+            """INSERT INTO pending_actions
+               (id, action_type, target, payload_json, text, source,
+                status, queued_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)""",
+            (pid, action_type, target,
+             json.dumps(payload or {}, ensure_ascii=False),
+             text[:200], source,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        logger.info("PendingStore: %s enqueued (%s)", pid, action_type)
+        return pid
 
     def get(self, pid: str) -> Optional[dict]:
-        import sqlite3
-        conn = get_connection(self._db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            conn.executescript(_DDL)
-            row = conn.execute(
-                "SELECT * FROM pending_actions WHERE id = ?", (pid,)
-            ).fetchone()
-            return dict(row) if row else None
-        finally:
-            conn.close()
+        conn = self._conn()
+        row = conn.execute(
+            f"SELECT {_COLS} FROM pending_actions WHERE id = ?", (pid,)
+        ).fetchone()
+        return _row_to_dict(row) if row else None
 
     def list_by_status(self, status: str = "pending") -> list[dict]:
-        import sqlite3
-        conn = get_connection(self._db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            conn.executescript(_DDL)
-            rows = conn.execute(
-                "SELECT * FROM pending_actions WHERE status = ? ORDER BY queued_at",
-                (status,),
-            ).fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
+        conn = self._conn()
+        rows = conn.execute(
+            f"SELECT {_COLS} FROM pending_actions WHERE status = ? ORDER BY queued_at",
+            (status,),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
 
     def decide(self, pid: str, approved: bool, decided_by: str = "cli") -> bool:
         """审批决定（人工 authority）。返回是否存在该 pending。"""
         status = "approved" if approved else "denied"
         conn = self._conn()
-        try:
-            cur = conn.execute(
-                """UPDATE pending_actions
-                   SET status = ?, decided_at = ?, decided_by = ?
-                   WHERE id = ? AND status = 'pending'""",
-                (status, datetime.now(timezone.utc).isoformat(), decided_by, pid),
-            )
-            conn.commit()
-            return cur.rowcount > 0
-        finally:
-            conn.close()
+        cur = conn.execute(
+            """UPDATE pending_actions
+               SET status = ?, decided_at = ?, decided_by = ?
+               WHERE id = ? AND status = 'pending'""",
+            (status, datetime.now(timezone.utc).isoformat(), decided_by, pid),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
     def mark_executed(self, pid: str, result_summary: str,
                       executed: bool = True) -> None:
         """审批后执行回写（executed / blocked）。"""
         status = "executed" if executed else "blocked"
         conn = self._conn()
-        try:
-            conn.execute(
-                """UPDATE pending_actions
-                   SET status = ?, executed_at = ?, result_summary = ?
-                   WHERE id = ?""",
-                (status, datetime.now(timezone.utc).isoformat(),
-                 result_summary[:500], pid),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn.execute(
+            """UPDATE pending_actions
+               SET status = ?, executed_at = ?, result_summary = ?
+               WHERE id = ?""",
+            (status, datetime.now(timezone.utc).isoformat(),
+             result_summary[:500], pid),
+        )
+        conn.commit()

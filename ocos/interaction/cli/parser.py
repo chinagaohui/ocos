@@ -22,9 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  ocos status                        — 一屏总览（目标/待批/记忆）
   ocos goal create "帮我写一本科幻小说"
   ocos goal status GOAL-abc12345
   ocos plan "分析科幻小说市场趋势"
+  ocos run                           — 启动认知引擎（认领目标并执行）
+  ocos approvals list                — 查看 ASK 待批动作
   ocos memory query "科幻"
   ocos belief list
   ocos self status
@@ -41,6 +44,11 @@ Examples:
 
     # ── memory ────────────────────────────────────────────────────────
     _add_memory_parser(subparsers)
+
+    # ── status（UX-2: 一屏总览） ─────────────────────────────────────
+    st = subparsers.add_parser("status", help="One-screen cognitive status overview")
+    st.add_argument("--db", type=str, default="",
+                    help="SQLite 路径（默认 OCOS_DB_PATH 或 ~/.ocos/ocos.db）")
 
     # ── approvals（AUD-F12: R4-B 待批队列审批） ───────────────────────
     _add_approvals_parser(subparsers)

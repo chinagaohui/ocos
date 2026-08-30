@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -76,6 +77,14 @@ class ResidentRuntime:
         self._kernel: Any = kernel
         self._health_loop: Optional[Any] = health_loop  # GAP-P1-2
         self._perception_pipeline: Optional[Any] = perception_pipeline  # AUD-F1
+        # UX-1: 目标认领 — 扫 goals 表认领 CLI 创建的 PENDING 人类目标
+        self._domain_goal_store: Any = None
+        if db_path and db_path != ":memory:":
+            try:
+                from ocos.goal.store import GoalStore
+                self._domain_goal_store = GoalStore(db_path=db_path)
+            except Exception as e:
+                logger.warning("GoalStore unavailable, goal claim disabled: %s", e)
         self._tick_interval = tick_interval
         self._max_idle_cycles = max_idle_cycles
         self._state: DaemonState = DaemonState.STOPPED
@@ -192,6 +201,8 @@ class ResidentRuntime:
         while not self._stop_event.is_set():
             # Phase 33: 将队列中的目标导入 runtime 的 goal_store
             self._drain_goal_queue()
+            # UX-1: 认领 CLI 创建的持久化目标（每 tick 最多 1 个）
+            self._claim_persisted_goals()
 
             # P1-C: 一次认知 tick = kernel.tick_loop(1)（8 空壳 stage + agent driver）
             try:
@@ -237,33 +248,71 @@ class ResidentRuntime:
                 return 0
             qg = self._goal_queue.popleft()
 
+        self._import_goal(
+            description=qg.description, domain=qg.domain, goal_id=None)
+        self._goal_processed += 1
+        return 1
+
+    def _import_goal(self, description: str, domain: str,
+                     goal_id: str | None) -> bool:
+        """构造 agent 层 Goal 并写入 runtime._goal_store（Step 6 可消费）。
+
+        UX-1 修复: 此前构造 UserGoal 传入期望 Goal 对象的 save()
+        （属性名不匹配 → AttributeError 被吞），队列目标静默丢失。
+        """
         try:
-            from ocos.kernel.goal_types import UserGoal, GoalDomain
+            from ocos.kernel.goal_types import Goal, GoalDomain, GoalLevel
             domain_map = {
                 "development": GoalDomain.DEVELOPMENT,
                 "research": GoalDomain.RESEARCH,
                 "writing": GoalDomain.WRITING,
                 "analysis": GoalDomain.ANALYSIS,
             }
-            domain = domain_map.get(qg.domain, GoalDomain.DEVELOPMENT)
-            goal = UserGoal(
-                id=f"GOAL-DAEMON-{int(time.time() * 1000)}",
-                raw_input=qg.description,
-                objective=qg.description,
-                domain=domain,
-                caller=qg.caller,
+            goal = Goal(
+                goal_id=goal_id or f"GOAL-DAEMON-{int(time.time() * 1000)}",
+                level=GoalLevel.TASK,
+                description=description,
+                raw_input=description,
+                objective=description,
+                domain=domain_map.get(domain, GoalDomain.DEVELOPMENT),
+                caller="daemon",
             )
-            # 存入 goal_store（如果存在）
             gs = getattr(self._runtime, "_goal_store", None)
             if gs is not None and hasattr(gs, "save"):
                 gs.save(goal)
-            else:
-                # 无 goal_store 时，直接将 goal 注册到 runtime 的内部列表
-                if hasattr(self._runtime, "_pending_goals"):
-                    self._runtime._pending_goals.append(goal)
-
-            self._goal_processed += 1
-            return 1
+                logger.info("Goal imported into runtime: %s (%s)",
+                            goal.goal_id, domain)
+                return True
+            logger.warning("No runtime goal_store — goal %s dropped", goal.goal_id)
+            return False
         except Exception:
-            logger.exception("Failed to import queued goal: %s", qg.description)
+            logger.exception("Failed to import queued goal: %s", description)
+            return False
+
+    def _claim_persisted_goals(self) -> int:
+        """UX-1: 认领 goals 表中 CLI 创建的 PENDING 人类目标。
+
+        每 tick 最多认领 1 个（与队列同款节流）。认领 = goals 表置 ACTIVE
+        （防重复），内容写入 runtime._goal_store 供 Step 6 分解消费。
+        """
+        if self._domain_goal_store is None:
             return 0
+        try:
+            claimed = self._domain_goal_store.claim_pending_human(limit=1)
+        except Exception:
+            logger.exception("Goal claim failed")
+            return 0
+        for row in claimed:
+            metadata = row.get("metadata")
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except ValueError:
+                    metadata = {}
+            domain = (metadata or {}).get("domain", "writing") if isinstance(metadata, dict) else "writing"
+            if self._import_goal(description=row.get("description", ""),
+                                 domain=domain, goal_id=row["id"]):
+                self._goal_processed += 1
+                logger.info("Claimed persisted goal: %s (domain=%s)",
+                            row["id"], domain)
+        return len(claimed)

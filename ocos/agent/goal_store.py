@@ -23,8 +23,17 @@ from typing import Optional
 
 from ocos.storage.connection import get_connection
 from ocos.agent.goal_types import Goal, GoalLevel, GoalStatus, GoalOriginLevel, GoalAuthority
+from ocos.goal.models import GoalDomain  # UX-1: domain 持久化
 
 logger = logging.getLogger(__name__)
+
+def _domain_from_str(value: str) -> "GoalDomain":
+    """UX-1: db 中的 domain 字符串 → GoalDomain（解析失败回退 WRITING）。"""
+    try:
+        return GoalDomain(value)
+    except ValueError:
+        return GoalDomain.WRITING
+
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS goal (
@@ -38,7 +47,8 @@ CREATE TABLE IF NOT EXISTS goal (
     status          TEXT NOT NULL DEFAULT 'PENDING',
     result_json     TEXT,
     origin_level    TEXT NOT NULL DEFAULT 'SYSTEM',
-    authority       TEXT NOT NULL DEFAULT 'AUTONOMOUS'
+    authority       TEXT NOT NULL DEFAULT 'AUTONOMOUS',
+    domain          TEXT NOT NULL DEFAULT 'writing'
 );
 
 CREATE INDEX IF NOT EXISTS idx_goal_status ON goal(status);
@@ -66,6 +76,10 @@ class GoalSQLiteStore:
         # 2026-08-29 P2-A 修复: 此前 _DDL 定义后从未执行, 建表缺失
         # （对齐 ocos/memory/*/store.py 的 initialize 模式）。
         self._conn.executescript(_DDL)
+        # UX-1: 旧库升级 — legacy goal 表缺 domain 列时 ALTER 补列
+        existing = {r[1] for r in self._conn.execute("PRAGMA table_info(goal)").fetchall()}
+        if existing and "domain" not in existing:
+            self._conn.execute("ALTER TABLE goal ADD COLUMN domain TEXT NOT NULL DEFAULT 'writing'")
         self._conn.commit()
         logger.info("GoalSQLiteStore initialized at %s", self._db_path)
 
@@ -88,8 +102,8 @@ class GoalSQLiteStore:
             """INSERT OR REPLACE INTO goal
                (goal_id, level, description, parent_id, priority,
                 created_at, deadline, status, result_json,
-                origin_level, authority)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                origin_level, authority, domain)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 goal.goal_id,
                 goal.level.value,
@@ -102,6 +116,9 @@ class GoalSQLiteStore:
                 json.dumps(goal.result) if goal.result else None,
                 goal.origin_level.value,
                 goal.authority.value,
+                str(getattr(goal, "domain", GoalDomain.WRITING).value
+                    if hasattr(getattr(goal, "domain", None), "value")
+                    else getattr(goal, "domain", "writing")),
             ),
         )
         self.connection.commit()
@@ -157,4 +174,5 @@ class GoalSQLiteStore:
             result=result,
             origin_level=GoalOriginLevel(d.get("origin_level", "SYSTEM")),
             authority=GoalAuthority(d.get("authority", "AUTONOMOUS")),
+            domain=_domain_from_str(d.get("domain", "writing")),
         )

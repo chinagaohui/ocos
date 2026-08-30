@@ -69,6 +69,7 @@ def cmd_run(args, session) -> int:
     rt.attach_perception_pipeline(build_perception_pipeline(sensors=[]))
     print("  perception: 感知管线已挂载 (0 sensors — 经 FileSensor 注入后生效)")
     print("  engines  : reasoner/planner/decision/reflection/learning 已注册 (AUD-F9)")
+    print("  hint     : 另开终端 — ocos status | ocos goal list | ocos approvals list")
     # GAP-P1-2: 周期健康体检（AlertManager Log+File 通道 → ~/.ocos/alerts/）
     rt.attach_health_loop(build_health_loop())
     rt.start()

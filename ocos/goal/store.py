@@ -129,17 +129,24 @@ class GoalStore:
 
     # ── 加载 ────────────────────────────────────────────────────────
 
+    _GOAL_COLS = ("id, agent_id, level, status, progress, description, "
+                  "priority, parent_id, source, source_id, deadline, "
+                  "created_at, updated_at, metadata, origin_level, authority")
+
+    @staticmethod
+    def _goal_row_to_dict(row) -> dict:
+        keys = ["id", "agent_id", "level", "status", "progress", "description",
+                "priority", "parent_id", "source", "source_id", "deadline",
+                "created_at", "updated_at", "metadata", "origin_level", "authority"]
+        return dict(zip(keys, row))
+
     def load(self, goal_id: str) -> dict | None:
         """按 id 加载单个 goal（AUD-F8: CLI goal status 查询）。"""
         conn = self._conn()
-        conn.row_factory = sqlite3.Row
-        try:
-            row = conn.execute(
-                "SELECT * FROM goals WHERE id = ?", (goal_id,)
-            ).fetchone()
-            return dict(row) if row else None
-        finally:
-            conn.close()
+        row = conn.execute(
+            f"SELECT {self._GOAL_COLS} FROM goals WHERE id = ?", (goal_id,)
+        ).fetchone()
+        return self._goal_row_to_dict(row) if row else None
 
     def load_active(self) -> list[dict]:
         """加载所有活跃 Goal（非终止态）。"""
@@ -170,6 +177,32 @@ class GoalStore:
         ]
 
     # ── 进度 ────────────────────────────────────────────────────────
+
+    def claim_pending_human(self, limit: int = 1) -> list[dict]:
+        """UX-1: 认领 PENDING 的人类来源目标（daemon 每 tick 调用）。
+
+        认领 = 原子置 status='ACTIVE' + updated_at，防止多 daemon 重复认领。
+        返回认领的行（含 metadata 中的 domain）。
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._conn()
+        rows = conn.execute(
+            f"""SELECT {self._GOAL_COLS} FROM goals
+                WHERE status = 'PENDING' AND origin_level = 'HUMAN'
+                ORDER BY created_at LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        claimed = []
+        for row in rows:
+            cur = conn.execute(
+                """UPDATE goals SET status = 'ACTIVE', updated_at = ?
+                   WHERE id = ? AND status = 'PENDING'""",
+                (now, row[0]),
+            )
+            if cur.rowcount:
+                claimed.append(self._goal_row_to_dict(row))
+        conn.commit()
+        return claimed
 
     def update_progress(self, goal_id: str, progress: float) -> bool:
         """更新 Goal 进度。progress 自动钳制到 [0.0, 1.0]。"""
@@ -208,21 +241,25 @@ class GoalStore:
                  datetime.now(_tz.utc).isoformat()),
             )
             conn.commit()
-        finally:
-            conn.close()
+        except Exception:
+            conn.rollback()
+            raise
+
+    _PLAN_COLS = "plan_id, goal_id, dag_json, strategy, task_count, created_at"
 
     def load_plan_dag(self, goal_id: str) -> dict | None:
         """加载 goal 的最新 plan 分解结果（AUD-F8）。"""
         conn = self._conn()
-        conn.row_factory = sqlite3.Row
-        try:
-            row = conn.execute(
-                "SELECT * FROM plan_dag WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1",
-                (goal_id,),
-            ).fetchone()
-            return dict(row) if row else None
-        finally:
-            conn.close()
+        row = conn.execute(
+            f"""SELECT {self._PLAN_COLS} FROM plan_dag
+                WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1""",
+            (goal_id,),
+        ).fetchone()
+        if not row:
+            return None
+        keys = ["plan_id", "goal_id", "dag_json", "strategy",
+                "task_count", "created_at"]
+        return dict(zip(keys, row))
 
     def record_decision(self, goal_id: str, decision_id: str) -> None:
         """记录关联的 Decision ID。"""

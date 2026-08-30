@@ -817,7 +817,8 @@ class AgentRuntime:
                         id=f"GOAL-{uuid.uuid4().hex[:8]}",
                         raw_input=g.description,
                         objective=g.description,
-                        domain=GoalDomain.WRITING,
+                        # UX-1: domain 跟随目标自身（此前硬编码 WRITING）
+                        domain=getattr(g, "domain", GoalDomain.WRITING) or GoalDomain.WRITING,
                         caller="runtime",
                     )
                     dag = TaskDecomposer.decompose(ug)
