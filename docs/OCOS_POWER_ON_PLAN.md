@@ -197,3 +197,5 @@ W5: 5.1/5.2 独立; 5.3 裁决随 W2/W4 落地后执行
 | 2026-08-30 | PW-2.1 | evolution 治理链上电: self_evolution_link(提案→影响分析→沙箱→快照→入待批→migrate→EvolutionMemory); self_knowledge 文件管理迁入 agent 层; 主权冻结域连人工路径都拒绝 | 5281 绿 | (本批) |
 | 2026-08-30 | PW-2.2 | extension 沙箱真隔离: cmd: 前缀候选经 operations/SandboxOps 黑白名单+路径沙盒真实试运行; phase44 全过 | 同上 | (本批) |
 | 2026-08-30 | PW-2.3 | Governor 守门: 链接层冻结域标记检查（禁域连待批都进不了）; SelfGovernor.evaluate 全量接入待 belief 证据链打通（依赖 W1→belief 沉淀） | 同上 | (本批) |
+| 2026-08-30 | PW-3.1 | diagnosis 上电: daemon/repair_link（SystemProbe→FaultDetector→RepairProposer→可逆提案入待批; 记忆膨胀确定性检测→归档修剪提案）; system_repair custom handler + RepairExecutor checkpoint/rollback + 白名单步骤（REINDEX/清缓存/重连/归档, 未白名单自动回滚）; HealthLoop 每 100 tick 诊断循环 | 5286+7 绿 | (本批) |
+| 2026-08-30 | PW-3.2 | 韧性演练脚本 scripts/resilience_drill.py: 注入 40 条陈旧损伤→诊断检出→归档修复→恢复验证→评分 10/10 | 同上 | (本批) |

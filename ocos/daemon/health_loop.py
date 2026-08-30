@@ -37,6 +37,7 @@ class HealthLoop:
         alerts: Optional[AlertManager] = None,
         homeostasis: Optional[HomeostasisManager] = None,
         interval_ticks: int = 100,
+        db_path: Optional[str] = None,   # PW-3.1: 诊断循环需要 db 路径
     ) -> None:
         self._runtime = runtime
         self._examiner = examiner or CognitiveExaminer()
@@ -46,6 +47,8 @@ class HealthLoop:
         self._ticks = 0
         self._last_finding: Optional[DisorderFinding] = None
         self._last_detail: dict[str, Any] = {}
+        self._db_path = db_path
+        self._diagnosis_summary: dict[str, Any] = {}
 
     # ── 对外只读状态 ─────────────────────────────────────────────────────────
 
@@ -77,7 +80,15 @@ class HealthLoop:
         if self._ticks < self._interval_ticks:
             return None
         self._ticks = 0
-        return self.run_check()
+        finding = self.run_check()
+        # PW-3.1: 诊断循环 — 探针/故障检测/修复提案入待批（失败不阻断）
+        try:
+            from ocos.daemon.repair_link import run_diagnosis_cycle
+            if self._db_path:
+                self._diagnosis_summary = run_diagnosis_cycle(self._db_path)
+        except Exception as _dl_e:
+            logger.debug("diagnosis cycle skipped: %s", _dl_e)
+        return finding
 
     def run_check(self) -> Optional[DisorderFinding]:
         """执行一次完整体检（测试可直接调用）。"""

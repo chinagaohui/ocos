@@ -164,6 +164,9 @@ class DecisionBridge:
         # dispatch_by_name 触达 — 批准即应用, 人工 = authority）
         self._dispatcher.register_custom_handler(
             "self_upgrade", self._handler_self_upgrade)
+        # PW-3.1: 系统修复提案的人工批准执行器
+        self._dispatcher.register_custom_handler(
+            "system_repair", self._handler_system_repair)
         return self
 
     # ── 决策执行入口 ──────────────────────────────────────────────────────
@@ -497,6 +500,14 @@ class DecisionBridge:
                     return val
             return DecisionBridge._extract_decision_text(based)
         return ""
+
+    def _handler_system_repair(self, action) -> dict:
+        """PW-3.1: 系统修复 — 白名单步骤 + checkpoint/rollback。"""
+        from ocos.daemon.repair_link import execute_system_repair
+        payload = action.payload or {}
+        if not self._db_path:
+            return {"ok": False, "error": "no db_path — 无法执行数据级修复"}
+        return execute_system_repair(payload, self._db_path)
 
     def execute_approved(self, action_type_name: str,
                          payload: dict | None = None):

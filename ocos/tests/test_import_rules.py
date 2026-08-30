@@ -190,13 +190,15 @@ ALLOWED_IMPORTS = {
                        "ocos.interaction", "ocos.capability_reality",
                        "ocos.storage",
                        "ocos.operations", "ocos.event_memory",
-                       "ocos.agent"],  # PW-2.1: 治理化 self_upgrade 应用
+                       "ocos.agent", "ocos.daemon"],
+                       # PW-2.1 治理化应用 + PW-3.1 系统修复执行
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
                     "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal",
                     "ocos.alerts", "ocos.health_examination",
                     "ocos.perception", "ocos.world_model", "ocos.knowledge",
-                    "ocos.execution", "ocos.engines", "ocos.events"],  # AUD-F9: 引擎实例化(EventBus)
+                    "ocos.execution", "ocos.engines", "ocos.events", "ocos.diagnosis",
+                    "ocos.capability_reality"],  # AUD-F9: 引擎实例化; PW-3.1 修复重连
 }
 
 # 测试文件允许的 import 例外（白名单，当前 unused—保留供将来使用）

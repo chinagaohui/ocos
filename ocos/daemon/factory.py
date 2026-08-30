@@ -94,6 +94,8 @@ def build_health_loop(runtime=None, interval_ticks: int = 100):
         alerts=alerts,
         homeostasis=HomeostasisManager(),
         interval_ticks=interval_ticks,
+        db_path=os.environ.get("OCOS_DB_PATH",
+                               str(Path.home() / ".ocos" / "ocos.db")),
     )
 
 
