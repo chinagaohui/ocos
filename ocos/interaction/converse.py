@@ -140,6 +140,16 @@ class ChatResponder:
         sk = self._self_knowledge()
         if sk:
             lines.append(sk)
+
+        # PW-1.1: 人生智慧（dream 巩固沉淀, 确定性经验而非 LLM 提案）
+        try:
+            from ocos.agent.wisdom_trigger import load_wisdom_context
+            wisdom = load_wisdom_context(self._db_path)
+            if wisdom:
+                lines.append("人生智慧（从共同经历沉淀）: " + "；".join(wisdom))
+        except Exception as e:
+            logger.debug("wisdom context failed: %s", e)
+
         return "\n".join(lines)
 
     # ── E: 内视（深度自省报告） ──────────────────────────────────────
@@ -178,6 +188,12 @@ class ChatResponder:
             out["active_goals"] = f"unavailable: {e}"
 
         out["llm"] = f"openai-compatible, configured={self._has_real_llm()}"
+        try:
+            from ocos.agent.wisdom_trigger import load_wisdom_context
+            out["wisdom"] = load_wisdom_context(self._db_path)
+        except Exception as e:
+            out["wisdom"] = f"unavailable: {e}"
+
         out["self_knowledge"] = (
             _SELF_KNOWLEDGE.read_text(encoding="utf-8")[-400:]
             if _SELF_KNOWLEDGE.exists() else "（暂无 — 可通过自省提案积累）")

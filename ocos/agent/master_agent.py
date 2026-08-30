@@ -868,6 +868,15 @@ class MasterAgent:
         except Exception:
             consolidation["consolidation_stats"] = {}  # 巩固失败不阻塞睡眠
 
+        # PW-1.1: Wisdom Consolidation — 成败经验聚类 → 智慧候选（CLS 慢通路）
+        try:
+            from ocos.agent.wisdom_trigger import consolidate_wisdom
+            hub = getattr(self, "_memory_hub_ref", None)
+            if hub is not None:
+                consolidation["wisdom_stats"] = consolidate_wisdom(hub)
+        except Exception:
+            consolidation["wisdom_stats"] = {}  # 智慧提炼失败不阻塞睡眠
+
         self._control_loop.wake_from_sleep()
         return consolidation
 
@@ -889,6 +898,7 @@ class MasterAgent:
         self._episode_store = hub.episode
         self._belief_store = hub.belief
         self._pattern_store = hub.pattern
+        self._memory_hub_ref = hub  # PW-1.1: wisdom 巩固需要 hub（_db_path + episode）
 
     def _consolidate_episodes(self) -> dict[str, Any]:
         """重放当日未巩固 Episode → Belief/Pattern 巩固 + 弱模式修剪（CLS 慢系统闭环）。

@@ -56,7 +56,7 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge": ["ocos.knowledge", "ocos.memory.semantic"],  # GAP-P2-1: registry→semantic 镜像
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
-    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive"],
+    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", ],
     "ocos.auth": ["ocos.storage"],
     "ocos.recovery": ["ocos.storage"],
     # Phase 21: 新增基础设施层
@@ -182,7 +182,8 @@ ALLOWED_IMPORTS = {
     # R4-A: 执行铰链 — 决策输出 → dispatcher 风险分级 → capability_reality 沙盒执行
     "ocos.execution": ["ocos.autonomous_runtime", "ocos.agent_orchestration",
                        "ocos.interaction", "ocos.capability_reality",
-                       "ocos.storage"],  # AUD-F12: PendingStore 持久化
+                       "ocos.storage",
+                       "ocos.operations"],  # PW-4.1: 沙盒/HTTP 闸门执行层
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
                     "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal",

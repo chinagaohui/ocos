@@ -23,6 +23,8 @@ class ActionType(Enum):
     FEEDBACK_PROCESS = auto()     # Process OpenTale chapter output
     REFLECT = auto()              # Self-reflection
     NOOP = auto()                 # Do nothing
+    RUN_COMMAND = auto()          # PW-4.1: 沙盒命令（黑白名单，ASK 审批后执行）
+    HTTP_FETCH = auto()           # PW-4.1: 白名单 URL 抓取（ASK 审批后执行）
 
 
 @dataclass

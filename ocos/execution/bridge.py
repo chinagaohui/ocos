@@ -49,6 +49,8 @@ AUTO_ACTIONS: frozenset[ActionType] = frozenset({
 ASK_ACTIONS: frozenset[ActionType] = frozenset({
     ActionType.WRITE_CHAPTER,        # OpenTale 写章节 (中危, 可配置)
     ActionType.SEARCH_WEB,           # 网络检索 (中危)
+    ActionType.RUN_COMMAND,          # PW-4.1: 沙盒命令 (黑/白名单闸门后真实执行)
+    ActionType.HTTP_FETCH,           # PW-4.1: 白名单 URL 抓取
 })
 
 DENY_ACTIONS: frozenset[ActionType] = frozenset()
@@ -151,6 +153,10 @@ class DecisionBridge:
             ActionType.FEEDBACK_PROCESS, self._handler_feedback)
         self._dispatcher.register_handler(
             ActionType.NOOP, self._handler_noop)
+        self._dispatcher.register_handler(
+            ActionType.RUN_COMMAND, self._handler_run_command)
+        self._dispatcher.register_handler(
+            ActionType.HTTP_FETCH, self._handler_http_fetch)
         # D: 自我升级提案的人工批准执行器（字符串 action_type, 经
         # dispatch_by_name 触达 — 批准即应用, 人工 = authority）
         self._dispatcher.register_custom_handler(
@@ -261,6 +267,14 @@ class DecisionBridge:
         elif any(k in low for k in ("consolidat", "organize memory")):
             actions[:] = [DispatchedAction(
                 ActionType.CONSOLIDATE_MEMORY, "memory", {"prompt": text[:200]})]
+        elif any(k in low for k in ("run command", "执行命令", "跑一下", "运行命令")):
+            # PW-4.1: 命令文本从消息中提取（`...` 反引号优先, 否则整句）
+            import re as _re
+            m = _re.search(r"`([^`]+)`", text)
+            command = m.group(1).strip() if m else text[:200]
+            actions[:] = [DispatchedAction(
+                ActionType.RUN_COMMAND, "sandbox",
+                {"command": command, "prompt": text[:200]})]
 
     def _adjudicate(self, action: DispatchedAction) -> tuple[str, str]:
         """风险分级 + PermissionGuard 语义双检。返回 (verdict, reason)。"""
@@ -322,6 +336,46 @@ class DecisionBridge:
 
     def _handler_noop(self, action: DispatchedAction) -> dict:
         return {"noop": True, "reason": action.payload.get("reason", "")}
+
+    def _handler_run_command(self, action: DispatchedAction) -> dict:
+        """PW-4.1: 沙盒命令真实执行 — operations/SandboxOps 闸门。
+
+        四重防护: 命令黑名单（永久拦截）→ 白名单（最小集）→ 路径沙盒
+        → 审计。仅经 ASK 人工批准后触达。
+        """
+        command = (action.payload or {}).get("command", "")
+        if not command:
+            return {"ok": False, "error": "empty command"}
+        try:
+            import os as _os
+            from ocos.operations.sandbox_ops import SandboxCommand, SandboxOps
+            workdir = "/tmp/ocos_sandbox"
+            _os.makedirs(workdir, exist_ok=True)  # 沙盒工作目录（SandboxOps 不自建）
+            result = SandboxOps(strict=True).execute(
+                SandboxCommand(command=command, workdir=workdir, timeout=30.0))
+            return {"ok": result.success, "blocked": result.blocked,
+                    "block_reason": result.block_reason,
+                    "exit_code": result.exit_code,
+                    "stdout": (result.stdout or "")[:500],
+                    "stderr": (result.stderr or "")[:300]}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _handler_http_fetch(self, action: DispatchedAction) -> dict:
+        """PW-4.1: 白名单 URL 抓取 — operations/SearchOps。"""
+        payload = action.payload or {}
+        url = payload.get("url", "")
+        if not url:
+            return {"ok": False, "error": "empty url"}
+        try:
+            from ocos.operations.search_ops import SearchOps, SearchQuery
+            result = SearchOps().search(SearchQuery(
+                query=payload.get("query", url), url=url,
+                params=payload.get("params", {}) or {}, timeout=10.0))
+            return {"ok": result.success, "status_code": result.status_code,
+                    "results": result.results[:10], "error": result.error}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def _handler_self_upgrade(self, action: DispatchedAction) -> dict:
         """D: 应用已批准的自我升级 — 追加到 ~/.ocos/self_knowledge.md。
