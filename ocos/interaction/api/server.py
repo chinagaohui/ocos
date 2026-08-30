@@ -49,6 +49,7 @@ from ocos.interaction.api.routes.belief import router as belief_router
 from ocos.interaction.api.routes.trace import router as trace_router
 from ocos.interaction.api.routes.chat import router as chat_router  # S6: WebChat
 from ocos.interaction.api.routes.quality import router as quality_router  # 2026-08-23: 质量分析/趋势
+from ocos.interaction.api.routes.converse import router as converse_router  # UX-P2: 对话/状态/审批
 
 app.include_router(goal_router)
 app.include_router(plan_router)
@@ -57,6 +58,23 @@ app.include_router(belief_router)
 app.include_router(trace_router)
 app.include_router(chat_router)
 app.include_router(quality_router)
+app.include_router(converse_router)
+
+
+@app.get("/", include_in_schema=False)
+async def ui_root():
+    """UX-P2: 根路径重定向到聊天页。"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/ui")
+
+
+@app.get("/ui", include_in_schema=False, tags=["ui"])
+async def ui_page():
+    """GET /ui — 数字生命聊天页（单文件静态页）。"""
+    from pathlib import Path
+    from fastapi.responses import HTMLResponse
+    html = Path(__file__).parent / "static" / "index.html"
+    return HTMLResponse(html.read_text(encoding="utf-8"))
 
 
 def main():

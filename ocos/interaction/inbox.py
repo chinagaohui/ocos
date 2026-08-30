@@ -23,17 +23,19 @@ CREATE TABLE IF NOT EXISTS user_messages (
     status       TEXT NOT NULL DEFAULT 'queued',
     created_at   TEXT NOT NULL,
     consumed_at  TEXT,
-    note         TEXT DEFAULT ''
+    note         TEXT DEFAULT '',
+    reply        TEXT DEFAULT '',
+    replied_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_user_messages_status ON user_messages(status);
 """
 
-_COLS = "id, sender, content, status, created_at, consumed_at, note"
+_COLS = "id, sender, content, status, created_at, consumed_at, note, reply, replied_at"
 
 
 def _row_to_dict(row) -> dict:
     keys = ["id", "sender", "content", "status",
-            "created_at", "consumed_at", "note"]
+            "created_at", "consumed_at", "note", "reply", "replied_at"]
     return dict(zip(keys, row))
 
 
@@ -46,6 +48,14 @@ class UserInbox:
     def _conn(self):
         conn = get_connection(self._db_path)
         conn.executescript(_DDL)   # 自愈建表（CLI 独立运行时未经 ensure_schema）
+        # R1: 旧库升级 — legacy user_messages 表缺 reply 列时 ALTER 补列
+        existing = {
+            r[1] for r in conn.execute("PRAGMA table_info(user_messages)").fetchall()
+        }
+        if existing:
+            for col in ("reply", "replied_at"):
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE user_messages ADD COLUMN {col} TEXT DEFAULT ''")
         conn.commit()
         return conn
 
@@ -92,6 +102,37 @@ class UserInbox:
             (limit,),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
+
+    def get(self, mid: str) -> Optional[dict]:
+        """按 id 取单条消息。"""
+        conn = self._conn()
+        row = conn.execute(
+            f"SELECT {_COLS} FROM user_messages WHERE id = ?", (mid,)
+        ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def reply(self, mid: str, reply_text: str) -> None:
+        """R1: 写回 agent 的回复（daemon 消费消息后调用）。"""
+        conn = self._conn()
+        conn.execute(
+            "UPDATE user_messages SET reply = ?, replied_at = ? WHERE id = ?",
+            (reply_text[:4000], datetime.now(timezone.utc).isoformat(), mid),
+        )
+        conn.commit()
+        logger.info("UserInbox: reply written for %s (%d chars)",
+                    mid, len(reply_text))
+
+    def wait_for_reply(self, mid: str, timeout: float = 60.0,
+                       interval: float = 0.5) -> Optional[dict]:
+        """R3: 轮询等待回复（ocos say --wait）。超时返回当前状态。"""
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            row = self.get(mid)
+            if row and row.get("reply"):
+                return row
+            time.sleep(interval)
+        return self.get(mid)
 
     def count_queued(self) -> int:
         conn = self._conn()

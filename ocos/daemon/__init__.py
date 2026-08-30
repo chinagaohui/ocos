@@ -87,12 +87,18 @@ class ResidentRuntime:
                 logger.warning("GoalStore unavailable, goal claim disabled: %s", e)
         # UX-P2: 用户消息收件箱（ocos say → daemon 消费 → 感知事件）
         self._user_inbox: Any = None
+        self._responder: Any = None
         if db_path and db_path != ":memory:":
             try:
                 from ocos.interaction.inbox import UserInbox
                 self._user_inbox = UserInbox(db_path=db_path)
             except Exception as e:
                 logger.warning("UserInbox unavailable, say channel disabled: %s", e)
+            try:
+                from ocos.interaction.converse import ChatResponder
+                self._responder = ChatResponder(db_path=db_path)
+            except Exception as e:
+                logger.warning("ChatResponder unavailable: %s", e)
         self._tick_interval = tick_interval
         self._max_idle_cycles = max_idle_cycles
         self._state: DaemonState = DaemonState.STOPPED
@@ -317,6 +323,15 @@ class ResidentRuntime:
             else:
                 logger.warning("User message inject failed: %s — %s",
                                msg["id"], result.get("error"))
+            # R1: 生成并回写自然语言回复（say --wait 的取回点）
+            if self._responder is not None:
+                try:
+                    out = self._responder.respond(msg["content"])
+                    self._user_inbox.reply(msg["id"], out["reply"])
+                    logger.info("Reply written: %s (provider=%s)",
+                                msg["id"], out["provider"])
+                except Exception:
+                    logger.exception("Reply generation failed for %s", msg["id"])
         return len(messages)
 
     def _claim_persisted_goals(self) -> int:

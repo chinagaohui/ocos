@@ -133,9 +133,10 @@ ALLOWED_IMPORTS = {
     # 注: 本 key 与上方 Phase 39 键重复 — dict 字面量后值生效（历史遗留,
     # UX-P2 合并两处为一份含并集的清单）
     "ocos.interaction": ["ocos.goal", "ocos.constitution", "ocos.logging",
-                         "ocos.memory.episode", "ocos.memory.belief",
+                         "ocos.memory", "ocos.memory.episode", "ocos.memory.belief",
                          "ocos.self.identity_boundary",
-                         "ocos.storage", "ocos.agent"],
+                         "ocos.storage", "ocos.agent", "ocos.execution",
+                         "ocos.engines"],  # UX-P2: UserInbox/ChatResponder
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
                                        "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution"],  # S4: Organ Client（写作器官驱动）; P1-B: 生产入口经 daemon 装配层
@@ -145,7 +146,7 @@ ALLOWED_IMPORTS = {
                                         "ocos.execution"],  # UX-P2: /approvals 与 CLI 同源
     "ocos.interaction.api": ["ocos.interaction"],
     "ocos.interaction.api.routes": ["ocos.interaction", "ocos.goal", "ocos.kernel",
-                                     "ocos.planning", "ocos.opentale_bridge"],  # S6: WebChat 决策/器官调用
+                                     "ocos.planning", "ocos.opentale_bridge", "ocos.execution"],  # S6: WebChat 决策/器官调用
     # Phase 52: Perception System
     "ocos.perception": ["ocos.perception", "ocos.world_model"],  # GAP-P1-3: 感知链桥接世界模型
     # Phase 53: Active Interaction — merged with existing

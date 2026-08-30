@@ -214,7 +214,9 @@ CREATE_USER_MESSAGES = [
         status       TEXT NOT NULL DEFAULT 'queued',
         created_at   TEXT NOT NULL,
         consumed_at  TEXT,
-        note         TEXT DEFAULT ''
+        note         TEXT DEFAULT '',
+        reply        TEXT DEFAULT '',
+        replied_at   TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_user_messages_status ON user_messages(status)",
 ]

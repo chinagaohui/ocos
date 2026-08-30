@@ -27,8 +27,26 @@ def cmd_say(args, session: InteractionSession) -> int:
     print(f"Message queued: {mid}")
     print(f"  content : {text[:60]}{'...' if len(text) > 60 else ''}")
     print(f"  inbox   : {queued} 条待处理")
-    print("  Next: 运行中的 daemon 将在下一 tick 注入认知循环")
-    print("        观察处理过程: ocos status | ocos trace show")
+
+    wait = bool(getattr(args, "wait", False))
+    if not wait:
+        print("  Next: 运行中的 daemon 将在下一 tick 注入认知循环并回复")
+        print('        取回复: ocos say --wait "..." 或 ocos inbox')
+        session.record_query()
+        return 0
+
+    # R3: 等待回复
+    timeout = float(getattr(args, "timeout", 60) or 60)
+    print(f"  waiting : 等待回复（最多 {timeout:.0f}s — 需 ocos run 正在运行）...")
+    row = inbox.wait_for_reply(mid, timeout=timeout)
+    reply = (row or {}).get("reply", "")
+    if reply:
+        print("-" * 52)
+        print(reply)
+        print("-" * 52)
+    else:
+        print("  超时未收到回复 — 确认 ocos run 正在运行；稍后 ocos inbox 查看")
+        return 1
     session.record_query()
     return 0
 

@@ -48,6 +48,10 @@ Examples:
     # ── say/inbox（UX-P2: 对话通道） ─────────────────────────────────
     say = subparsers.add_parser("say", help="Send a message to the running cognitive engine")
     say.add_argument("message", type=str, help="用户消息内容")
+    say.add_argument("--wait", action="store_true",
+                     help="等待并显示 agent 的回复（需 ocos run 正在运行）")
+    say.add_argument("--timeout", type=float, default=60.0,
+                     help="--wait 的最长等待秒数（默认 60）")
     say.add_argument("--db", type=str, default="", help="SQLite 路径")
     inbox = subparsers.add_parser("inbox", help="View user message inbox")
     inbox.add_argument("--db", type=str, default="", help="SQLite 路径")

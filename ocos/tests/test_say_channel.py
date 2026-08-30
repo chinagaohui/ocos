@@ -94,6 +94,7 @@ class TestDaemonInboxDrain:
 
         rt = ResidentRuntime.__new__(ResidentRuntime)
         rt._user_inbox = UserInbox(db)
+        rt._responder = None  # 裸装配: 无回复器（诚实跳过回写）
         agent = build_master_agent("t")
         rt._runtime = AgentRuntime(agent=agent, max_cycles=10,
                                    db_path=":memory:")
@@ -102,3 +103,46 @@ class TestDaemonInboxDrain:
         n = rt._drain_user_inbox()
         assert n == 1
         assert UserInbox(db).count_queued() == 0
+
+
+class TestReplyLoop:
+    """R1-R3: 回话闭环 — respond + 回写 + --wait 取回。"""
+
+    def test_responder_state_reply(self, db):
+        from ocos.interaction.converse import ChatResponder
+        out = ChatResponder(db).respond("你好")
+        assert out["mock"] is True          # 无 LLM key → 诚实状态回复
+        assert "你好" in out["reply"]
+        assert "活跃目标" in out["reply"]
+
+    def test_daemon_writes_reply(self, db):
+        from ocos.interaction.inbox import UserInbox
+        from ocos.interaction.converse import ChatResponder
+        inbox = UserInbox(db)
+        mid = inbox.post("在吗？")
+        out = ChatResponder(db).respond("在吗？")
+        inbox.reply(mid, out["reply"])
+        row = inbox.wait_for_reply(mid, timeout=1)
+        assert row and "在吗？" in row["reply"]
+
+    def test_say_wait_returns_reply(self, db, monkeypatch):
+        """say --wait 在 daemon 已回写时立即返回回复。"""
+        import types
+        from ocos.interaction.cli.commands.say import cmd_say
+        from ocos.interaction.base import InteractionSession
+        from ocos.interaction.inbox import UserInbox
+
+        inbox = UserInbox(db)
+        # 预置: post 后由"daemon"立即回写（模拟已运行的 daemon）
+        orig_post = UserInbox.post
+        def post_and_reply(self, content, sender="cli"):
+            mid = orig_post(self, content, sender)
+            self.reply(mid, "我是 OCOS，一切正常。")
+            return mid
+        monkeypatch.setattr(
+            "ocos.interaction.inbox.UserInbox.post", post_and_reply)
+
+        rc = cmd_say(types.SimpleNamespace(
+            message="你好", wait=True, timeout=5, db=""),
+            InteractionSession(caller="cli"))
+        assert rc == 0
