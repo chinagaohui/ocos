@@ -39,7 +39,7 @@ def run_diagnosis_cycle(db_path: str) -> dict:
     from ocos.diagnosis.repair_proposer import RepairProposer
     from ocos.diagnosis.system_probe import SystemProbe
 
-    probe = SystemProbe()
+    probe = SystemProbe(db_path=db_path)
     snapshot = probe.capture()
     detector = FaultDetector()
     signals = detector.feed(snapshot)
@@ -73,8 +73,12 @@ def run_diagnosis_cycle(db_path: str) -> dict:
                 logger.info("Repair proposal skipped (steps not whitelisted): %s",
                             proposal.description[:50])
                 continue
+            # UX: 相同描述的修复提案已在待批 → 跳过（防诊断循环重复刷屏）
             from ocos.execution.pending import PendingStore
-            store = PendingStore(db_path=db_path)
+            _store = PendingStore(db_path=db_path)
+            if any(proposal.description in (p.get("description") or "")
+                   for p in _store.list_by_status("pending")):
+                continue
             pending_id = store.enqueue(
                 action_type="system_repair", target="system",
                 payload={

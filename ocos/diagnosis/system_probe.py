@@ -33,6 +33,7 @@ class SystemProbe:
     """
 
     tick: int = 0
+    db_path: str = ""   # UX 修复: event_memory 探针需要真实 DB 路径
     probes_enabled: list[str] = field(default_factory=lambda: [
         "runtime", "persistence", "event_memory", "memory",
     ])
@@ -116,16 +117,36 @@ class SystemProbe:
         )
 
     def _probe_event_memory(self) -> ComponentHealth:
-        """探测事件记忆层。"""
+        """探测事件记忆层。
+
+        UX 修复: 此前调用不存在的 store.count() → 探针必抛异常 →
+        event_memory 永远"降级" → 诊断循环无限提案"重建存储索引"。
+        现改为检查真实 DB 的 event_store 表（存在 + 可查询 + 行数）。
+        """
         try:
-            from ocos.event_memory import EventStore
-            store = EventStore()
-            event_count = store.count()
-            return ComponentHealth(
-                component="event_memory",
-                healthy=True,
-                metrics={"event_count": event_count},
-            )
+            import sqlite3 as _sq
+            if not self.db_path:
+                return ComponentHealth(
+                    component="event_memory", healthy=True,
+                    metrics={"status": "no db (in-memory mode)"},
+                    warnings=["db_path 未配置 — 跳过持久化检查"])
+            conn = _sq.connect(self.db_path)
+            try:
+                tables = {r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                if "event_store" not in tables:
+                    return ComponentHealth(
+                        component="event_memory", healthy=True,
+                        metrics={"event_count": 0, "status": "table_not_created"},
+                    )
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM event_store").fetchone()[0]
+                return ComponentHealth(
+                    component="event_memory", healthy=True,
+                    metrics={"event_count": count},
+                )
+            finally:
+                conn.close()
         except Exception as e:
             return ComponentHealth(
                 component="event_memory",
