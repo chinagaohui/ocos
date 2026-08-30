@@ -46,8 +46,13 @@ class ActionDispatcher:
 
     # Registered handlers
     _handlers: dict[ActionType, Callable] = field(default_factory=dict)
+    _custom_handlers: dict[str, Callable] = field(default_factory=dict)  # UX-D: 字符串键
     _history: list[DispatchedAction] = field(default_factory=list)
     _cooldown_until: Optional[datetime] = None
+
+    def register_custom_handler(self, name: str, handler: Callable) -> None:
+        """UX-D: 注册字符串键的自定义 handler（非 ActionType 枚举，如 self_upgrade）。"""
+        self._custom_handlers[name] = handler
 
     def register_handler(self, action_type: ActionType, handler: Callable) -> None:
         """Register a handler for a specific action type."""
@@ -137,11 +142,26 @@ class ActionDispatcher:
         return actions
 
     def dispatch_by_name(self, action_type_name: str,
-                         payload: Optional[dict] = None) -> Optional[DispatchedAction]:
+                         payload: Optional[dict] = None):
         """AUD-F12: 按名称派发（待批动作审批后回放）。
 
         未知 ActionType 或无注册 handler → None（调用方诚实记 blocked）。
+        UX-D: 自定义字符串 handler（如 self_upgrade）同样可触达 —
+        返回带 .status/.result 的轻量结果对象。
         """
+        if action_type_name in self._custom_handlers:
+            from types import SimpleNamespace
+            action = SimpleNamespace(
+                action_type=action_type_name, target="custom",
+                payload=payload or {}, status="executing", result=None)
+            try:
+                action.result = self._custom_handlers[action_type_name](action)
+                action.status = "done"
+            except Exception as e:
+                action.status = "failed"
+                action.result = str(e)
+            self._history.append(action)
+            return action
         try:
             at = ActionType[action_type_name]
         except KeyError:

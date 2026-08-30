@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -89,6 +91,56 @@ async def summary() -> APIResponse:
     finally:
         conn.close()
     return APIResponse(success=True, message="ok", data=data)
+
+
+# ── E: 内视 ─────────────────────────────────────────────────────────
+
+@router.get("/ocos/introspect", tags=["converse"])
+async def introspect() -> APIResponse:
+    """GET /ocos/introspect — agent 对自身内部状态的深度检视报告。"""
+    from ocos.interaction.converse import ChatResponder
+    out = ChatResponder(db_path=_db()).build_introspection()
+    return APIResponse(success=True, message="ok", data=out)
+
+
+# ── D: 自我迭代（自省 → 提案入待批） ────────────────────────────────
+
+@router.post("/ocos/self-improve", tags=["converse"])
+async def self_improve() -> APIResponse:
+    """POST /ocos/self-improve — 分析近期对话，产出自我升级提案。
+
+    提案入待批队列（action_type=self_upgrade），人工批准后应用到
+    ~/.ocos/self_knowledge.md 并回注对话提示词。
+    """
+    from ocos.interaction.converse import ChatResponder
+    out = await asyncio.to_thread(ChatResponder(db_path=_db()).self_improve)
+    return APIResponse(success=True, message="ok", data=out)
+
+
+# ── C: 对话转目标（聊天 → daemon 认领执行） ─────────────────────────
+
+@router.post("/ocos/goals-from-chat", tags=["converse"])
+async def goals_from_chat(body: dict[str, Any]) -> APIResponse:
+    """POST /ocos/goals-from-chat — 把一句话转为 PENDING 人类目标。
+
+    daemon 认领后按 metadata.domain 分解执行；写文件/跑命令类子任务
+    经 DecisionBridge 进待批队列。
+    """
+    message = str(body.get("message", "")).strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    domain = str(body.get("domain", "development"))
+    from ocos.goal.store import GoalStore
+    store = GoalStore(db_path=_db())
+    goal_id = f"GOAL-{uuid.uuid4().hex[:12]}"
+    store.save(
+        goal_id=goal_id, level="USER", status="PENDING",
+        description=message[:200], priority=3.0, source="chat",
+        origin_level="HUMAN", authority="FRAMEWORK",
+        metadata={"domain": domain},
+    )
+    return APIResponse(success=True, message="goal created",
+                       data={"goal_id": goal_id, "domain": domain})
 
 
 # ── 待批动作（与 CLI approvals 同源） ────────────────────────────────

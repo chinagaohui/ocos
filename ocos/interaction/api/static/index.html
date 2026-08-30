@@ -102,6 +102,24 @@
           width:88px; cursor:pointer; letter-spacing:.2em; }
   #send:hover { background:rgba(53,224,255,.12); }
   #send:disabled { opacity:.4; cursor:default; }
+  .ops { margin-top:10px; display:flex; gap:8px; }
+  .op { background:transparent; color:var(--cyan); border:1px solid var(--line);
+        border-radius:8px; padding:4px 10px; font-size:11px; cursor:pointer;
+        letter-spacing:.1em; }
+  .op:hover { background:rgba(53,224,255,.12); }
+  #introspect { position:fixed; right:26px; top:70px; width:360px;
+                max-height:70vh; overflow-y:auto; background:rgba(8,14,24,.92);
+                border:1px solid var(--line); border-radius:14px;
+                padding:14px; backdrop-filter:blur(10px); z-index:10; }
+  #introspect h2 { font-size:12px; color:var(--cyan); letter-spacing:.2em;
+                   display:flex; justify-content:space-between; align-items:center; }
+  #introspect pre { font-size:11px; color:var(--fg); white-space:pre-wrap;
+                    word-break:break-all; margin-top:8px; }
+  .hidden { display:none !important; }
+  .togoal { display:inline-block; margin-left:10px; color:var(--cyan);
+            font-size:11px; cursor:pointer; opacity:.7; border-bottom:
+            1px dotted var(--cyan); }
+  .togoal:hover { opacity:1; }
 </style>
 </head>
 <body>
@@ -114,6 +132,14 @@
   <h1>OCOS</h1>
   <div class="sub">DIGITAL ORGANISM · 数字生命</div>
   <div class="clock" id="clock"></div>
+  <div class="ops">
+    <button class="op" onclick="toggleIntrospect()">◉ 内视</button>
+    <button class="op" onclick="selfImprove(this)">↻ 自省升级</button>
+  </div>
+</div>
+<div id="introspect" class="hidden">
+  <h2>INTROSPECTION · 内视 <button class="op" onclick="document.getElementById('introspect').classList.add('hidden')">✕</button></h2>
+  <pre id="intro-body">加载中…</pre>
 </div>
 
 <div id="corestate">待命中</div>
@@ -253,6 +279,14 @@ function bubble(text, who, mock) {
   const div = document.createElement("div");
   div.className = "bubble " + who + (mock ? " mock" : "");
   div.textContent = text;
+  if (who === "user") {
+    const op = document.createElement("span");
+    op.className = "togoal";
+    op.textContent = "→目标";
+    op.title = "把这句话转为目标，daemon 自动认领执行";
+    op.onclick = () => toGoal(text, op);
+    div.appendChild(op);
+  }
   if (mock) {
     const tag = document.createElement("span");
     tag.className = "tag";
@@ -341,6 +375,54 @@ async function refreshSide() {
 async function decide(pid, action) {
   await fetch(`/ocos/approvals/${pid}/${action}`, {method: "POST"});
   refreshSide();
+}
+
+async function toGoal(text, el) {
+  el.textContent = "…";
+  try {
+    const r = await fetch("/ocos/goals-from-chat", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({message: text}),
+    });
+    const j = await r.json();
+    el.textContent = j.success ? "✓已入列" : "✗失败";
+    bubble(`已把「${text.slice(0, 30)}」转为目标（${j.data.goal_id}），daemon 将自动认领执行。`, "bot");
+  } catch (e) { el.textContent = "✗失败"; }
+  refreshSide();
+}
+
+async function toggleIntrospect() {
+  const panel = document.getElementById("introspect");
+  if (!panel.classList.contains("hidden")) {
+    panel.classList.add("hidden"); return;
+  }
+  panel.classList.remove("hidden");
+  document.getElementById("intro-body").textContent = "内视中…";
+  try {
+    const j = await (await fetch("/ocos/introspect")).json();
+    document.getElementById("intro-body").textContent =
+      JSON.stringify(j.data, null, 2);
+  } catch (e) {
+    document.getElementById("intro-body").textContent = "内视失败: " + e;
+  }
+}
+
+async function selfImprove(btn) {
+  btn.disabled = true; btn.textContent = "自省中…";
+  setState("thinking", "自省中");
+  try {
+    const j = await (await fetch("/ocos/self-improve", {method: "POST"})).json();
+    const d = j.data;
+    if (!d.proposals || !d.proposals.length) {
+      bubble(d.note || "本轮没有值得记的改进点。", "bot", d.mock);
+    } else {
+      bubble(`自省完成，产生 ${d.proposals.length} 条升级提案，已进入待批队列等你裁决：` +
+             d.proposals.map(p => "「" + p.title + "」").join(" "), "bot");
+      refreshSide();
+    }
+  } catch (e) { bubble("自省失败: " + e, "bot"); }
+  setState("idle", "待命中");
+  btn.disabled = false; btn.textContent = "↻ 自省升级";
 }
 refreshSide();
 setInterval(refreshSide, 5000);

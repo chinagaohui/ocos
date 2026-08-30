@@ -151,6 +151,10 @@ class DecisionBridge:
             ActionType.FEEDBACK_PROCESS, self._handler_feedback)
         self._dispatcher.register_handler(
             ActionType.NOOP, self._handler_noop)
+        # D: 自我升级提案的人工批准执行器（字符串 action_type, 经
+        # dispatch_by_name 触达 — 批准即应用, 人工 = authority）
+        self._dispatcher.register_custom_handler(
+            "self_upgrade", self._handler_self_upgrade)
         return self
 
     # ── 决策执行入口 ──────────────────────────────────────────────────────
@@ -318,6 +322,19 @@ class DecisionBridge:
 
     def _handler_noop(self, action: DispatchedAction) -> dict:
         return {"noop": True, "reason": action.payload.get("reason", "")}
+
+    def _handler_self_upgrade(self, action: DispatchedAction) -> dict:
+        """D: 应用已批准的自我升级 — 追加到 ~/.ocos/self_knowledge.md。
+
+        人工批准 = authority（宪法禁 modify_self 的自主路径, 但主人显式
+        批准的提案例外）。下次 ChatResponder 构建提示词时生效。
+        """
+        from ocos.interaction.converse import ChatResponder
+        change = (action.payload or {}).get("change", "")
+        if not change:
+            return {"ok": False, "error": "empty change payload"}
+        applied = ChatResponder.apply_self_upgrade(change)
+        return {"ok": True, "applied": applied}
 
     # ── capability_reality 调用 ───────────────────────────────────────────
 
