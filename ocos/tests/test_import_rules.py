@@ -136,7 +136,8 @@ ALLOWED_IMPORTS = {
                          "ocos.memory", "ocos.memory.episode", "ocos.memory.belief",
                          "ocos.self.identity_boundary",
                          "ocos.storage", "ocos.agent", "ocos.execution",
-                         "ocos.engines"],  # UX-P2: UserInbox/ChatResponder
+                         "ocos.engines",
+                         "ocos.capability_reality"],  # UX-P2: UserInbox/ChatResponder 自我认知
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
                                        "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution"],  # S4: Organ Client（写作器官驱动）; P1-B: 生产入口经 daemon 装配层
