@@ -53,6 +53,8 @@ def cmd_run(args, session) -> int:
     from ocos.daemon import ResidentRuntime
     from ocos.daemon.factory import build_health_loop
     from ocos.daemon.factory import build_execution_bridge
+    from ocos.daemon.factory import build_knowledge_abi
+    from ocos.daemon.factory import build_perception_pipeline
 
     rt = ResidentRuntime(
         agent,
@@ -63,10 +65,20 @@ def cmd_run(args, session) -> int:
     build_execution_bridge(agent)
     print("  bridge   : DecisionBridge 已挂载 (AUTO 真实执行 / ASK 待批)")
     print("             注意: ASK 待批队列暂无消费方 (R4-B Outbox 未建), 待批动作不会被执行")
+    # AUD-F1: 感知管线 — 默认零传感器（零噪音零写入），传感器经 build_perception_pipeline(sensors=[...]) 注入
+    rt.attach_perception_pipeline(build_perception_pipeline(sensors=[]))
+    print("  perception: 感知管线已挂载 (0 sensors — 经 FileSensor 注入后生效)")
     # GAP-P1-2: 周期健康体检（AlertManager Log+File 通道 → ~/.ocos/alerts/）
     rt.attach_health_loop(build_health_loop())
     rt.start()
     print(f"  runtime  : RUNNING (cycle={rt.cycle_count})")
+
+    # AUD-F1: 知识平面 — boot() 已建 MemoryHub，Registry 镜像落 SemanticStore。
+    # knowledge_abi 待 AUD-F9 引擎注册时经引擎 knowledge_abi 构造参数供引擎消费。
+    hub = rt.memory_hub
+    knowledge_abi = build_knowledge_abi(semantic_store=hub.semantic if hub else None)
+    print("  knowledge: KnowledgeRegistry 已启用 (SemanticStore 镜像: %s)"
+          % ("on" if hub else "off (no hub)"))
 
     # 优雅关闭: Ctrl-C → stop()
     stop_event = threading.Event()

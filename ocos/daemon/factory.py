@@ -96,6 +96,19 @@ def build_knowledge_registry(semantic_store=None):
     return KnowledgeRegistry(semantic_store=semantic_store)
 
 
+def build_knowledge_abi(semantic_store=None):
+    """AUD-F1: 知识平面统一入口 — KnowledgeABI(registry + lifecycle)。
+
+    供引擎（consolidation/promotion 的 knowledge_abi 构造参数）与运行时
+    装配使用；semantic_store 经 build_knowledge_registry 启用落库镜像。
+    """
+    from ocos.knowledge.knowledge_abi import KnowledgeABI
+    from ocos.knowledge.store.lifecycle import KnowledgeLifecycle
+
+    registry = build_knowledge_registry(semantic_store=semantic_store)
+    return KnowledgeABI(registry=registry, lifecycle=KnowledgeLifecycle(registry))
+
+
 def build_execution_bridge(agent: Any = None, agent_id: str = "decision_bridge"):
     """R4-A: 组装 DecisionBridge — 自治决策 → 真实任务执行铰链。
 

@@ -60,6 +60,7 @@ class ResidentRuntime:
         max_idle_cycles: int = 0,
         kernel: Optional[Any] = None,
         health_loop: Optional[Any] = None,  # GAP-P1-2: 周期健康体检（daemon.health_loop.HealthLoop）
+        perception_pipeline: Optional[Any] = None,  # AUD-F1: 感知管线（perception.pipeline.PerceptionPipeline）
     ) -> None:
         from ocos.agent.agent_runtime import AgentRuntime
         self._runtime: AgentRuntime = AgentRuntime(
@@ -74,6 +75,7 @@ class ResidentRuntime:
             kernel = RuntimeKernel()
         self._kernel: Any = kernel
         self._health_loop: Optional[Any] = health_loop  # GAP-P1-2
+        self._perception_pipeline: Optional[Any] = perception_pipeline  # AUD-F1
         self._tick_interval = tick_interval
         self._max_idle_cycles = max_idle_cycles
         self._state: DaemonState = DaemonState.STOPPED
@@ -97,12 +99,26 @@ class ResidentRuntime:
         """当前 tick 周期数（与 runtime 同步）。"""
         return self._runtime._cycle_count
 
+    @property
+    def memory_hub(self) -> Any:
+        """AUD-F1: 暴露 runtime 的 MemoryHub（唯一 store 源），供 run.py
+        装配知识平面 SemanticStore 镜像等 — 避免外部窥探 _runtime 私有属性。"""
+        return getattr(self._runtime, "_memory_hub", None)
+
     def attach_health_loop(self, health_loop: Any) -> None:
         """GAP-P1-2: 绑定周期健康体检（须在 start() 前调用）。"""
         self._health_loop = health_loop
         bind = getattr(health_loop, "bind", None)
         if bind is not None:
             bind(self._runtime)
+
+    def attach_perception_pipeline(self, pipeline: Any) -> None:
+        """AUD-F1: 绑定感知管线（须在 start() 前调用）。
+
+        每个 tick 调一次 pipeline.tick()；无传感器时为零开销零写入
+        （PerceptionEngine 无 sensor 返回空事件）。
+        """
+        self._perception_pipeline = pipeline
 
     def start(self) -> None:
         """启动 daemon — boot AgentRuntime + RuntimeKernel，启动 tick 线程。
@@ -190,6 +206,13 @@ class ResidentRuntime:
                     self._health_loop.tick()
                 except Exception:
                     logger.exception("Health loop tick failed")
+
+            # AUD-F1: 感知周期（无传感器时零开销零写入）
+            if self._perception_pipeline is not None:
+                try:
+                    self._perception_pipeline.tick()
+                except Exception:
+                    logger.exception("Perception pipeline tick failed")
 
             # 降速逻辑（可选）
             if self._max_idle_cycles > 0 and self._idle_ticks >= self._max_idle_cycles:
