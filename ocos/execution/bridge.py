@@ -52,6 +52,8 @@ ASK_ACTIONS: frozenset[ActionType] = frozenset({
 })
 
 DENY_ACTIONS: frozenset[ActionType] = frozenset()
+# 注: 未来若引入 shell/HTTP 类高危 ActionType，其 ASK 批准后的执行层
+# 候选为 ocos/operations/（黑白名单闸门，AUD-F5 裁决），非 digital_world/。
 
 # ActionType → 交互层语义动作 (PermissionGuard 双检映射)
 # 注 1: 语义双检只在 AUTO 路径触达 (_adjudicate 中 ASK 类提前进入待批,

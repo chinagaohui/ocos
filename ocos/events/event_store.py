@@ -1,6 +1,10 @@
 """
 OCOS Event Store — Event 持久化存储。
 
+分工裁决（AUD-F6, 2026-08-30）: 本模块 = 进程内总线侧内存 EventStore
+（契约测试锁定，P3-5）；ocos/storage/event_store.py = SQLite 持久化版
+（恢复链专用）。按层分工，不合并。
+
 提供原子的 Event 追加、按 EventType 查询、全局事件流遍历。
 底层为 list[Event] 的内存实现。
 """

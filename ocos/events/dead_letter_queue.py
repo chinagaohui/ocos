@@ -1,6 +1,10 @@
 """
 OCOS Dead Letter Queue — 投递失败的事件存储。
 
+分工裁决（AUD-F6, 2026-08-30）: 本模块 = 进程内总线侧内存 DLQ
+（EventBus 可选注入）；ocos/storage/dead_letter_queue.py = SQLite 持久化版
+（恢复链专用）。按层分工，不合并。
+
 Event Bus 投递失败时，事件进入 DLQ 而非静默丢弃。
 支持 DLQ 查询、重放、清理。
 """

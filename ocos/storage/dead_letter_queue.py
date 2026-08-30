@@ -1,5 +1,9 @@
 """SQLiteDLQ — 基于 SQLite 的死信队列实现。
 
+分工裁决（AUD-F6, 2026-08-30）: 本模块 = 持久化 DLQ（恢复链专用）；
+ocos/events/dead_letter_queue.py = 进程内总线侧内存 DLQ（EventBus 可选注入）。
+按层分工，不合并。
+
 职责：
 - 存储处理失败的事件（含失败原因和重试计数）
 - 标记已解决 / 重新入队

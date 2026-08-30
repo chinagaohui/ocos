@@ -1,5 +1,9 @@
 """SQLiteEventStore — 基于 SQLite 的事件存储实现。
 
+分工裁决（AUD-F6, 2026-08-30）: 本模块 = 持久化事件存储（恢复链专用，
+recovery/crash_recovery 消费）；ocos/events/event_store.py = 进程内总线侧
+内存 EventStore（契约测试锁定）。按层分工，不合并。
+
 职责：
 - 事件持久化存储（append-only）
 - 按类型、时间、序列号查询
