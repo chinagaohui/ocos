@@ -7,8 +7,8 @@
 <style>
   :root {
     --bg:#04060c; --cyan:#35e0ff; --violet:#7a5cff; --fg:#dfe9f5;
-    --dim:#5f7086; --panel:rgba(10,18,30,.55); --line:rgba(53,224,255,.25);
-    --warn:#ffc857;
+    --dim:#5f7086; --panel:rgba(10,18,30,.62); --line:rgba(53,224,255,.28);
+    --warn:#ffc857; --ok:#3ddc84; --bad:#ff5c7a;
   }
   * { box-sizing:border-box; margin:0; }
   html,body { height:100%; overflow:hidden; }
@@ -16,17 +16,33 @@
          font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
   #scene { position:fixed; inset:0; display:block; }
 
-  /* ── HUD 光环（CSS 旋转） ── */
-  .ring { position:fixed; left:50%; top:44%; border-radius:50%;
+  /* ── 人形体（SVG） ── */
+  #human { position:fixed; left:50%; top:47%; transform:translate(-50%,-50%);
+           width:min(46vh, 420px); }
+  #bodyG { animation:breathe 6s ease-in-out infinite;
+           transform-origin:200px 320px; }
+  @keyframes breathe { 0%,100% { transform:scale(1); } 50% { transform:scale(1.018); } }
+  body.thinking #bodyG { animation-duration:2.4s; }
+  .outline { fill:rgba(53,224,255,.05); stroke:var(--cyan); stroke-width:1.6;
+             filter:url(#glow); }
+  .spine { stroke:rgba(122,92,255,.6); stroke-width:1.2; stroke-dasharray:4 5; }
+  .organ { cursor:pointer; }
+  .organ circle { fill:rgba(53,224,255,.18); stroke:var(--cyan); stroke-width:1.4;
+                  transition:.3s; }
+  .organ:hover circle, .organ.active circle {
+      fill:rgba(53,224,255,.45); filter:drop-shadow(0 0 8px var(--cyan)); }
+  .organ text { fill:var(--dim); font-size:10px; text-anchor:middle;
+                opacity:0; transition:.3s; pointer-events:none; }
+  .organ:hover text { opacity:1; fill:var(--cyan); }
+  .pulse { animation:opulse 3.2s ease-in-out infinite; transform-box:fill-box;
+           transform-origin:center; }
+  @keyframes opulse { 0%,100% { opacity:.55; } 50% { opacity:1; } }
+
+  .ring { position:fixed; left:50%; top:47%; border-radius:50%;
           border:1px dashed var(--line); pointer-events:none; }
-  #ring1 { width:340px; height:340px; margin:-170px 0 0 -170px;
-           animation:spin 26s linear infinite; }
-  #ring2 { width:420px; height:420px; margin:-210px 0 0 -210px;
-           border-style:solid; border-color:rgba(122,92,255,.14);
-           animation:spin 44s linear infinite reverse; }
-  #ring3 { width:270px; height:270px; margin:-135px 0 0 -135px;
-           border-color:rgba(53,224,255,.4);
-           animation:spin 14s linear infinite; }
+  #ring1 { width:min(60vh,470px); height:min(60vh,470px);
+           margin:calc(min(60vh,470px)/-2) 0 0 calc(min(60vh,470px)/-2);
+           animation:spin 30s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
 
   /* ── 身份牌 ── */
@@ -36,16 +52,21 @@
   #idcard .sub { color:var(--dim); font-size:11px; letter-spacing:.2em; }
   #idcard .clock { color:var(--dim); font-size:11px; margin-top:6px;
                    font-variant-numeric:tabular-nums; }
+  .ops { margin-top:10px; display:flex; gap:8px; }
+  .op { background:transparent; color:var(--cyan); border:1px solid var(--line);
+        border-radius:8px; padding:4px 10px; font-size:11px; cursor:pointer;
+        letter-spacing:.1em; }
+  .op:hover { background:rgba(53,224,255,.12); }
 
-  /* ── 核心状态文字 ── */
-  #corestate { position:fixed; left:50%; top:calc(44% + 235px);
+  /* ── 状态文字 ── */
+  #corestate { position:fixed; left:50%; bottom:120px;
                transform:translateX(-50%); color:var(--cyan);
-               font-size:12px; letter-spacing:.4em; text-transform:uppercase;
-               text-shadow:0 0 10px rgba(53,224,255,.5); transition:opacity .4s; }
+               font-size:12px; letter-spacing:.4em;
+               text-shadow:0 0 10px rgba(53,224,255,.5); }
 
   /* ── 对话气泡 ── */
-  #chatcol { position:fixed; left:26px; bottom:110px; width:min(430px, 42vw);
-             display:flex; flex-direction:column; gap:10px; }
+  #chatcol { position:fixed; left:26px; bottom:110px; width:min(430px, 40vw);
+             display:flex; flex-direction:column; gap:10px; z-index:5; }
   .bubble { padding:10px 14px; border-radius:12px; font-size:13.5px;
             white-space:pre-wrap; word-break:break-word;
             backdrop-filter:blur(6px); animation:rise .35s ease; }
@@ -57,89 +78,139 @@
   .bot.mock { border-style:dashed; border-color:rgba(255,200,87,.45); }
   .bot .tag { display:block; margin-top:6px; color:var(--warn); font-size:11px; }
   .faded { opacity:.35; transition:opacity 1s; }
+  .togoal { display:inline-block; margin-left:10px; color:var(--cyan);
+            font-size:11px; cursor:pointer; opacity:.7;
+            border-bottom:1px dotted var(--cyan); }
+  .togoal:hover { opacity:1; }
 
-  /* ── 生命体征（右侧） ── */
-  #vitals { position:fixed; right:26px; top:22px; width:220px;
+  /* ── 生命体征 ── */
+  #vitals { position:fixed; right:26px; top:22px; width:225px;
             background:var(--panel); border:1px solid var(--line);
-            border-radius:14px; padding:14px 16px; backdrop-filter:blur(8px); }
+            border-radius:14px; padding:14px 16px; backdrop-filter:blur(8px);
+            z-index:6; }
   #vitals h2 { font-size:11px; color:var(--cyan); letter-spacing:.3em;
                margin-bottom:10px; font-weight:500; }
-  .stat { display:flex; justify-content:space-between; padding:3px 0;
-          font-size:12.5px; color:var(--fg); }
+  .stat { display:flex; justify-content:space-between; padding:3px 0; font-size:12.5px; }
   .stat span { color:var(--dim); }
-  .stat b { font-weight:600; font-variant-numeric:tabular-nums;
-            text-shadow:0 0 8px rgba(53,224,255,.4); }
+  .stat b { font-weight:600; font-variant-numeric:tabular-nums; }
   .bar { height:3px; background:rgba(53,224,255,.12); border-radius:2px;
          margin:2px 0 8px; overflow:hidden; }
-  .bar i { display:block; height:100%; background:linear-gradient(90deg,var(--cyan),var(--violet));
-           border-radius:2px; transition:width .8s; }
+  .bar i { display:block; height:100%;
+           background:linear-gradient(90deg,var(--cyan),var(--violet)); }
 
-  /* ── 待批动作（右下） ── */
-  #asks { position:fixed; right:26px; bottom:110px; width:220px;
-          display:flex; flex-direction:column; gap:8px; }
+  /* ── 待批动作 ── */
+  #asks { position:fixed; right:26px; bottom:110px; width:225px;
+          display:flex; flex-direction:column; gap:8px; z-index:6; }
   .ask { background:var(--panel); border:1px solid rgba(255,200,87,.4);
          border-radius:12px; padding:10px 12px; font-size:12px;
-         backdrop-filter:blur(6px); animation:rise .35s ease; }
-  .ask b { color:var(--warn); font-size:11px; letter-spacing:.1em; }
+         backdrop-filter:blur(6px); }
+  .ask b { color:var(--warn); font-size:11px; }
   .ask .row { display:flex; gap:8px; margin-top:8px; }
   .ask button { flex:1; background:transparent; color:var(--cyan);
                 border:1px solid var(--line); border-radius:8px;
                 padding:5px; cursor:pointer; font-size:12px; }
-  .ask button:hover { background:rgba(53,224,255,.12); }
   .ask button.deny { color:#ff7a9c; border-color:rgba(255,122,156,.35); }
+
+  /* ── 模块详情面板（点击器官拉出） ── */
+  #modulePanel { position:fixed; right:26px; top:70px; bottom:90px; width:390px;
+                 background:rgba(8,14,24,.94); border:1px solid var(--line);
+                 border-radius:14px; padding:16px; backdrop-filter:blur(12px);
+                 overflow-y:auto; z-index:20; display:none; }
+  #modulePanel.open { display:block; animation:slidein .25s ease; }
+  @keyframes slidein { from { opacity:0; transform:translateX(24px); } }
+  #modulePanel h2 { font-size:14px; color:var(--cyan); letter-spacing:.15em;
+                    display:flex; justify-content:space-between; align-items:center;
+                    margin-bottom:10px; }
+  #modulePanel h2 .close { cursor:pointer; color:var(--dim); font-size:16px; }
+  #modulePanel h3 { font-size:12px; color:var(--violet); margin:12px 0 6px;
+                    letter-spacing:.1em; }
+  #modulePanel .kv { display:flex; gap:8px; font-size:12.5px; padding:2px 0; }
+  #modulePanel .kv span { color:var(--dim); min-width:88px; }
+  #modulePanel .kv b { font-weight:500; word-break:break-all; }
+  #modulePanel pre { font-size:11px; white-space:pre-wrap; word-break:break-all;
+                     color:var(--fg); background:rgba(53,224,255,.06);
+                     border-radius:8px; padding:8px; margin:6px 0; }
+  #modulePanel .hint { color:var(--dim); font-size:11.5px; margin:6px 0; }
 
   /* ── 输入栏 ── */
   #inputbar { position:fixed; left:50%; bottom:26px; transform:translateX(-50%);
-              width:min(620px, 76vw); display:flex; gap:10px; }
+              width:min(620px, 76vw); display:flex; gap:10px; z-index:5; }
   #input { flex:1; background:rgba(10,18,30,.7); color:var(--fg);
            border:1px solid var(--line); border-radius:24px;
            padding:12px 20px; font-size:14px; outline:none;
-           backdrop-filter:blur(8px); transition:border-color .3s, box-shadow .3s; }
-  #input:focus { border-color:var(--cyan);
-                 box-shadow:0 0 18px rgba(53,224,255,.25); }
-  #send { background:transparent; color:var(--cyan);
-          border:1px solid var(--line); border-radius:24px;
-          width:88px; cursor:pointer; letter-spacing:.2em; }
+           backdrop-filter:blur(8px); transition:.3s; }
+  #input:focus { border-color:var(--cyan); box-shadow:0 0 18px rgba(53,224,255,.25); }
+  #send { background:transparent; color:var(--cyan); border:1px solid var(--line);
+          border-radius:24px; width:88px; cursor:pointer; letter-spacing:.2em; }
   #send:hover { background:rgba(53,224,255,.12); }
   #send:disabled { opacity:.4; cursor:default; }
-  .ops { margin-top:10px; display:flex; gap:8px; }
-  .op { background:transparent; color:var(--cyan); border:1px solid var(--line);
-        border-radius:8px; padding:4px 10px; font-size:11px; cursor:pointer;
-        letter-spacing:.1em; }
-  .op:hover { background:rgba(53,224,255,.12); }
-  #introspect { position:fixed; right:26px; top:70px; width:360px;
-                max-height:70vh; overflow-y:auto; background:rgba(8,14,24,.92);
-                border:1px solid var(--line); border-radius:14px;
-                padding:14px; backdrop-filter:blur(10px); z-index:10; }
-  #introspect h2 { font-size:12px; color:var(--cyan); letter-spacing:.2em;
-                   display:flex; justify-content:space-between; align-items:center; }
-  #introspect pre { font-size:11px; color:var(--fg); white-space:pre-wrap;
-                    word-break:break-all; margin-top:8px; }
-  .hidden { display:none !important; }
-  .togoal { display:inline-block; margin-left:10px; color:var(--cyan);
-            font-size:11px; cursor:pointer; opacity:.7; border-bottom:
-            1px dotted var(--cyan); }
-  .togoal:hover { opacity:1; }
 </style>
 </head>
 <body>
 <canvas id="scene"></canvas>
+
+<svg id="human" viewBox="0 0 400 620">
+  <defs>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g id="bodyG">
+    <!-- 身体轮廓 -->
+    <path class="outline" d="M 200 104
+      C 174 110, 154 120, 147 140
+      C 138 162, 141 202, 149 240
+      C 154 268, 157 284, 155 300
+      C 153 322, 157 342, 164 360
+      L 171 432 C 173 484, 175 522, 177 556 L 160 564
+      L 196 568 L 200 380 L 204 568 L 240 564 L 223 556
+      C 225 522, 227 484, 229 432 L 236 360
+      C 243 342, 247 322, 245 300
+      C 243 284, 246 268, 251 240
+      C 259 202, 262 162, 253 140
+      C 246 120, 226 110, 200 104 Z"/>
+    <!-- 手臂 -->
+    <path class="outline" d="M 147 141 C 127 162, 117 202, 115 242 C 113 270, 111 284, 111 296"/>
+    <path class="outline" d="M 253 141 C 273 162, 283 202, 285 242 C 287 270, 289 284, 289 296"/>
+    <!-- 神经脊柱 -->
+    <line class="spine" x1="200" y1="112" x2="200" y2="356"/>
+    <!-- 头 -->
+    <circle class="outline" cx="200" cy="66" r="36"/>
+
+    <!-- 器官（可点击） -->
+    <g class="organ" data-m="identity"><circle class="pulse" cx="200" cy="46" r="10"/>
+      <text x="200" y="28">宪法 / 身份</text></g>
+    <g class="organ" data-m="engines"><circle class="pulse" cx="200" cy="72" r="13"/>
+      <text x="200" y="105">认知引擎</text></g>
+    <g class="organ" data-m="perception"><circle class="pulse" cx="186" cy="82" r="5"/>
+      <circle class="pulse" cx="214" cy="82" r="5"/>
+      <text x="200" y="122">感知</text></g>
+    <g class="organ" data-m="language"><circle class="pulse" cx="200" cy="100" r="6"/>
+      <text x="243" y="103">语言核心</text></g>
+    <g class="organ" data-m="immune"><circle class="pulse" cx="163" cy="152" r="9"/>
+      <text x="140" y="136">免疫诊断</text></g>
+    <g class="organ" data-m="memory"><circle class="pulse" cx="218" cy="172" r="12"/>
+      <text x="252" y="176">记忆</text></g>
+    <g class="organ" data-m="goals"><circle class="pulse" cx="200" cy="226" r="12"/>
+      <text x="200" y="254">目标核心</text></g>
+    <g class="organ" data-m="execution"><circle class="pulse" cx="111" cy="300" r="9"/>
+      <circle class="pulse" cx="289" cy="300" r="9"/>
+      <text x="200" y="318">执行</text></g>
+    <g class="organ" data-m="daemon"><circle class="pulse" cx="200" cy="560" r="10"/>
+      <text x="200" y="590">立足 · daemon</text></g>
+  </g>
+</svg>
 <div class="ring" id="ring1"></div>
-<div class="ring" id="ring2"></div>
-<div class="ring" id="ring3"></div>
 
 <div id="idcard">
   <h1>OCOS</h1>
-  <div class="sub">DIGITAL ORGANISM · 数字生命</div>
+  <div class="sub">DIGITAL ORGANISM · 点击身体模块查看</div>
   <div class="clock" id="clock"></div>
   <div class="ops">
-    <button class="op" onclick="toggleIntrospect()">◉ 内视</button>
+    <button class="op" onclick="openModule('all')">◉ 内视全景</button>
     <button class="op" onclick="selfImprove(this)">↻ 自省升级</button>
   </div>
-</div>
-<div id="introspect" class="hidden">
-  <h2>INTROSPECTION · 内视 <button class="op" onclick="document.getElementById('introspect').classList.add('hidden')">✕</button></h2>
-  <pre id="intro-body">加载中…</pre>
 </div>
 
 <div id="corestate">待命中</div>
@@ -151,129 +222,53 @@
 </div>
 <div id="asks"></div>
 
+<div id="modulePanel">
+  <h2><span id="mp-title">模块</span><span class="close" onclick="closeModule()">✕</span></h2>
+  <div id="mp-body"><div class="hint">加载中…</div></div>
+</div>
+
 <div id="inputbar">
   <input id="input" placeholder="对它说点什么…（⏎ 发送）" autocomplete="off">
   <button id="send">发送</button>
 </div>
 
 <script>
-/* ═══════════════ 生命核渲染（canvas 粒子神经球） ═══════════════ */
+/* ═══════════════ 背景星尘（canvas） ═══════════════ */
 const scene = document.getElementById("scene");
 const ctx2d = scene.getContext("2d");
 let W, H;
 function resize() {
   W = scene.width = innerWidth * devicePixelRatio;
   H = scene.height = innerHeight * devicePixelRatio;
-  scene.style.width = innerWidth + "px";
-  scene.style.height = innerHeight + "px";
+  scene.style.width = innerWidth + "px"; scene.style.height = innerHeight + "px";
 }
 addEventListener("resize", resize); resize();
-
-/* 状态机: idle | thinking | speaking — 驱动核的呼吸/转速 */
-const core = { state: "idle", speakUntil: 0 };
-
-/* 星尘 */
 const stars = Array.from({length: 130}, () => ({
   x: Math.random(), y: Math.random(),
-  r: Math.random() * 1.4 + .3, tw: Math.random() * 6.28,
-}));
-
-/* 粒子神经球: 斐波那契球面 + 预计算近邻连线 */
-const N = 220, points = [];
-const golden = Math.PI * (3 - Math.sqrt(5));
-for (let i = 0; i < N; i++) {
-  const y = 1 - (i / (N - 1)) * 2;
-  const r = Math.sqrt(1 - y * y);
-  const th = golden * i;
-  points.push({ x: Math.cos(th) * r, y, z: Math.sin(th) * r });
-}
-const links = [];
-for (let i = 0; i < N; i++)
-  for (let j = i + 1; j < N; j++) {
-    const dx = points[i].x - points[j].x, dy = points[i].y - points[j].y,
-          dz = points[i].z - points[j].z;
-    if (dx*dx + dy*dy + dz*dz < 0.075) links.push([i, j]);
-  }
-
-let rotY = 0, rotX = 0.35;
+  r: Math.random() * 1.4 + .3, tw: Math.random() * 6.28 }));
 function drawScene(t) {
   ctx2d.clearRect(0, 0, W, H);
   const s = devicePixelRatio;
-
-  /* 星尘闪烁 */
   for (const st of stars) {
-    const a = .25 + .35 * Math.abs(Math.sin(t * .6 + st.tw));
-    ctx2d.fillStyle = `rgba(160,200,255,${a * .5})`;
+    const a = .2 + .35 * Math.abs(Math.sin(t * .6 + st.tw));
+    ctx2d.fillStyle = `rgba(160,200,255,${a * .45})`;
     ctx2d.fillRect(st.x * W, st.y * H, st.r * s, st.r * s);
   }
-
-  /* 呼吸/说话脉动 */
-  const cx = W / 2, cy = H * .44;
-  const speaking = core.state === "speaking";
-  const thinking = core.state === "thinking";
-  const breath = 1 + .055 * Math.sin(t * 1.15)
-               + (speaking ? .075 * Math.sin(t * 7.3) : 0);
-  const R = Math.min(W, H) * .16 * breath;
-  rotY += thinking ? .022 : .006;
-  rotX = .35 + .08 * Math.sin(t * .23);
-
-  /* 核心辉光 */
-  const glow = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, R * 2.1);
-  const gA = speaking ? .5 : thinking ? .38 : .26;
-  glow.addColorStop(0, `rgba(53,224,255,${gA})`);
-  glow.addColorStop(.45, `rgba(122,92,255,${gA * .35})`);
-  glow.addColorStop(1, "rgba(0,0,0,0)");
-  ctx2d.fillStyle = glow;
-  ctx2d.fillRect(cx - R*2.2, cy - R*2.2, R*4.4, R*4.4);
-
-  /* 球面投影 */
-  const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
-  const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
-  const proj = points.map(p => {
-    let x = p.x * cosY + p.z * sinY;
-    let z1 = -p.x * sinY + p.z * cosY;
-    let y = p.y * cosX - z1 * sinX;
-    let z = p.y * sinX + z1 * cosX;
-    const k = R / (1 - z * .22);
-    return { sx: cx + x * k, sy: cy + y * k, z };
-  });
-
-  /* 神经连线 */
-  const linkA = speaking ? .34 : thinking ? .28 : .17;
-  ctx2d.lineWidth = s * .7;
-  for (const [i, j] of links) {
-    const a = proj[i], b = proj[j];
-    if (a.z > .55 && b.z > .55) continue;
-    ctx2d.strokeStyle = `rgba(53,224,255,${linkA * (1 - (a.z + b.z) / 2.4)})`;
-    ctx2d.beginPath(); ctx2d.moveTo(a.sx, a.sy); ctx2d.lineTo(b.sx, b.sy); ctx2d.stroke();
-  }
-  /* 节点 */
-  for (const p of proj) {
-    if (p.z > .6) continue;
-    const size = (1.15 - p.z * .5) * s;
-    ctx2d.fillStyle = `rgba(140,235,255,${.75 - p.z * .4})`;
-    ctx2d.beginPath(); ctx2d.arc(p.sx, p.sy, size, 0, 6.28); ctx2d.fill();
-  }
-  /* 内核 */
-  ctx2d.fillStyle = `rgba(220,250,255,${speaking ? .9 : .55})`;
-  ctx2d.beginPath();
-  ctx2d.arc(cx, cy, (speaking ? 7 : 4.5) * s * (1 + .2*Math.sin(t*3)), 0, 6.28);
-  ctx2d.fill();
-
   requestAnimationFrame(() => drawScene(t + 1/60));
 }
 requestAnimationFrame(drawScene);
 
-/* ═══════════════ 交互与数据 ═══════════════ */
+/* ═══════════════ 状态机 ═══════════════ */
+const corestate = document.getElementById("corestate");
+function setState(s, label) {
+  document.body.classList.toggle("thinking", s === "thinking");
+  corestate.textContent = label;
+}
+
+/* ═══════════════ 对话 ═══════════════ */
 const stream = document.getElementById("chatcol");
 const input = document.getElementById("input");
-const corestate = document.getElementById("corestate");
-
-function setState(s, label) {
-  core.state = s;
-  corestate.textContent = label;
-  corestate.style.opacity = label ? 1 : .4;
-}
+const sendBtn = document.getElementById("send");
 
 function bubble(text, who, mock) {
   const div = document.createElement("div");
@@ -281,38 +276,33 @@ function bubble(text, who, mock) {
   div.textContent = text;
   if (who === "user") {
     const op = document.createElement("span");
-    op.className = "togoal";
-    op.textContent = "→目标";
+    op.className = "togoal"; op.textContent = "→目标";
     op.title = "把这句话转为目标，daemon 自动认领执行";
     op.onclick = () => toGoal(text, op);
     div.appendChild(op);
   }
   if (mock) {
     const tag = document.createElement("span");
-    tag.className = "tag";
-    tag.textContent = "◦ 状态回复 · 未接入语言核心";
+    tag.className = "tag"; tag.textContent = "◦ 状态回复 · 未接入语言核心";
     div.appendChild(tag);
   }
   stream.appendChild(div);
   while (stream.children.length > 5) stream.firstChild.remove();
-  const kids = [...stream.children];
-  kids.slice(0, -2).forEach(k => k.classList.add("faded"));
+  [...stream.children].slice(0, -2).forEach(k => k.classList.add("faded"));
   return div;
 }
 
 async function send() {
   const text = input.value.trim();
-  if (!text || core.state === "thinking") return;
+  if (!text) return;
   bubble(text, "user");
-  input.value = "";
-  sendBtn.disabled = true;
+  input.value = ""; sendBtn.disabled = true;
   setState("thinking", "处理中");
   try {
-    const r = await fetch("/ocos/converse", {
+    const j = await (await fetch("/ocos/converse", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({message: text}),
-    });
-    const j = await r.json();
+    })).json();
     setState("speaking", "回应中");
     if (j.success) bubble(j.data.reply, "bot", j.data.mock);
     else bubble("出错: " + j.message, "bot");
@@ -321,65 +311,15 @@ async function send() {
     setState("idle", "待命中");
     bubble("连接失败（ocos-server 在跑吗？）", "bot");
   }
-  sendBtn.disabled = false;
-  input.focus();
-  refreshSide();
+  sendBtn.disabled = false; input.focus(); refreshSide();
 }
-const sendBtn = document.getElementById("send");
 sendBtn.onclick = send;
 input.addEventListener("keydown", e => { if (e.key === "Enter") send(); });
 
-/* 时钟 */
 setInterval(() => {
   document.getElementById("clock").textContent =
     new Date().toLocaleString("zh-CN", {hour12: false});
 }, 1000);
-
-/* 生命体征 + 待批 */
-async function refreshSide() {
-  try {
-    const d = (await (await fetch("/ocos/summary")).json()).data;
-    const g = d.goals || {};
-    const mem = d.memory || {};
-    const memMax = Math.max(1, (mem.episodes || 0) + 10);
-    const dm = d.daemon || {};
-    const dmColor = dm.alive ? "#3ddc84" : "#ff5c7a";
-    const dmText = dm.alive ? `在线（${dm.age_s}s 前）` : "离线 — 启动 ocos run";
-    document.getElementById("stats").innerHTML =
-      `<div class="stat"><span>daemon</span><b style="color:${dmColor}">● ${dmText}</b></div>
-       <div class="stat"><span>目标 P / A</span><b>${g.PENDING||0} / ${g.ACTIVE||0}</b></div>
-       <div class="bar"><i style="width:${Math.min(100,((g.ACTIVE||0))*33)}%"></i></div>
-       <div class="stat"><span>待批动作</span><b>${d.approvals_pending}</b></div>
-       <div class="stat"><span>收件箱</span><b>${d.inbox_queued}</b></div>
-       <div class="stat"><span>episodes</span><b>${mem.episodes||0}</b></div>
-       <div class="bar"><i style="width:${Math.min(100,(mem.episodes||0)/memMax*100)}%"></i></div>
-       <div class="stat"><span>beliefs</span><b>${mem.beliefs||0}</b></div>`;
-
-    const rows = (await (await fetch("/ocos/approvals")).json()).data.pending;
-    const box = document.getElementById("asks");
-    box.innerHTML = "";
-    if (rows.length) {
-      const h = document.createElement("b");
-      h.textContent = "需你裁决";
-      box.appendChild(h);
-    }
-    for (const r of rows) {
-      const card = document.createElement("div");
-      card.className = "ask";
-      card.innerHTML = `<b>${r.id}</b><br>${r.action_type}
-        <div style="color:var(--dim)">${(r.text||"").slice(0,50)}</div>
-        <div class="row">
-          <button onclick="decide('${r.id}','approve')">批 准</button>
-          <button class="deny" onclick="decide('${r.id}','deny')">拒 绝</button>
-        </div>`;
-      box.appendChild(card);
-    }
-  } catch (e) { /* 服务未起 — 静默重试 */ }
-}
-async function decide(pid, action) {
-  await fetch(`/ocos/approvals/${pid}/${action}`, {method: "POST"});
-  refreshSide();
-}
 
 async function toGoal(text, el) {
   el.textContent = "…";
@@ -389,26 +329,15 @@ async function toGoal(text, el) {
       body: JSON.stringify({message: text}),
     });
     const j = await r.json();
-    el.textContent = j.success ? "✓已入列" : "✗失败";
-    bubble(`已把「${text.slice(0, 30)}」转为目标（${j.data.goal_id}），daemon 将自动认领执行。`, "bot");
+    if (j.success) {
+      el.textContent = "✓已入列";
+      bubble(`已把「${text.slice(0, 30)}」转为目标（${j.data.goal_id}），daemon 将自动认领执行。`, "bot");
+    } else {
+      el.textContent = "✗";
+      bubble(`⚠ ${j.detail || "转换失败"}`, "bot");
+    }
   } catch (e) { el.textContent = "✗失败"; }
   refreshSide();
-}
-
-async function toggleIntrospect() {
-  const panel = document.getElementById("introspect");
-  if (!panel.classList.contains("hidden")) {
-    panel.classList.add("hidden"); return;
-  }
-  panel.classList.remove("hidden");
-  document.getElementById("intro-body").textContent = "内视中…";
-  try {
-    const j = await (await fetch("/ocos/introspect")).json();
-    document.getElementById("intro-body").textContent =
-      JSON.stringify(j.data, null, 2);
-  } catch (e) {
-    document.getElementById("intro-body").textContent = "内视失败: " + e;
-  }
 }
 
 async function selfImprove(btn) {
@@ -417,10 +346,10 @@ async function selfImprove(btn) {
   try {
     const j = await (await fetch("/ocos/self-improve", {method: "POST"})).json();
     const d = j.data;
-    if (!d.proposals || !d.proposals.length) {
+    if (!d.proposals || !d.proposals.length)
       bubble(d.note || "本轮没有值得记的改进点。", "bot", d.mock);
-    } else {
-      bubble(`自省完成，产生 ${d.proposals.length} 条升级提案，已进入待批队列等你裁决：` +
+    else {
+      bubble(`自省完成，${d.proposals.length} 条升级提案进入待批队列等你裁决：` +
              d.proposals.map(p => "「" + p.title + "」").join(" "), "bot");
       refreshSide();
     }
@@ -428,9 +357,137 @@ async function selfImprove(btn) {
   setState("idle", "待命中");
   btn.disabled = false; btn.textContent = "↻ 自省升级";
 }
-refreshSide();
-setInterval(refreshSide, 5000);
+
+/* ═══════════════ 体征 + 待批 ═══════════════ */
+async function refreshSide() {
+  try {
+    const d = (await (await fetch("/ocos/summary")).json()).data;
+    const g = d.goals || {}, mem = d.memory || {};
+    const memMax = Math.max(1, (mem.episodes || 0) + 10);
+    const dm = d.daemon || {};
+    const dmColor = dm.alive ? "var(--ok)" : "var(--bad)";
+    const dmText = dm.alive ? `在线 · ${dm.age_s}s 前` : "离线 — 启动 ocos run";
+    document.getElementById("stats").innerHTML =
+      `<div class="stat"><span>daemon</span><b style="color:${dmColor}">● ${dmText}</b></div>
+       <div class="stat"><span>目标 P / A</span><b>${g.PENDING||0} / ${g.ACTIVE||0}</b></div>
+       <div class="stat"><span>待批动作</span><b>${d.approvals_pending}</b></div>
+       <div class="stat"><span>收件箱</span><b>${d.inbox_queued}</b></div>
+       <div class="stat"><span>episodes</span><b>${mem.episodes||0}</b></div>
+       <div class="bar"><i style="width:${Math.min(100,(mem.episodes||0)/memMax*100)}%"></i></div>
+       <div class="stat"><span>beliefs</span><b>${mem.beliefs||0}</b></div>`;
+    const rows = (await (await fetch("/ocos/approvals")).json()).data.pending;
+    const box = document.getElementById("asks"); box.innerHTML = "";
+    for (const r of rows) {
+      const card = document.createElement("div");
+      card.className = "ask";
+      card.innerHTML = `<b>${r.id}</b> ${r.action_type}
+        <div style="color:var(--dim)">${(r.text||"").slice(0,46)}</div>
+        <div class="row">
+          <button onclick="decide('${r.id}','approve')">批 准</button>
+          <button class="deny" onclick="decide('${r.id}','deny')">拒 绝</button>
+        </div>`;
+      box.appendChild(card);
+    }
+  } catch (e) { /* 静默重试 */ }
+}
+async function decide(pid, action) {
+  await fetch(`/ocos/approvals/${pid}/${action}`, {method: "POST"});
+  refreshSide();
+}
+refreshSide(); setInterval(refreshSide, 5000);
 input.focus();
+
+/* ═══════════════ 模块详情面板（点击器官拉出） ═══════════════ */
+const MODULE_META = {
+  identity:   { title: "宪法 / 身份 · 灵魂", desc: "不可变的身份锚点与行为宪法。core 层锁死，修改需主人审批。" },
+  engines:    { title: "认知引擎 · 大脑", desc: "推理/规划/决策/反思/学习五引擎 + writer，经 EngineBridge 注册调度。" },
+  perception: { title: "感知 · 眼睛", desc: "FileSensor/TextSensor 采集环境 → 注意力打分 → 世界模型落库。--watch-dir 开启文件感知。" },
+  language:   { title: "语言核心 · 喉舌", desc: "LLM 对话回复。未配 key 时诚实降级为状态回复。" },
+  immune:     { title: "免疫 · 诊断修复", desc: "体检 → 故障检测 → 修复提案（白名单步骤）→ 批准后带检查点执行，失败自动回滚。" },
+  memory:     { title: "记忆 · 心脏", desc: "Episode 情节 / Belief 信念 / Pattern 模式 / Semantic 知识，四库共享 SQLite。对话自动沉淀。" },
+  goals:      { title: "目标核心 · 动机", desc: "人工目标（→目标 按钮）与稳态 SELF 目标，来源分级 + 宪法工厂，分解为任务图执行。" },
+  execution:  { title: "执行 · 双手", desc: "RUN_COMMAND 沙盒命令 / file_op 文件操作 / HTTP 抓取。白名单+敏感路径拦截，全部需审批。" },
+  daemon:     { title: "立足 · daemon", desc: "常驻进程心跳。认领目标、分解执行、周期体检。离线时一切停摆。" },
+  all:        { title: "内视全景 · 全模块", desc: "" },
+};
+
+let _introCache = null, _introAt = 0;
+async function getIntrospect() {
+  if (_introCache && Date.now() - _introAt < 5000) return _introCache;
+  _introCache = (await (await fetch("/ocos/introspect")).json()).data;
+  _introAt = Date.now();
+  return _introCache;
+}
+
+function kv(k, v) {
+  return `<div class="kv"><span>${k}</span><b>${v ?? "—"}</b></div>`;
+}
+
+const MODULE_RENDER = {
+  identity: d => kv("身份", d.identity) +
+    kv("自我知识", `<pre>${d.self_knowledge || "（暂无）"}</pre>`),
+  engines: d => kv("引擎", d.engines) +
+    `<h3>说明</h3><div class="hint">Reasoning 推理 · Planning 规划 · Decision 决策 · Reflection 反思 · Learning 学习 · Writer 写作。经 EngineBridge 注入认知循环。</div>`,
+  perception: d => `<div class="hint">${d.capabilities}</div>` +
+    `<h3>最近事件</h3><pre>${JSON.stringify(d.execution_history?.slice(0,2) || "（无）", null, 1)}</pre>`,
+  language: d => kv("配置", d.llm) +
+    (String(d.llm).includes("True") ? `<div class="hint">语言核心已接入 — 对话为真实 LLM 回复。</div>`
+      : `<div class="hint">未配置 LLM key（~/.ocos/config.json）— 当前为状态回复。</div>`),
+  immune: d => {
+    const pend = (d.pending_actions || []).filter(p => p.action_type === "system_repair");
+    return kv("待批修复", pend.length) +
+      `<pre>${pend.map(p => `${p.id} ${p.text}`).join("\n") || "（无待批修复）"}</pre>` +
+      `<div class="hint">体检→故障检测→白名单修复，失败自动回滚。</div>`;
+  },
+  memory: d => {
+    const s = typeof d.memory_stats === "object" ? d.memory_stats : {};
+    return kv("episodes", s.episode_count ?? "?") + kv("beliefs", s.belief_count ?? "?") +
+      kv("patterns", s.pattern_count ?? "?") +
+      `<h3>最近经历</h3><pre>${(d.recent_episodes||[]).map(e =>
+        `${e.created_at.slice(11,19)} [${e.source}] ${e.decision||e.context}`).join("\n") || "（暂无）"}</pre>`;
+  },
+  goals: d => {
+    const g = d.active_goals || [];
+    return kv("活跃目标", g.length) +
+      `<pre>${g.map(x => `${x.id} [${x.status}] ${x.description}`).join("\n") || "（无）"}</pre>`;
+  },
+  execution: d => kv("能力", d.capabilities) +
+    `<h3>执行史</h3><pre>${JSON.stringify(d.execution_history?.slice(0,3) || "（无）", null, 1)}</pre>`,
+  daemon: d => kv("检查点", d.continuity?.checkpoint_id || "—") +
+    `<div class="hint">daemon 存活状态见右侧生命体征。离线时目标/对话处理全部停摆。</div>`,
+  all: d => `<pre>${JSON.stringify(d, null, 2)}</pre>`,
+};
+
+async function openModule(m) {
+  const panel = document.getElementById("modulePanel");
+  panel.classList.add("open");
+  document.querySelectorAll(".organ").forEach(o =>
+    o.classList.toggle("active", o.dataset.m === m));
+  const meta = MODULE_META[m] || MODULE_META.all;
+  document.getElementById("mp-title").textContent =
+    m === "all" ? "内视全景 · 全模块" : meta.title;
+  document.getElementById("mp-body").innerHTML =
+    (meta.desc ? `<div class="hint">${meta.desc}</div>` : "") + `<div class="hint">加载中…</div>`;
+  try {
+    const d = await getIntrospect();
+    const render = MODULE_RENDER[m] || MODULE_RENDER.all;
+    document.getElementById("mp-body").innerHTML =
+      (meta.desc ? `<div class="hint">${meta.desc}</div>` : "") + render(d);
+  } catch (e) {
+    document.getElementById("mp-body").innerHTML = `<div class="hint">加载失败: ${e}</div>`;
+  }
+}
+function closeModule() {
+  document.getElementById("modulePanel").classList.remove("open");
+  document.querySelectorAll(".organ").forEach(o => o.classList.remove("active"));
+}
+document.querySelectorAll(".organ").forEach(o =>
+  o.addEventListener("click", () => openModule(o.dataset.m)));
+
+setInterval(() => {
+  document.getElementById("clock").textContent =
+    new Date().toLocaleString("zh-CN", {hour12: false});
+}, 1000);
 </script>
 </body>
 </html>
