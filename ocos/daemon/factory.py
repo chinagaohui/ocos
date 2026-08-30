@@ -109,16 +109,23 @@ def build_knowledge_abi(semantic_store=None):
     return KnowledgeABI(registry=registry, lifecycle=KnowledgeLifecycle(registry))
 
 
-def build_execution_bridge(agent: Any = None, agent_id: str = "decision_bridge"):
+def build_execution_bridge(agent: Any = None, agent_id: str = "decision_bridge",
+                           db_path: str | None = None):
     """R4-A: 组装 DecisionBridge — 自治决策 → 真实任务执行铰链。
 
     装配: ActionDispatcher + PermissionGuard + ExecutionAudit +
     AdapterDiscovery 扫描的真实 capability_reality 能力 (注册为 handlers)。
-    返回 bridge 实例; 调用方负责 attach 到 AgentRuntime._decision_bridge。
+    AUD-F12: 传 db_path 时挂载 PendingStore（ASK 待批队列 SQLite 持久化）。
+    返回 bridge 实例; 调用方负责 attach 到 AgentRuntime (attach_decision_bridge)。
     """
     from ocos.execution.bridge import DecisionBridge
 
-    bridge = DecisionBridge(agent_id=agent_id)
+    pending_store = None
+    if db_path:
+        from ocos.execution.pending import PendingStore
+        pending_store = PendingStore(db_path=db_path)
+
+    bridge = DecisionBridge(agent_id=agent_id, pending_store=pending_store)
     try:
         bridge.attach_default_handlers()
     except Exception as e:  # noqa: BLE001 — 能力发现失败不阻断装配

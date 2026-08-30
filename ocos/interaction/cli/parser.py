@@ -42,6 +42,9 @@ Examples:
     # ── memory ────────────────────────────────────────────────────────
     _add_memory_parser(subparsers)
 
+    # ── approvals（AUD-F12: R4-B 待批队列审批） ───────────────────────
+    _add_approvals_parser(subparsers)
+
     # ── belief ────────────────────────────────────────────────────────
     _add_belief_parser(subparsers)
 
@@ -110,6 +113,20 @@ def _add_memory_parser(subparsers: argparse._SubParsersAction) -> None:
 
     # ocos memory recent
     memory_sub.add_parser("recent", help="Show recent memories")
+
+
+def _add_approvals_parser(subparsers: argparse._SubParsersAction) -> None:
+    approvals = subparsers.add_parser(
+        "approvals", help="Review pending ASK actions (R4-B approval queue)")
+    approvals_sub = approvals.add_subparsers(dest="approvals_action",
+                                             title="approvals subcommands")
+    lst = approvals_sub.add_parser("list", help="List pending actions")
+    lst.add_argument("--all", action="store_true",
+                     help="Include decided/executed entries")
+    approve = approvals_sub.add_parser("approve", help="Approve and execute")
+    approve.add_argument("pending_id", type=str, help="Pending ID (PEND-xxxxxxxx)")
+    deny = approvals_sub.add_parser("deny", help="Deny a pending action")
+    deny.add_argument("pending_id", type=str, help="Pending ID (PEND-xxxxxxxx)")
 
 
 def _add_belief_parser(subparsers: argparse._SubParsersAction) -> None:

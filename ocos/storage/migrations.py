@@ -14,6 +14,7 @@ from ocos.storage.schema import (
     CREATE_EVENT_STORE,
     CREATE_GOAL,
     CREATE_PLAN_DAG,
+    CREATE_PENDING_ACTIONS,
     CREATE_IDENTITY,
     CREATE_KNOWLEDGE,
     CREATE_PATTERN,
@@ -57,6 +58,7 @@ MIGRATIONS: dict[int, tuple[str, list[str]]] = {
         "AUD-F8/F12: plan_dag（CLI plan 落库）+ pending_actions（R4-B 待批队列）",
         [
             *CREATE_PLAN_DAG,
+            *CREATE_PENDING_ACTIONS,
         ],
     ),
 }

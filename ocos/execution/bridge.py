@@ -116,13 +116,15 @@ class DecisionBridge:
         guard: Optional[PermissionGuard] = None,
         audit: Optional[ExecutionAudit] = None,
         agent_id: str = "decision_bridge",
+        pending_store: Optional[Any] = None,    # AUD-F12: PendingStore (SQLite 持久化)
     ) -> None:
         self._dispatcher = dispatcher or ActionDispatcher()
         self._guard = guard or PermissionGuard()
         self._audit = audit or ExecutionAudit()
         self._agent_id = agent_id
         self._registry: Any = None
-        self._pending: list[dict] = []          # R4-B: 接 Outbox 待批队列
+        self._pending_store = pending_store     # AUD-F12: 有 store 则跨进程存活
+        self._pending: list[dict] = []          # 无 store 时的内存回退（诚实降级）
         self._reports: list[BridgeReport] = []
 
     # ── 装配 ──────────────────────────────────────────────────────────────
@@ -182,13 +184,12 @@ class DecisionBridge:
                 self._audit_action(dispatched)
             elif verdict[0] == "ask":
                 v.status = "pending"
-                self._pending.append({
-                    "action_type": action.action_type.name,
-                    "target": action.target,
-                    "payload": action.payload,
-                    "text": text[:200],
-                    "queued_at": datetime.now(timezone.utc).isoformat(),
-                })
+                self._enqueue_pending(
+                    action_type=action.action_type.name,
+                    target=action.target,
+                    payload=action.payload,
+                    text=text,
+                )
                 logger.info("DecisionBridge: %s queued for approval (R4-B Outbox)",
                             action.action_type.name)
             else:
@@ -210,14 +211,13 @@ class DecisionBridge:
 
         if task_type in _DAG_ASK_TYPES:
             # 写文件 / shell 执行 = 高危 → 待批 (R4-B Outbox)
-            self._pending.append({
-                "action_type": f"dag_{task_type}",
-                "target": "dag_task",
-                "payload": {"task_id": getattr(task, "task_id", ""),
-                            "description": description},
-                "text": description[:200],
-                "queued_at": datetime.now(timezone.utc).isoformat(),
-            })
+            self._enqueue_pending(
+                action_type=f"dag_{task_type}",
+                target="dag_task",
+                payload={"task_id": getattr(task, "task_id", ""),
+                         "description": description},
+                text=description,
+            )
             return {"status": "pending_approval",
                     "reason": "high-risk DAG task requires approval (R4-B)"}
 
@@ -412,11 +412,32 @@ class DecisionBridge:
             return DecisionBridge._extract_decision_text(based)
         return ""
 
+    # ── 待批队列 ──────────────────────────────────────────────────────────
+
+    def _enqueue_pending(self, action_type: str, target: str,
+                         payload: dict, text: str) -> None:
+        """入队待批动作 — 有 PendingStore 则持久化，否则内存回退（诚实降级）。"""
+        if self._pending_store is not None:
+            self._pending_store.enqueue(
+                action_type=action_type, target=target,
+                payload=payload, text=text, source=self._agent_id,
+            )
+            return
+        self._pending.append({
+            "action_type": action_type,
+            "target": target,
+            "payload": payload,
+            "text": text[:200],
+            "queued_at": datetime.now(timezone.utc).isoformat(),
+        })
+
     # ── 查询 ──────────────────────────────────────────────────────────────
 
     @property
     def pending_actions(self) -> list[dict]:
-        """待批动作 (R4-B 接 Outbox 后由用户批准)。"""
+        """待批动作 — 持久化 store 优先，内存回退。"""
+        if self._pending_store is not None:
+            return self._pending_store.list_by_status("pending")
         return list(self._pending)
 
     @property

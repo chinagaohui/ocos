@@ -202,6 +202,26 @@ CREATE_IDENTITY = [
 
 
 # AUD-F8 (2026-08-30): plan_dag — CLI plan 分解结果落库（goal_id 关联 goals 表）
+
+# AUD-F12 (2026-08-30): pending_actions — R4-B 待批队列持久化（DecisionBridge ASK 动作）
+CREATE_PENDING_ACTIONS = [
+    """CREATE TABLE IF NOT EXISTS pending_actions (
+        id              TEXT PRIMARY KEY,
+        action_type     TEXT NOT NULL,
+        target          TEXT DEFAULT '',
+        payload_json    TEXT DEFAULT '{}',
+        text            TEXT DEFAULT '',
+        source          TEXT DEFAULT '',
+        status          TEXT NOT NULL DEFAULT 'pending',
+        queued_at       TEXT NOT NULL,
+        decided_at      TEXT,
+        decided_by      TEXT,
+        executed_at     TEXT,
+        result_summary  TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_pending_actions_status ON pending_actions(status)",
+]
+
 CREATE_PLAN_DAG = [
     """CREATE TABLE IF NOT EXISTS plan_dag (
         plan_id     TEXT PRIMARY KEY,
@@ -258,5 +278,6 @@ STORAGE_TABLES = {
     TABLE_IDENTITY: CREATE_IDENTITY,
     TABLE_GOAL: CREATE_GOAL,
     "plan_dag": CREATE_PLAN_DAG,
+    "pending_actions": CREATE_PENDING_ACTIONS,
     TABLE_WISDOM: CREATE_WISDOM,
 }

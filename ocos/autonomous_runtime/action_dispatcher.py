@@ -136,6 +136,20 @@ class ActionDispatcher:
 
         return actions
 
+    def dispatch_by_name(self, action_type_name: str,
+                         payload: Optional[dict] = None) -> Optional[DispatchedAction]:
+        """AUD-F12: 按名称派发（待批动作审批后回放）。
+
+        未知 ActionType 或无注册 handler → None（调用方诚实记 blocked）。
+        """
+        try:
+            at = ActionType[action_type_name]
+        except KeyError:
+            return None
+        if at not in self._handlers:
+            return None
+        return self.dispatch(at, payload=payload or {})
+
     @property
     def recent_actions(self) -> list[DispatchedAction]:
         return self._history[-20:]

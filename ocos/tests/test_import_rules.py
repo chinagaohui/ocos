@@ -138,7 +138,7 @@ ALLOWED_IMPORTS = {
                          "ocos.self.identity_boundary"],
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
-                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage"],  # S4: Organ Client（写作器官驱动）; P1-B: 生产入口经 daemon 装配层
+                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution"],  # S4: Organ Client（写作器官驱动）; P1-B: 生产入口经 daemon 装配层
     "ocos.interaction.repl": ["ocos.interaction"],
     "ocos.interaction.repl.commands": ["ocos.interaction", "ocos.goal",
                                         "ocos.storage", "ocos.planning"],
@@ -178,7 +178,8 @@ ALLOWED_IMPORTS = {
     "ocos.cognitive_loop": ["ocos.cognitive_loop", "ocos.decision"],
     # R4-A: 执行铰链 — 决策输出 → dispatcher 风险分级 → capability_reality 沙盒执行
     "ocos.execution": ["ocos.autonomous_runtime", "ocos.agent_orchestration",
-                       "ocos.interaction", "ocos.capability_reality"],
+                       "ocos.interaction", "ocos.capability_reality",
+                       "ocos.storage"],  # AUD-F12: PendingStore 持久化
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
                     "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal",

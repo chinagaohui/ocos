@@ -82,6 +82,20 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "plan":
             return cmd_plan(args, session)
 
+        elif args.command == "approvals":
+            from ocos.interaction.cli.commands.approvals import (
+                cmd_approvals_list, cmd_approvals_approve, cmd_approvals_deny,
+            )
+            if args.approvals_action == "list":
+                return cmd_approvals_list(args, session)
+            elif args.approvals_action == "approve":
+                return cmd_approvals_approve(args, session)
+            elif args.approvals_action == "deny":
+                return cmd_approvals_deny(args, session)
+            else:
+                parser.print_help()
+                return 1
+
         elif args.command == "memory":
             if args.memory_action == "query":
                 return cmd_memory_query(args, session, ctx)
