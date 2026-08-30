@@ -9,6 +9,7 @@ Phase 26: Tick Step 9 (result_ingest) 支持 ResultUnderstandingLayer
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 import threading
 import time
 import uuid
@@ -866,6 +867,15 @@ class AgentRuntime:
                     self._active_dag = dag
                     self._dag_cursor = 0
                     self._dag_total = len(dag.tasks)
+                    # UX-堆积修复: 分解后目标状态推进 PENDING → ACTIVE
+                    # （此前状态不变 → 同一目标每 tick 被重复分解 + 重复调 LLM）
+                    try:
+                        from ocos.kernel.goal_types import GoalStatus as _GS
+                        g.status = _GS.ACTIVE
+                        self._goal_store.save(g)
+                    except Exception as _st_e:
+                        logger.debug("goal status advance failed: %s", _st_e)
+                    self._active_dag_goal_id = g.goal_id
                     # PW-4.4: 同步 ocos.task 执行期镜像（Stage ⑤ 消费）
                     self._sync_task_mirror(dag)
                     decomposed = 1
@@ -1036,6 +1046,18 @@ class AgentRuntime:
                 self._record_goal_result()
             except Exception as _gr_e:
                 logger.debug("goal result episode failed: %s", _gr_e)
+            # UX-堆积修复: 目标生命周期闭合 ACTIVE → COMPLETED
+            try:
+                from ocos.kernel.goal_types import GoalStatus as _GS
+                gid = getattr(self, "_active_dag_goal_id", None)
+                if gid and self._goal_store is not None:
+                    _g = self._goal_store.load(gid)
+                    if _g is not None and _g.status.name == "ACTIVE":
+                        _g.status = _GS.COMPLETED
+                        self._goal_store.save(_g)
+            except Exception as _gc_e:
+                logger.debug("goal completion failed: %s", _gc_e)
+            self._active_dag_goal_id = None
             self._active_dag = None
             self._dag_cursor = 0
             self._dag_total = 0
