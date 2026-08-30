@@ -2,6 +2,11 @@
 
 Decision Intelligence 回答: "在当前情境下，我应该如何选择？"
 
+接线状态（AUD-F13 选项 A, 2026-08-30）: 本组件链由 GAP-P1-1 接入
+cognitive_loop/decision_pipeline（真实调用, decision_pipeline.py:73-114），
+但该循环当前无生产消费者（备用引擎定位，见 cognitive_loop/__init__）。
+生产 tick 决策 = AgentRuntime + DecisionBridge。组件本身完整可用。
+
 输入:  Goal + Self Model + Personal Wisdom + World Model + Current Context
 输出:  Decision Proposal (不是自动执行)
 

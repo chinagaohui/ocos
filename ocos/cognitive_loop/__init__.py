@@ -2,6 +2,13 @@
 
 将 Phase 39-45 所有器官连接成稳定运行的个人智能循环。
 
+定位裁决（AUD-F13 选项 A, 2026-08-30）:
+    本包 = 自治循环编排视图（AutonomousLoop 激活路径）。生产 tick 的
+    决策路径 = AgentRuntime step7/8 + DecisionBridge（RuntimeKernel 驱动），
+    不经过 LoopOrchestrator — 本链是"已接好线的备用引擎"，当前无生产
+    消费者。经 GAP-P1-1 接入的 decision 组件链在本链内真实可用；是否
+    将其升级为主循环 fallback 由 R4-B Outbox 稳定后另行评估（演化提案）。
+
 不是制造新器官——而是让已有器官协同工作，形成完整的认知生命循环。
 
 完整闭环:
