@@ -2,6 +2,13 @@
 
 OCOS 的心跳控制器 — 让认知循环按照时间和优先级稳定运行。
 
+分工裁决（AUD-F2, 2026-08-30）:
+    本包 = 独立任务心跳调度器（CognitiveClock/PriorityQueue/Backpressure/
+    WorkerManager，Phase 51.2 契约，test_phase51_2 锁定），当前无生产消费者，
+    候选接入点 = ResidentRuntime 任务队列需要背压时。
+    ocos/runtime/scheduler.py = tick 内 stage 级事件分发器（B3，生产在用）。
+    两者非重复实现，不合并。
+
 核心能力:
     - CognitiveClock: tick 编号、时间推进、周期触发
     - PriorityQueue: 优先级排序 (CRITICAL > HIGH > MEDIUM > LOW)

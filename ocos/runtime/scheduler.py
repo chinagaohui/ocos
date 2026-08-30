@@ -6,6 +6,13 @@ B3 Scheduler — 优先级调度器。
 - 结合 Attention Score 确定执行优先级
 - 从 Registry（Capability Registry / 简化实现）发现 Engine
 - 分发执行请求到对应 Engine
+
+分工裁决（AUD-F2, 2026-08-30）:
+    本模块 = tick 内 stage 级事件分发器（生产在用，经 runtime.pipeline 注册）。
+    ocos/runtime_scheduler/ = 独立任务心跳调度器（Phase 51.2 契约，
+    test_phase51_2 锁定；CognitiveClock/PriorityQueue/Backpressure/Worker），
+    当前无生产消费者，候选接入点 = ResidentRuntime 任务队列需要背压时。
+    两者非重复实现，不合并。
 - 支持 one-shot / periodic / conditional 调度类型
 
 依赖：B2 Attention Engine（用于优先级排序）
