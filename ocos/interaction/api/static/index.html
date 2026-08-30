@@ -342,8 +342,12 @@ async function refreshSide() {
     const g = d.goals || {};
     const mem = d.memory || {};
     const memMax = Math.max(1, (mem.episodes || 0) + 10);
+    const dm = d.daemon || {};
+    const dmColor = dm.alive ? "#3ddc84" : "#ff5c7a";
+    const dmText = dm.alive ? `在线（${dm.age_s}s 前）` : "离线 — 启动 ocos run";
     document.getElementById("stats").innerHTML =
-      `<div class="stat"><span>目标 P / A</span><b>${g.PENDING||0} / ${g.ACTIVE||0}</b></div>
+      `<div class="stat"><span>daemon</span><b style="color:${dmColor}">● ${dmText}</b></div>
+       <div class="stat"><span>目标 P / A</span><b>${g.PENDING||0} / ${g.ACTIVE||0}</b></div>
        <div class="bar"><i style="width:${Math.min(100,((g.ACTIVE||0))*33)}%"></i></div>
        <div class="stat"><span>待批动作</span><b>${d.approvals_pending}</b></div>
        <div class="stat"><span>收件箱</span><b>${d.inbox_queued}</b></div>

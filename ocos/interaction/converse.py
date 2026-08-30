@@ -137,6 +137,15 @@ class ChatResponder:
         if sk:
             lines.append(sk)
 
+        # UX-F2: 最近目标执行结果（问"结果呢"可直接回答）
+        try:
+            for ep in hub.episode.query_by_time(limit=15):
+                if getattr(ep, "action", "") == "goal_result":
+                    lines.append(f"最近目标结果:\n{getattr(ep, 'decision', '')[:400]}")
+                    break
+        except Exception as e:
+            logger.debug("goal result context failed: %s", e)
+
         # PW-1.1: 人生智慧（dream 巩固沉淀, 确定性经验而非 LLM 提案）
         try:
             from ocos.agent.wisdom_trigger import load_wisdom_context

@@ -656,6 +656,23 @@ class AgentRuntime:
 
             created = 0
             for goal in result.goals:
+                # UX-F4: SELF 目标去重 + 每日限额 — 防止"探索新领域"
+                # 同类目标无限堆积，挤占人工目标的分解名额
+                try:
+                    existing = self._goal_store.load_active()
+                    if any(getattr(g, "description", "") == goal.description
+                           for g in existing):
+                        continue
+                    today = datetime.now(timezone.utc).date().isoformat()
+                    conn = self._goal_store.connection
+                    n_today = conn.execute(
+                        "SELECT COUNT(*) FROM goal WHERE origin_level='SELF' "
+                        "AND created_at LIKE ?",
+                        (f"{today}%",)).fetchone()[0]
+                    if n_today >= 3:
+                        continue
+                except Exception as _dq_e:
+                    logger.debug("SELF goal dedup check failed: %s", _dq_e)
                 self._goal_store.save(goal)
                 created += 1
 
@@ -836,6 +853,16 @@ class AgentRuntime:
                         caller="runtime",
                     )
                     dag = TaskDecomposer.decompose(ug)
+                    # UX-F1: 任务描述携带目标语境（模板产出"分析数据"这类
+                    # 无上下文描述，LLM 执行器无法转换为具体动作）
+                    goal_ctx = (ug.objective or ug.raw_input or "")[:80]
+                    for _t in dag.tasks.values():
+                        _d = getattr(_t, "description", "")
+                        if goal_ctx and goal_ctx not in _d:
+                            try:
+                                _t.description = f"{goal_ctx} — {_d}"
+                            except Exception:
+                                pass
                     self._active_dag = dag
                     self._dag_cursor = 0
                     self._dag_total = len(dag.tasks)
@@ -880,6 +907,49 @@ class AgentRuntime:
     def task_mirror(self) -> Any:
         """PW-4.4: 执行期任务镜像（RuntimeKernel 注入用）。"""
         return getattr(self, "_task_mirror", None)
+
+    def _record_goal_result(self) -> None:
+        """UX-F2: DAG 执行完毕 → 目标结果摘要 Episode（真实输出可对话查询）。
+
+        decision 字段 = 各任务真实输出的聚合（此前 EchoAgent 时代这里
+        全是空转记录，主人问"结果呢"时无从回答）。
+        """
+        if self._memory_hub is None or not self._memory_hub.is_initialized():
+            return
+        try:
+            import uuid as _uuid
+            from datetime import datetime, timezone
+            from ocos.memory.episode.models import Episode, EpisodeStatus
+
+            results = list(self._recent_results)[-12:]
+            lines = []
+            for r in results:
+                ok = "✓" if r.get("success") else "✗"
+                out = str(r.get("output", ""))[:120]
+                lines.append(f"{ok} {r.get('description', '')[:50]} → {out}")
+            if not lines:
+                return
+            episode = Episode(
+                id=f"EPI-{uuid.uuid4().hex[:12]}",
+                experience_id=f"EXP-GOAL-{uuid.uuid4().hex[:8]}",
+                created_at=datetime.now(timezone.utc),
+                session_id=f"tick_{self._cycle_count}",
+                context={"task_count": len(results),
+                         "kind": "goal_execution_result"},
+                goal="目标执行结果汇总",
+                decision="\n".join(lines)[:1500],
+                action="goal_result",
+                outcome={"success": all(r.get("success") for r in results),
+                         "cycle": self._cycle_count},
+                significance_score=0.7,
+                source="goal_result",
+                status=EpisodeStatus.ACTIVE,
+                tags=["goal_result"],
+            )
+            self._memory_hub.episode.save(episode)
+            logger.info("Goal result episode saved (%d tasks)", len(results))
+        except Exception as e:
+            logger.debug("goal result episode skipped: %s", e)
 
     def attach_decision_bridge(self, bridge: Any) -> None:
         """R4-A: 挂载决策执行铰链 (公开装配入口, 供 daemon.factory 调用)。
@@ -961,7 +1031,11 @@ class AgentRuntime:
                     self._dag_cursor += 1
                     return {"step": 7, "name": "core_loop", "task": tid, "error": str(e)}
 
-            # DAG exhausted — reset
+            # DAG exhausted — UX-F2: 目标执行完毕 → 结果摘要 Episode
+            try:
+                self._record_goal_result()
+            except Exception as _gr_e:
+                logger.debug("goal result episode failed: %s", _gr_e)
             self._active_dag = None
             self._dag_cursor = 0
             self._dag_total = 0
@@ -1174,7 +1248,8 @@ class AgentRuntime:
                     "output_excerpt": result.get("output", "")[:300],
                 },
                 goal=result.get("description", "")[:200],
-                decision="execute",
+                # UX-F2: decision 携带真实输出（此前是常量 "execute"，记忆里查不到结果）
+                decision=str(result.get("output", ""))[:400],
                 action=f"{result.get('agent', 'agent')}.execute",
                 outcome={
                     "success": result.get("success", False),

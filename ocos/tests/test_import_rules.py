@@ -190,7 +190,8 @@ ALLOWED_IMPORTS = {
                        "ocos.interaction", "ocos.capability_reality",
                        "ocos.storage",
                        "ocos.operations", "ocos.event_memory", "ocos.digital_world",
-                       "ocos.agent", "ocos.daemon"],
+                       "ocos.agent", "ocos.daemon", "ocos.engines"],
+                       # PW-2.1 治理化应用 + PW-3.1 系统修复 + UX-F1 LLM 执行器
                        # PW-2.1 治理化应用 + PW-3.1 系统修复执行
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",

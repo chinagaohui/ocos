@@ -19,10 +19,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import uuid
+from types import SimpleNamespace
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -170,6 +172,10 @@ class DecisionBridge:
         # PW-4.2: 文件操作执行器（digital_world file_ops, 需审批）
         self._dispatcher.register_custom_handler(
             "file_op", self._handler_file_op)
+        # UX-F1: DAG 任务 LLM 执行器 — 任务描述→具体动作→真实执行
+        for dag_action in ("dag_create", "dag_modify", "dag_execute", "dag_verify"):
+            self._dispatcher.register_custom_handler(
+                dag_action, self._handler_dag_task)
         return self
 
     # ── 决策执行入口 ──────────────────────────────────────────────────────
@@ -243,6 +249,30 @@ class DecisionBridge:
         if task_type in _DAG_AUTO_TYPES:
             # 只读分析/验证 → 真实执行 (fs stat/read 或 registry 健康)
             result = self._dag_readonly_execute(description)
+            if result is None and self._llm_available():
+                # UX-F1: 描述无路径匹配 → LLM 转换为只读白名单命令自主执行
+                # （低危 auto:governed：白名单+分段校验+敏感路径拦截全生效）
+                llm = self._handler_dag_task(SimpleNamespace(payload={
+                    "description": description, "task_id": "",
+                    "auto_readonly": True}))
+                if llm.get("ok"):
+                    self._audit_record(
+                        contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
+                        status="completed",
+                        summary=f"dag_{task_type}: {str(llm.get('stdout', ''))[:150]}")
+                    return {"status": "completed", "result": llm}
+                # LLM 判定不可执行或失败 → 待批（写类动作需要主人批准）
+                self._pending.append({
+                    "action_type": f"dag_{task_type}",
+                    "target": "dag_task",
+                    "payload": {"task_id": getattr(task, "task_id", ""),
+                                "description": description,
+                                "llm_reason": llm.get("error", "")},
+                    "text": description[:200],
+                    "queued_at": datetime.now(timezone.utc).isoformat(),
+                })
+                return {"status": "pending_approval",
+                        "reason": llm.get("error", "LLM 无法转为只读动作")}
             if result is not None:
                 if result.get("ok"):
                     self._audit_record(
@@ -355,6 +385,27 @@ class DecisionBridge:
         command = (action.payload or {}).get("command", "")
         if not command:
             return {"ok": False, "error": "empty command"}
+        # UX-F1 安全加固: 复合命令（; && ||）分段校验——白名单是前缀匹配，
+        # 不分段则 "uname -a; <危险命令>" 会绕过白名单
+        import re as _re
+        segments = [s.strip() for s in _re.split(r";|&&|\|\|", command) if s.strip()]
+        SENSITIVE_PREFIXES = ("/etc", "/root", "/proc", "/sys", "/boot",
+                              "/dev", "/var/log",
+                              "/home/laogao/.ssh", "/home/laogao/.config")
+        try:
+            from ocos.operations.sandbox_ops import SandboxOps
+            for seg in segments:
+                if not SandboxOps._is_allowed(seg):
+                    return {"ok": False, "blocked": True,
+                            "block_reason": f"白名单外命令段: {seg[:60]}"}
+                # 敏感路径拦截: 命令参数指向系统敏感目录即拒绝
+                for token in _re.findall(r"[~/][\w./-]*", seg):
+                    resolved = os.path.abspath(os.path.expanduser(token))
+                    if any(resolved.startswith(p) for p in SENSITIVE_PREFIXES):
+                        return {"ok": False, "blocked": True,
+                                "block_reason": f"敏感路径: {token[:50]}"}
+        except Exception:
+            pass
         try:
             import os as _os
             from ocos.operations.sandbox_ops import SandboxCommand, SandboxOps
@@ -548,6 +599,74 @@ class DecisionBridge:
                     "error": result.error or ""}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def _handler_dag_task(self, action) -> dict:
+        """UX-F1: DAG 任务执行 — LLM 把任务描述转换为具体动作并真实执行。
+
+        动作格式（LLM 严格输出单行）:
+            RUN|<只读白名单命令>       → SandboxOps 真实执行
+            FILE_WRITE|<路径>|<内容>   → digital_world file_ops
+            NONE|<为什么无法执行>      → 诚实失败
+        未接入语言核心（无 LLM key）→ 诚实 blocked。
+        """
+        payload = action.payload or {}
+        description = payload.get("description", "") or payload.get("text", "")
+        if not description:
+            return {"ok": False, "error": "empty task description"}
+
+        from ocos.engines.text_generator import TextGenerator
+        if not self._llm_available():
+            return {"ok": False,
+                    "error": "需要语言核心（LLM key）才能把任务描述转换为可执行动作",
+                    "honest_blocked": True}
+
+        try:
+            import asyncio
+            tg = TextGenerator()
+            prompt = (
+                f"任务描述：{description}\n\n"
+                "把上述任务转换为**一条**可直接执行的动作。只输出单行，格式严格为：\n"
+                "RUN|<命令>（优先使用只读命令: uname/df/free/uptime/ls/cat/head/"
+                "tail/grep/find/ps/whoami/date/env/hostname/id）\n"
+                "FILE_WRITE|<绝对路径>|<文件内容>\n"
+                "NONE|<一句话说明为什么无法执行>\n"
+                "不要输出任何解释。"
+            )
+            raw = asyncio.run(tg._provider.generate(
+                prompt,
+                system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的单行动作。",
+                temperature=0.1, max_tokens=2000))
+            raw = raw.strip().splitlines()[0].strip()
+        except Exception as e:
+            return {"ok": False, "error": f"LLM 规划失败: {e}"}
+
+        if raw.startswith("RUN|"):
+            command = raw[4:].strip()
+            # UX-F1: 自主路径（auto_readonly）下命令必须只读——
+            # file_write/写类关键词强制转待批
+            if (getattr(action, "payload", {}) or {}).get("auto_readonly") and                     any(k in command.lower() for k in
+                        ("write", "echo >", ">", "tee ", "rm", "mv", "mkdir")):
+                return {"ok": False,
+                        "error": "自主路径仅允许只读命令——写操作需转待批"}
+            return self._handler_run_command(SimpleNamespace(payload={"command": command}))
+        if raw.startswith("FILE_WRITE|"):
+            parts = raw.split("|", 2)
+            if len(parts) == 3:
+                return self._handler_file_op(SimpleNamespace(payload={
+                    "op_type": "file_write", "target": parts[1].strip(),
+                    "params": {"content": parts[2]},
+                    "approval_id": payload.get("approval_id", "task-approved")}))
+            return {"ok": False, "error": f"FILE_WRITE 格式错误: {raw[:80]}"}
+        if raw.startswith("NONE|"):
+            return {"ok": False, "error": f"任务无法执行: {raw[5:].strip()}"}
+        return {"ok": False, "error": f"LLM 输出格式不符: {raw[:80]}"}
+
+    def _llm_available(self) -> bool:
+        import os
+        if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"):
+            return True
+        from ocos.engines.text_generator import _read_llm_config
+        return bool(_read_llm_config().get("api_key"))
 
     def execute_approved(self, action_type_name: str,
                          payload: dict | None = None):

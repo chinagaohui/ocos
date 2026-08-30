@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
+from datetime import datetime, timezone
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -110,6 +112,7 @@ class ResidentRuntime:
         self._tick_interval = tick_interval
         self._max_idle_cycles = max_idle_cycles
         self._state: DaemonState = DaemonState.STOPPED
+        self._hb_ticks: int = 0
         self._stop_event = threading.Event()
         self._tick_thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
@@ -239,6 +242,13 @@ class ResidentRuntime:
     def _tick_loop(self) -> None:
         """主循环 — 经 RuntimeKernel 定时 tick（认知循环单一宿主），消费目标队列。"""
         while not self._stop_event.is_set():
+            # UX-F3: 心跳落盘（每 5 tick 一次, 降低写盘对 tick 时序的影响）
+            self._hb_ticks += 1
+            if self._hb_ticks % 5 == 0:
+                try:
+                    self._write_heartbeat()
+                except Exception:
+                    pass
             # Phase 33: 将队列中的目标导入 runtime 的 goal_store
             self._drain_goal_queue()
             # UX-1: 认领 CLI 创建的持久化目标（每 tick 最多 1 个）
@@ -330,6 +340,18 @@ class ResidentRuntime:
         except Exception:
             logger.exception("Failed to import queued goal: %s", description)
             return False
+
+    def _write_heartbeat(self) -> None:
+        """UX-F3: 每 tick 写心跳文件（Web 侧栏/状态命令判断存活）。"""
+        import json
+        from pathlib import Path
+        hb = Path.home() / ".ocos" / "daemon_heartbeat.json"
+        hb.parent.mkdir(parents=True, exist_ok=True)
+        hb.write_text(json.dumps({
+            "pid": os.getpid(),
+            "cycle": getattr(self._runtime, "_cycle_count", 0),
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }), encoding="utf-8")
 
     def _drain_user_inbox(self) -> int:
         """UX-P2: 消费收件箱中的用户消息 → 感知事件（Step 1 下一 tick 摄入）。"""

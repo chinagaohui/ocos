@@ -79,6 +79,13 @@ ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "false",
     "sort",
     "uniq",
+    # PW-4.1/F1: 只读系统信息命令（宿主机环境分析类任务需要）
+    "df",
+    "free",
+    "uptime",
+    "hostname",
+    "id",
+    "ps",
 })
 
 # 路径沙盒 — 只允许在指定目录内操作

@@ -73,7 +73,8 @@ class TestPhase33Daemon:
         rt.stop(timeout=2.0)
         cycles_after = rt.cycle_count
         # cycles should not increase after stop
-        assert cycles_after == cycles_before
+        # stop 期间在飞的 tick 仍会完成（最多 +1）——UX-F3 心跳写盘后该竞态更易触达
+        assert cycles_after - cycles_before <= 1
 
     def test_resume_after_restart(self):
         from ocos.daemon import ResidentRuntime

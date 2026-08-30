@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 import uuid
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -90,6 +93,20 @@ async def summary() -> APIResponse:
         data["memory"] = memory
     finally:
         conn.close()
+
+    # UX-F3: daemon 心跳存活
+    from pathlib import Path
+    hb_file = Path.home() / ".ocos" / "daemon_heartbeat.json"
+    daemon = {"alive": False}
+    try:
+        hb = json.loads(hb_file.read_text(encoding="utf-8"))
+        age = time.time() - datetime.fromisoformat(hb["ts"]).timestamp()
+        daemon = {"alive": age < 30, "age_s": round(age, 1),
+                  "cycle": hb.get("cycle", 0), "pid": hb.get("pid")}
+    except (OSError, ValueError, KeyError):
+        pass
+    data["daemon"] = daemon
+
     return APIResponse(success=True, message="ok", data=data)
 
 
@@ -129,6 +146,17 @@ async def goals_from_chat(body: dict[str, Any]) -> APIResponse:
     message = str(body.get("message", "")).strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
+
+    # UX-F4: 意图过滤 — 状态询问类消息不该变成目标（会永远空转）
+    QUESTION_MARKERS = ("结果", "怎么样了", "进度", "状态如何", "为什么",
+                        "怎么没有", "了吗", "如何了", "是多少")
+    if len(message) <= 20 and message.endswith(("？", "?")) and any(
+            m in message for m in QUESTION_MARKERS):
+        raise HTTPException(
+            status_code=422,
+            detail="这更像状态询问而非任务 — 请直接在对话框问 OCOS，"
+                   "它会从记忆里回答；确要执行请改写为具体任务描述")
+
     domain = str(body.get("domain", "development"))
     from ocos.goal.store import GoalStore
     store = GoalStore(db_path=_db())
