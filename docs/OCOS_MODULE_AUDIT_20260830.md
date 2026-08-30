@@ -111,3 +111,32 @@
 - 覆盖最强的包：kernel（1154 test 函数）、runtime（744）、models（693）、agent（571）、capability（568）。
 - 覆盖最弱的主链路包：proactive（12）、execution（27）、alerts（18）、decision（20）——新接线模块测试偏薄，建议下阶段补 E2E。
 - 测试覆盖 ≠ 生产接线：如 digital_world 有 58 个测试函数但零生产调用者；反之 runtime/stages 接线后测试在 test_single_main_loop 内。
+
+---
+
+## 七、修复执行记录（AUDIT_FIX_PLAN v1.0，2026-08-30 执行）
+
+| 编号 | 内容 | commit | 验证 |
+|---|---|---|---|
+| AUD-F1 | run.py 半接线补齐: SemanticStore 镜像 on + 感知管线挂载（0 sensors 零噪音）; factory.build_knowledge_abi; ResidentRuntime.memory_hub/attach_perception_pipeline | (见 git log) | 冒烟 2 ticks + 定向测试 |
+| AUD-F3 | stages/__init__ docstring 更新为 P2-2 后事实 | 6d9542c | 单测 |
+| AUD-F4 | living_test day1-7 协议 fail-closed（钩子缺失不再假通过）; drill 仍 10/10 | 7f85048 | test_phase58_1 + drill |
+| AUD-F2 | 双调度器分工裁决 docstring | (见 git log) | test_phase51_2 |
+| AUD-F5/F6 | operations vs digital_world、storage vs events 四件套裁决 | (见 git log) | storage/recovery/event 测试 |
+| AUD-F7/F10a | TaskDAG 规划期 vs 执行期裁决; 候选裁撤清单（auth/belief.py/SelfGovernor） | (见 git log) | 全量 |
+| AUD-F11 | supervisor 回退执行器改诚实失败（无 AgentExecutor 注入 → NOT executed） | (见 git log) | orch/validation 测试注入 stub |
+| AUD-F8 | CLI goal/plan 落库（goals + plan_dag 表, schema v4）; TBD 文案清零; 自愈 DDL 补 agent_id/metadata 列; 测试 DB 隔离 | (见 git log) | E2E: create/plan/list 全通 |
+| AUD-F12 | R4-B 最小可用: pending_actions 表 + PendingStore + ocos approvals list/approve/deny; approve 后无 executor 诚实 blocked | (见 git log) | E2E 审批流 + 7 项单测 |
+| AUD-F9 | build_master_agent 注册 5 个认知引擎 — 生产 tick 不再走 status:"stub" 降级 | (见 git log) | 冒烟 + agent 测试 |
+| AUD-F13 | 选项 A: cognitive_loop/decision 备用引擎定位裁决 docstring | (见 git log) | phase43/46 测试 |
+| AUD-F14 | 四模块 E2E 补强 7 项（proactive/alerts/decision/execution DENY） | (见 git log) | 新测试全过 |
+| **最终基线** | | | **5258 passed / 24 skipped / 0 failed** |
+
+### F15 占位复查残留（全部为已登记的诚实降级/文档性标注，非假通过）
+
+- runtime/attention_engine.py:64 — SemanticContentAnalyzer 未实现的显式声明（GAP 已标注）
+- engines/text_generator.py:59 — Mock Provider 无 key 时降级（设计）
+- runtime/runtime_state.py:4 — SAFE MODE 状态存在性说明
+- self/builder.py:273 — 无数据时低置信度占位（诚实标注）
+- capability/skill_registry.py:208 — 缺失 skill 占位填充（小项，可后续改进）
+- proactive/templates.py:34 — 模板 {topic} 槽位回退（非代码占位）
