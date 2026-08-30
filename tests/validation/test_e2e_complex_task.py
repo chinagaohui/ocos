@@ -84,7 +84,13 @@ async def test_e2e_complex_novel_task():
     registry.register(AgentDescriptor(agent_id="reviewer-1", agent_type="reviewer",
                                       capabilities=("analysis", "verification")))
     selector = AgentSelector(registry)
-    supervisor = ExecutionSupervisor(registry=registry, selector=selector)
+    class _StubAgentExecutor:
+        """AUD-F11: 回退 _execute_agent 已诚实失败 — 注入 stub 测 completed 路径。"""
+        def execute(self, contract):
+            return True, f"executed {contract.task_id}", None
+
+    supervisor = ExecutionSupervisor(registry=registry, selector=selector,
+                                     executor=_StubAgentExecutor())
     records = await supervisor.execute_plan(plan)
     assert len(records) > 0
     for r in records:

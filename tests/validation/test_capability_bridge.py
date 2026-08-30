@@ -140,9 +140,15 @@ def supervisor_with_bridge(stubs):
     exec_stub.register(stubs["sg-write"])
     exec_stub.register(stubs["sg-search"])
 
+    class _StubAgentExecutor:
+        """AUD-F11: 回退 _execute_agent 已诚实失败 — 注入 stub 测 completed 路径。"""
+        def execute(self, contract):
+            return True, f"executed {contract.task_id}", None
+
     sup = ExecutionSupervisor(
         reg, sel,
         skill_graph_executor=exec_stub,
+        executor=_StubAgentExecutor(),
         capability_hints={
             "writer": {"skill_graph_id": "sg-write"},
             "researcher": {"skill_graph_id": "sg-search"},
@@ -182,9 +188,16 @@ async def test_skill_graph_skipped_when_id_not_found(stubs):
     reg.register(agent)
 
     exec_stub = _StubSkillGraphExecutor()
+
+    class _StubAgentExecutor:
+        """AUD-F11: skill graph 跳过后 Agent 执行走真实 executor。"""
+        def execute(self, contract):
+            return True, f"executed {contract.task_id}", None
+
     sup = ExecutionSupervisor(
         reg, sel,
         skill_graph_executor=exec_stub,
+        executor=_StubAgentExecutor(),
         capability_hints={"reviewer": {"skill_graph_id": "sg-nonexistent"}},
     )
 
@@ -204,9 +217,15 @@ async def test_skill_graph_skipped_when_no_executor(stubs):
     agent = AgentDescriptor(agent_id="w-1", agent_type="writer", capabilities=("text",))
     reg.register(agent)
 
+    class _StubAgentExecutor:
+        """AUD-F11: 无 skill_graph_executor 时 Agent 执行走真实 executor。"""
+        def execute(self, contract):
+            return True, f"executed {contract.task_id}", None
+
     sup = ExecutionSupervisor(
         reg, sel,
-        skill_graph_executor=None,  # 无 executor
+        skill_graph_executor=None,  # 无 skill graph executor
+        executor=_StubAgentExecutor(),
         capability_hints={"writer": {"skill_graph_id": "sg-write"}},
     )
     sup.register_skill_graph("sg-write", stubs["sg-write"])
@@ -299,9 +318,15 @@ async def test_skill_graph_failure_does_not_block_agent(stubs):
         def stop(self, process_id):
             pass
 
+    class _StubAgentExecutor:
+        """AUD-F11: SkillGraph 失败后 Agent 执行需真实 executor 兜底。"""
+        def execute(self, contract):
+            return True, f"executed {contract.task_id}", None
+
     sup = ExecutionSupervisor(
         reg, sel,
         skill_graph_executor=_FailingExecutor(),
+        executor=_StubAgentExecutor(),
         capability_hints={"writer": {"skill_graph_id": "sg-write"}},
     )
     sup.register_skill_graph("sg-write", stubs["sg-write"])

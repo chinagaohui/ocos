@@ -185,7 +185,7 @@ ALLOWED_IMPORTS = {
                     "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal",
                     "ocos.alerts", "ocos.health_examination",
                     "ocos.perception", "ocos.world_model", "ocos.knowledge",
-                    "ocos.execution"],
+                    "ocos.execution", "ocos.engines", "ocos.events"],  # AUD-F9: 引擎实例化(EventBus)
 }
 
 # 测试文件允许的 import 例外（白名单，当前 unused—保留供将来使用）
