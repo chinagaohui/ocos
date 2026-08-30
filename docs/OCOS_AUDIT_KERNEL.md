@@ -305,3 +305,11 @@ def act(self, decision: Decision) -> ActResult:
   （agent/execution_manager 属 AgentRuntime 侧）；收敛为转发语义——
   注入后 get_history() 只读转发，不消费不清空。
 - 全部 stage 惰性注入（构造参数 Any，模块零新 import），零注入=旧行为。
+
+## Deprecated / Pending-Removal 清单（AUD-F10a, 2026-08-30 登记，下个大版本裁决删除）
+
+| 项 | 裁撤理由 | 替代物 | 迁移动作 |
+|---|---|---|---|
+| ocos/auth/（User/Role/IdentityStore） | 与 self.IdentityBoundary 语义重叠；唯一引用为 phase23_gate 脚本；API 鉴权未接 | self/identity_boundary | 若 API 鉴权立项则转正，否则随测试一并删除 |
+| ocos/belief.py（BeliefManager） | 第三套信念系统（另有 memory/belief + agent/belief_system），生产零引用，持久化 TBD | agent/belief_system + memory/belief | 迁移 test_phase61a/62d 后删除 |
+| self/governor.py + self/monitor.py | 生产零引用；审批能力已由 evolution 审批链 + R4-A ASK 待批承担 | evolution/ + execution/bridge ASK | 评估 SelfGovernor 是否并入 evolution 后删除 |

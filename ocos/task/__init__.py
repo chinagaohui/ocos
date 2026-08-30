@@ -1,7 +1,14 @@
 """Phase 23-C — TaskDAG with RLock。
 
 任务有向无环图：管理任务间的依赖关系与拓扑排序。
-用于 ExecutiveController 的策略制定阶段。
+
+分工裁决（AUD-F7, 2026-08-30）:
+    本包 TaskDAG = 执行期就绪队列（resolve_ready → 可执行候选），
+    唯一预期生产消费者 = runtime/stages/execution_check.py（可选注入，
+    当前 pipeline 默认不传 → 诚实降级为空候选）。
+    ocos/planning/models.py 的同名 TaskDAG = 规划期 DAG（TaskDecomposer
+    产出，携带 goal_id/agent_type 语义，生产在用）。
+    两者同名不同责，按规划/执行期分工，不合并、不改名（历史契约）。
 """
 
 from __future__ import annotations

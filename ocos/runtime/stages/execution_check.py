@@ -2,6 +2,11 @@
 
 39.2: 发现 execution_candidates，不调用 Agent。
 Agent 调度属于后续 Phase。
+
+注入契约（AUD-F7, 2026-08-30）: 本 Stage 的 TaskDAG 注入类型应为
+ocos.task.TaskDAG（执行期就绪队列，resolve_ready() 产出候选）——
+与 planning/models 的规划期同名 TaskDAG 分工不同。默认不注入 →
+空候选（诚实降级）。
 """
 
 from __future__ import annotations
