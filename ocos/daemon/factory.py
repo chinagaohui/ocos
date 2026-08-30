@@ -26,17 +26,46 @@ def build_master_agent(agent_id: str):
     from ocos.runtime.context_manager import WorkingMemory
     from ocos.self.identity_boundary import IdentityBoundary
 
+    wm = WorkingMemory()
+    engines = build_cognitive_engines(working_memory=wm)
+
     return MasterAgent(
         agent_id=agent_id,
         identity=IdentityBoundary.create_default(),
         goal_stack=GoalStack(),
         intent=Intent(),
         attention=CognitiveAttentionController(),
-        working_memory=WorkingMemory(),
+        working_memory=wm,
         capability_manager=CapabilityManager(),
         execution_manager=ExecutionManager(),
         state=AgentState(),
+        **engines,
     )
+
+
+def build_cognitive_engines(event_bus: Any = None, working_memory: Any = None) -> dict:
+    """AUD-F9: 实例化 MasterAgent 五个认知阶段的真实引擎。
+
+    此前 build_master_agent 不注册引擎 → think/decide/reflect/learn 走
+    status:"stub" 降级（master_agent 诚实降级路径保留，工厂不再触发它）。
+    """
+    from ocos.engines.decision_making_engine import DecisionMakingEngine
+    from ocos.engines.learning_engine import LearningEngine
+    from ocos.engines.planning_engine import PlanningEngine
+    from ocos.engines.reasoning_engine import ReasoningEngine
+    from ocos.engines.reflection_engine import ReflectionEngine
+    from ocos.events.event_bus import EventBus
+    from ocos.runtime.context_manager import WorkingMemory
+
+    eb = event_bus or EventBus()
+    wm = working_memory or WorkingMemory(event_bus=eb)
+    return {
+        "reasoning_engine": ReasoningEngine(eb, wm),
+        "planning_engine": PlanningEngine(eb, wm),
+        "decision_engine": DecisionMakingEngine(eb, wm),
+        "reflection_engine": ReflectionEngine(eb, wm),
+        "learning_engine": LearningEngine(eb, wm),
+    }
 
 
 def build_health_loop(runtime=None, interval_ticks: int = 100):
