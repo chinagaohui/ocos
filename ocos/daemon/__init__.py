@@ -85,6 +85,14 @@ class ResidentRuntime:
                 self._domain_goal_store = GoalStore(db_path=db_path)
             except Exception as e:
                 logger.warning("GoalStore unavailable, goal claim disabled: %s", e)
+        # UX-P2: 用户消息收件箱（ocos say → daemon 消费 → 感知事件）
+        self._user_inbox: Any = None
+        if db_path and db_path != ":memory:":
+            try:
+                from ocos.interaction.inbox import UserInbox
+                self._user_inbox = UserInbox(db_path=db_path)
+            except Exception as e:
+                logger.warning("UserInbox unavailable, say channel disabled: %s", e)
         self._tick_interval = tick_interval
         self._max_idle_cycles = max_idle_cycles
         self._state: DaemonState = DaemonState.STOPPED
@@ -203,6 +211,8 @@ class ResidentRuntime:
             self._drain_goal_queue()
             # UX-1: 认领 CLI 创建的持久化目标（每 tick 最多 1 个）
             self._claim_persisted_goals()
+            # UX-P2: 消费用户消息（ocos say）
+            self._drain_user_inbox()
 
             # P1-C: 一次认知 tick = kernel.tick_loop(1)（8 空壳 stage + agent driver）
             try:
@@ -288,6 +298,26 @@ class ResidentRuntime:
         except Exception:
             logger.exception("Failed to import queued goal: %s", description)
             return False
+
+    def _drain_user_inbox(self) -> int:
+        """UX-P2: 消费收件箱中的用户消息 → 感知事件（Step 1 下一 tick 摄入）。"""
+        if self._user_inbox is None:
+            return 0
+        try:
+            messages = self._user_inbox.drain(limit=3)
+        except Exception:
+            logger.exception("UserInbox drain failed")
+            return 0
+        for msg in messages:
+            result = self._runtime.inject_user_message(
+                msg["content"], sender=msg["sender"])
+            if result.get("accepted"):
+                logger.info("User message delivered: %s (%s)",
+                            msg["id"], msg["content"][:40])
+            else:
+                logger.warning("User message inject failed: %s — %s",
+                               msg["id"], result.get("error"))
+        return len(messages)
 
     def _claim_persisted_goals(self) -> int:
         """UX-1: 认领 goals 表中 CLI 创建的 PENDING 人类目标。

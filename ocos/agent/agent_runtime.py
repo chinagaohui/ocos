@@ -143,6 +143,20 @@ class AgentRuntime:
             self._gateway = PermissionGateway()
         return self._gateway
 
+    def inject_user_message(self, text: str, sender: str = "cli") -> dict:
+        """UX-P2: 用户消息 → 感知事件（下一 tick 被 Step 1 摄入）。
+
+        daemon 从收件箱 drain 后调用；消息进入注意力管道（HIGH 严重性），
+        认知循环的决策输出经 DecisionBridge 执行并可经 trace 观察。
+        """
+        try:
+            ce = self.event_bus.push_user_message(text, sender=sender)
+            logger.info("User message injected: %s (sender=%s)", ce.event_id, sender)
+            return {"event_id": ce.event_id, "accepted": True}
+        except Exception as e:
+            logger.exception("inject_user_message failed")
+            return {"accepted": False, "error": str(e)}
+
     @property
     def event_bus(self) -> Any:
         """Phase 34A: 延迟初始化 EventBus（感知神经中枢）。"""

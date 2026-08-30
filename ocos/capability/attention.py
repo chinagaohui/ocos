@@ -497,6 +497,18 @@ class CognitiveAttentionController(AttentionManager):
         return self._focus_state
 
     @property
+    def current_focus(self) -> "FocusTarget | None":
+        """agent_runtime 兼容别名（UX-P2: 主消费者按此名读取当前焦点）。"""
+        return self._focus
+
+    def push_focus(self, target: "FocusTarget") -> bool:
+        """agent_runtime 兼容入口 — 推送焦点信号（强制切换，忽略切换成本）。
+
+        语义 = 结果驱动的注意力信号（step 9 反刍），非 tick 内竞争性切换。
+        """
+        return self.shift_focus(target, force=True)
+
+    @property
     def sovereign(self) -> bool:
         """是否为唯一的 Attention 决策权威。"""
         return True

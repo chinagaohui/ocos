@@ -82,6 +82,14 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "plan":
             return cmd_plan(args, session)
 
+        elif args.command == "say":
+            from ocos.interaction.cli.commands.say import cmd_say
+            return cmd_say(args, session)
+
+        elif args.command == "inbox":
+            from ocos.interaction.cli.commands.say import cmd_inbox
+            return cmd_inbox(args, session)
+
         elif args.command == "status":
             from ocos.interaction.cli.commands.status import cmd_status
             return cmd_status(args, session)

@@ -15,6 +15,7 @@ from ocos.storage.schema import (
     CREATE_GOAL,
     CREATE_PLAN_DAG,
     CREATE_PENDING_ACTIONS,
+    CREATE_USER_MESSAGES,
     CREATE_IDENTITY,
     CREATE_KNOWLEDGE,
     CREATE_PATTERN,
@@ -60,6 +61,10 @@ MIGRATIONS: dict[int, tuple[str, list[str]]] = {
             *CREATE_PLAN_DAG,
             *CREATE_PENDING_ACTIONS,
         ],
+    ),
+    5: (
+        "UX-P2: user_messages（用户消息收件箱 — ocos say 对话通道）",
+        [*CREATE_USER_MESSAGES],
     ),
 }
 

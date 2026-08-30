@@ -1,6 +1,6 @@
 """SQLite Schema 定义 — 所有持久化表的建表语句和数据字典。"""
 
-STORAGE_SCHEMA_VERSION = 4  # AUD-F8: plan_dag（CLI plan 落库）
+STORAGE_SCHEMA_VERSION = 5  # UX-P2: user_messages（对话通道）  # AUD-F8: plan_dag（CLI plan 落库）
 
 # ── 表名常量 ────────────────────────────────────────────────────────────────
 
@@ -204,6 +204,21 @@ CREATE_IDENTITY = [
 # AUD-F8 (2026-08-30): plan_dag — CLI plan 分解结果落库（goal_id 关联 goals 表）
 
 # AUD-F12 (2026-08-30): pending_actions — R4-B 待批队列持久化（DecisionBridge ASK 动作）
+
+# UX-P2 (2026-08-30): user_messages — 用户消息收件箱（ocos say → daemon 消费）
+CREATE_USER_MESSAGES = [
+    """CREATE TABLE IF NOT EXISTS user_messages (
+        id           TEXT PRIMARY KEY,
+        sender       TEXT NOT NULL DEFAULT 'cli',
+        content      TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'queued',
+        created_at   TEXT NOT NULL,
+        consumed_at  TEXT,
+        note         TEXT DEFAULT ''
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_user_messages_status ON user_messages(status)",
+]
+
 CREATE_PENDING_ACTIONS = [
     """CREATE TABLE IF NOT EXISTS pending_actions (
         id              TEXT PRIMARY KEY,
@@ -279,5 +294,6 @@ STORAGE_TABLES = {
     TABLE_GOAL: CREATE_GOAL,
     "plan_dag": CREATE_PLAN_DAG,
     "pending_actions": CREATE_PENDING_ACTIONS,
+    "user_messages": CREATE_USER_MESSAGES,
     TABLE_WISDOM: CREATE_WISDOM,
 }

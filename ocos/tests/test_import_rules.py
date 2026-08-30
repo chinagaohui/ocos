@@ -100,9 +100,6 @@ ALLOWED_IMPORTS = {
     # Phase 22: Operations, Events, Interaction
     "ocos.operations": ["ocos.logging", "ocos.capability"],
     "ocos.events": ["ocos.logging", "ocos.agent", "ocos.kernel.abi", "ocos.kernel.event_schema"],
-    "ocos.interaction": ["ocos.logging", "ocos.memory", "ocos.agent", "ocos.goal",
-                         "ocos.memory.episode", "ocos.memory.belief",
-                         "ocos.self.identity_boundary", "ocos.interaction"],
     # Phase 40: Self 层 — Phase 25 extended
     "ocos.self": ["ocos.memory.belief", "ocos.self.governor"],
     # Phase 41: Personal Memory — 依赖 Self Model (Phase 40)
@@ -133,15 +130,19 @@ ALLOWED_IMPORTS = {
     "ocos.memory.semantic": ["ocos.memory.semantic", "ocos.storage.connection"],
     "ocos.memory.belief": ["ocos.memory.semantic", "ocos.memory.belief", "ocos.storage.connection"],
     # Phase 31: Interaction Layer — Cognitive Interface
+    # 注: 本 key 与上方 Phase 39 键重复 — dict 字面量后值生效（历史遗留,
+    # UX-P2 合并两处为一份含并集的清单）
     "ocos.interaction": ["ocos.goal", "ocos.constitution", "ocos.logging",
                          "ocos.memory.episode", "ocos.memory.belief",
-                         "ocos.self.identity_boundary"],
+                         "ocos.self.identity_boundary",
+                         "ocos.storage", "ocos.agent"],
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
                                        "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution"],  # S4: Organ Client（写作器官驱动）; P1-B: 生产入口经 daemon 装配层
     "ocos.interaction.repl": ["ocos.interaction"],
     "ocos.interaction.repl.commands": ["ocos.interaction", "ocos.goal",
-                                        "ocos.storage", "ocos.planning"],
+                                        "ocos.storage", "ocos.planning",
+                                        "ocos.execution"],  # UX-P2: /approvals 与 CLI 同源
     "ocos.interaction.api": ["ocos.interaction"],
     "ocos.interaction.api.routes": ["ocos.interaction", "ocos.goal", "ocos.kernel",
                                      "ocos.planning", "ocos.opentale_bridge"],  # S6: WebChat 决策/器官调用

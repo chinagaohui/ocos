@@ -35,7 +35,10 @@ class ReplHelpCommand:
   /plan <desc>   — Create a goal and start planning
   /memory [q]    — View recent memory episodes
   /belief [f]    — View active beliefs
-  /goal [id]     — View goal tree or goal detail
+  /goal [id]     — View active goals or goal detail
+  /status        — One-screen cognitive overview (与 CLI 同源)
+  /say <msg>     — Send a message to the running engine (ocos say 同源)
+  /approvals     — Review ASK pending actions (list/approve/deny)
   /self          — View SelfModel status
   /trace <id>    — View decision trace
   /help [cmd]    — Show this help

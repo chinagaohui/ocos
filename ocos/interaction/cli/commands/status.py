@@ -78,6 +78,15 @@ def cmd_status(args, session: InteractionSession) -> int:
     except sqlite3.OperationalError:
         pass
 
+    # 收件箱（UX-P2）
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM user_messages WHERE status='queued'").fetchone()[0]
+        if n:
+            print(f'  inbox    : {n} 条用户消息待处理（ocos say "..." 投递）')
+    except sqlite3.OperationalError:
+        pass
+
     conn.close()
     print("=" * 52)
     session.record_query()

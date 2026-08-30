@@ -45,6 +45,13 @@ Examples:
     # ── memory ────────────────────────────────────────────────────────
     _add_memory_parser(subparsers)
 
+    # ── say/inbox（UX-P2: 对话通道） ─────────────────────────────────
+    say = subparsers.add_parser("say", help="Send a message to the running cognitive engine")
+    say.add_argument("message", type=str, help="用户消息内容")
+    say.add_argument("--db", type=str, default="", help="SQLite 路径")
+    inbox = subparsers.add_parser("inbox", help="View user message inbox")
+    inbox.add_argument("--db", type=str, default="", help="SQLite 路径")
+
     # ── status（UX-2: 一屏总览） ─────────────────────────────────────
     st = subparsers.add_parser("status", help="One-screen cognitive status overview")
     st.add_argument("--db", type=str, default="",

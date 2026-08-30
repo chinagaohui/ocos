@@ -22,23 +22,24 @@ class ReplGoalCommand:
             return
 
         goal_id = arg.strip()
+        # UX-P2: /goal 接 goal 域持久化（与 CLI goal status/list 同源，消除 TBD 漂移）
+        from ocos.goal.store import GoalStore
+        store = GoalStore(db_path=self._ctx.db_path)
         if goal_id:
-            print(f"Goal: {goal_id}")
-            print(f"  Note: Individual goal lookup TBD.")
+            row = store.load(goal_id)
+            if row is None:
+                print(f"Goal not found: {goal_id}")
+            else:
+                print(f"Goal: {row['id']}")
+                print(f"  Status:   {row['status']}")
+                print(f"  Progress: {row['progress']}")
+                print(f"  Description: {row['description']}")
         else:
-            from ocos.storage.connection import get_connection
-            import sqlite3
-            try:
-                conn = get_connection(self._ctx.db_path)
-                rows = conn.execute(
-                    "SELECT id, status, level, progress FROM goals ORDER BY rowid DESC LIMIT 10"
-                ).fetchall()
-                if rows:
-                    print(f"Goals ({len(rows)} recent):")
-                    for r in rows:
-                        print(f"  {r[0][:16]}  [{r[1]:12s}]  level={r[2]:12s}  progress={r[3]:.0%}")
-                else:
-                    print("No goals yet. Type a goal directly to create one.")
-            except Exception:
-                print("No goals yet. Type a goal directly to create one.")
+            rows = store.load_active()
+            if rows:
+                print(f"Active goals ({len(rows)}):")
+                for r in rows:
+                    print(f"  {r['id'][:16]}  [{r['status']:>8}]  {str(r['description'])[:44]}")
+            else:
+                print("No active goals. 直接输入一句话即可创建目标。")
         self._session.record_query()

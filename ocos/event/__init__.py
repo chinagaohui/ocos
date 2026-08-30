@@ -36,6 +36,7 @@ class EventSource(Enum):
     WEBHOOK = auto()         # HTTP 回调
     AGENT_RESULT = auto()    # Agent 执行结果（内部）
     SYSTEM = auto()          # 系统级事件（内存/CPU 告警）
+    USER_INPUT = auto()      # UX-P2: 用户消息（ocos say / REPL /say）
 
 
 class EventSeverity(Enum):
@@ -144,6 +145,8 @@ class EventNormalizer:
             return f"webhook_{raw.payload.get('endpoint', 'received')}"
         if raw.source == EventSource.AGENT_RESULT:
             return "agent_result"
+        if raw.source == EventSource.USER_INPUT:
+            return "user_input"
         return "system_event"
 
     def _summarize(self, raw: RawEvent, event_type: str) -> str:
@@ -155,6 +158,8 @@ class EventNormalizer:
             return f"Timer triggered: {raw.payload.get('name', '?')}"
         if raw.source == EventSource.WEBHOOK:
             return f"Webhook received at {raw.payload.get('endpoint', '?')}"
+        if raw.source == EventSource.USER_INPUT:
+            return f"User says: {raw.payload.get('content', '?')}"
         return f"{raw.source.name}: {raw.payload}"
 
     def _assess_severity(self, raw: RawEvent, event_type: str) -> EventSeverity:
@@ -165,7 +170,7 @@ class EventNormalizer:
                 if keyword in path.lower():
                     return sev
             return EventSeverity.NORMAL
-        if raw.source == EventSource.SYSTEM:
+        if raw.source in (EventSource.SYSTEM, EventSource.USER_INPUT):
             return EventSeverity.HIGH
         return EventSeverity.NORMAL
 
@@ -229,6 +234,13 @@ class EventBus:
         return self.push(RawEvent(
             source=EventSource.TIMER,
             payload={"name": name, "context": context or {}},
+        ))
+
+    def push_user_message(self, content: str, sender: str = "cli") -> CognitiveEvent:
+        """UX-P2: 便捷方法 — 推送用户消息事件（高关注优先级）。"""
+        return self.push(RawEvent(
+            source=EventSource.USER_INPUT,
+            payload={"content": content[:2000], "sender": sender},
         ))
 
     def push_webhook(self, endpoint: str, data: dict) -> CognitiveEvent:
