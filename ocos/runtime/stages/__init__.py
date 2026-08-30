@@ -1,12 +1,14 @@
 """Phase 39.2: Pipeline Stage Implementations — 最小化，无 AI。
 
-每个 Stage 实现 TickStage 协议。39.2 只建立 Pipeline 骨架:
-    ① EventIngestion    — EventBus 接入占位
-    ② Attention          — 注意力快照占位
-    ③ MemorySync         — 工作记忆同步占位
+每个 Stage 实现 TickStage 协议。GAP-P2-2 (2026-08-29) 后 8 个 Stage
+全部为真实现；"占位"描述已过时。可选依赖缺省 = 诚实降级，非占位:
+    ① EventIngestion    — 注入 EventBus 的积压事件 drain（缺省 None → 空事件）
+    ② Attention          — 注意力评分/切换（CandidateCollector + ScoringEngine）
+    ③ MemorySync         — MemoryHub 状态快照注入 TickContext
     ④ GoalMaintenance    — Goal 状态刷新 (仅 refresh, 禁止 create)
-    ⑤ ExecutionCheck     — 执行候选检查 (不调用 Agent)
-    ⑥ ResultCollection   — 结果收集占位
+    ⑤ ExecutionCheck     — 可选 TaskDAG resolve_ready 候选 + PermissionGateway 过滤
+                           （pipeline 默认不传 DAG → 空候选，诚实降级）
+    ⑥ ResultCollection   — ExecutionManager 最近执行历史转发
     ⑦ LearningTrigger    — 学习信号触发 (不执行学习)
     ⑧ CheckpointDecision — checkpoint 决策
 
