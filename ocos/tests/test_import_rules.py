@@ -56,7 +56,11 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge": ["ocos.knowledge", "ocos.memory.semantic"],  # GAP-P2-1: registry→semantic 镜像
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
-    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity", ],
+    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity",
+                         "ocos.evolution", "ocos.extension"],
+                         # PW-2: 自我迭代治理链上电
+    "ocos.extension": ["ocos.extension", "ocos.operations"],
+                         # PW-2.2: 沙箱真隔离复用 operations 闸门
     "ocos.auth": ["ocos.storage"],
     "ocos.recovery": ["ocos.storage"],
     # Phase 21: 新增基础设施层
@@ -185,7 +189,8 @@ ALLOWED_IMPORTS = {
     "ocos.execution": ["ocos.autonomous_runtime", "ocos.agent_orchestration",
                        "ocos.interaction", "ocos.capability_reality",
                        "ocos.storage",
-                       "ocos.operations", "ocos.event_memory"],  # PW-4.1 闸门 + PW-1.4 留痕
+                       "ocos.operations", "ocos.event_memory",
+                       "ocos.agent"],  # PW-2.1: 治理化 self_upgrade 应用
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
     "ocos.daemon": ["ocos.agent", "ocos.capability", "ocos.runtime",
                     "ocos.self", "ocos.kernel", "ocos.logging", "ocos.goal",

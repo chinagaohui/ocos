@@ -381,17 +381,21 @@ class DecisionBridge:
             return {"ok": False, "error": str(e)}
 
     def _handler_self_upgrade(self, action: DispatchedAction) -> dict:
-        """D: 应用已批准的自我升级 — 追加到 ~/.ocos/self_knowledge.md。
+        """PW-2.1: 应用已批准的自我升级 — 走 evolution 治理链。
 
-        人工批准 = authority（宪法禁 modify_self 的自主路径, 但主人显式
-        批准的提案例外）。下次 ChatResponder 构建提示词时生效。
+        人工批准 = authority（自治路径在 propose_upgrade 守门即封死;
+        主权冻结域的提案连待批都进不了）。真实应用 + 快照可回滚。
         """
-        from ocos.interaction.converse import ChatResponder
-        change = (action.payload or {}).get("change", "")
+        from ocos.agent.self_evolution_link import apply_approved
+        payload = action.payload or {}
+        change = payload.get("change", "")
         if not change:
             return {"ok": False, "error": "empty change payload"}
-        applied = ChatResponder.apply_self_upgrade(change)
-        return {"ok": True, "applied": applied}
+        out = apply_approved(proposal_id=payload.get("proposal_id", ""),
+                             title=payload.get("title", ""), change=change)
+        return {"ok": out["ok"], "applied": out.get("applied", ""),
+                "error": out.get("error", ""),
+                "rollback_snapshot": out.get("rollback_snapshot", "")}
 
     # ── capability_reality 调用 ───────────────────────────────────────────
 

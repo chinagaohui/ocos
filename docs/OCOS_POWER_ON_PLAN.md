@@ -194,3 +194,6 @@ W5: 5.1/5.2 独立; 5.3 裁决随 W2/W4 落地后执行
 | 2026-08-30 | PW-1.3 | continuity_trigger: dream 连续性检查点（生命记忆图/时间线/知识老化/身份漂移）落盘 ~/.ocos/continuity.json; 内视消费 | 同上 | (本批) |
 | 2026-08-30 | PW-1.2 | PersonalizationEngine 上电: 对话统计→InteractionStyle 画像→提示词风格指令+personalize_response 后处理 | 同上 | (本批) |
 | 2026-08-30 | PW-1.4 | event_memory 上电: bridge.execute_approved 统一审批执行入口+生命周期留痕(自愈建表); 内视执行史; 三审批点接入 | 5281 绿 | (本批) |
+| 2026-08-30 | PW-2.1 | evolution 治理链上电: self_evolution_link(提案→影响分析→沙箱→快照→入待批→migrate→EvolutionMemory); self_knowledge 文件管理迁入 agent 层; 主权冻结域连人工路径都拒绝 | 5281 绿 | (本批) |
+| 2026-08-30 | PW-2.2 | extension 沙箱真隔离: cmd: 前缀候选经 operations/SandboxOps 黑白名单+路径沙盒真实试运行; phase44 全过 | 同上 | (本批) |
+| 2026-08-30 | PW-2.3 | Governor 守门: 链接层冻结域标记检查（禁域连待批都进不了）; SelfGovernor.evaluate 全量接入待 belief 证据链打通（依赖 W1→belief 沉淀） | 同上 | (本批) |

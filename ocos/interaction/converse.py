@@ -92,13 +92,9 @@ class ChatResponder:
 
     def _self_knowledge(self) -> str:
         """D: 已批准的自我升级知识（自我迭代的应用产物）。"""
-        try:
-            if _SELF_KNOWLEDGE.exists():
-                text = _SELF_KNOWLEDGE.read_text(encoding="utf-8").strip()
-                return f"已习得自我知识:\n{text[-800:]}" if text else ""
-        except OSError:
-            pass
-        return ""
+        from ocos.agent.self_evolution_link import read_self_knowledge
+        text = read_self_knowledge()
+        return f"已习得自我知识:\n{text[-800:]}" if text else ""
 
     def build_context(self) -> str:
         """喂给 LLM 的自我认知 + 真实状态。"""
@@ -226,17 +222,18 @@ class ChatResponder:
         except Exception as e:
             out["execution_history"] = f"unavailable: {e}"
 
-        out["self_knowledge"] = (
-            _SELF_KNOWLEDGE.read_text(encoding="utf-8")[-400:]
-            if _SELF_KNOWLEDGE.exists() else "（暂无 — 可通过自省提案积累）")
+        from ocos.agent.self_evolution_link import read_self_knowledge
+        sk_text = read_self_knowledge()
+        out["self_knowledge"] = (sk_text[-400:]
+                                 if sk_text else "（暂无 — 可通过自省提案积累）")
         out["db"] = self._db_path
         out["generated_at"] = datetime.now(timezone.utc).isoformat()
         return out
 
     # ── D: 自我迭代（自省 → 提案 → 审批 → 应用） ─────────────────────
 
-    def self_improve(self) -> dict:
-        """分析近期对话记忆，产出自我升级提案（入待批，等主人批准）。"""
+    def self_improve(self, source_tick: int = 0) -> dict:
+        """分析近期对话记忆，产出自我升级提案（入治理链，等主人批准）。"""
         recent: list[str] = []
         try:
             from ocos.memory.hub import MemoryHub
@@ -285,21 +282,32 @@ class ChatResponder:
                 continue
             proposals.append({"title": parts[1], "change": parts[2]})
 
+        # PW-2.1: 提案走 evolution 治理链（影响分析→沙箱→快照）
+        # 治理通过者由本层入待批（agent 层不依赖 interaction 的入队实现）
+        from ocos.agent.self_evolution_link import propose_upgrade
         from ocos.execution.pending import PendingStore
         store = PendingStore(db_path=self._db_path)
-        ids = [store.enqueue(action_type="self_upgrade", target="self_knowledge",
-                             payload=p, text=p["title"], source="self_improve")
-               for p in proposals[:3]]
-        return {"proposals": proposals, "pending_ids": ids, "mock": False}
+        queued, rejected = [], []
+        for p in proposals[:3]:
+            out = propose_upgrade(title=p["title"], change=p["change"],
+                                  source_tick=source_tick)
+            if not out["accepted"]:
+                rejected.append({**p, "reason": out.get("reason", "")})
+                continue
+            pending_id = store.enqueue(
+                action_type="self_upgrade", target="self_knowledge",
+                payload={"proposal_id": out["proposal_id"],
+                         "title": p["title"], "change": p["change"]},
+                text=p["title"], source="self_improve")
+            queued.append({**p, "pending_id": pending_id})
+        return {"proposals": queued, "pending_ids": [q["pending_id"] for q in queued],
+                "rejected": rejected, "mock": False}
 
     @staticmethod
     def apply_self_upgrade(change: str) -> str:
-        """D: 应用已批准的自我升级 — 追加到自我知识文件（下次对话生效）。"""
-        _SELF_KNOWLEDGE.parent.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        with open(_SELF_KNOWLEDGE, "a", encoding="utf-8") as f:
-            f.write(f"\n- [{stamp}] {change.strip()}")
-        return f"self knowledge updated: {change.strip()[:60]}"
+        """应用自我升级（委托 agent 层 self_evolution_link — PW-2.1 迁移）。"""
+        from ocos.agent.self_evolution_link import apply_self_upgrade as _apply
+        return _apply(change)
 
     # ── A: 对话落记忆 ────────────────────────────────────────────────
 
