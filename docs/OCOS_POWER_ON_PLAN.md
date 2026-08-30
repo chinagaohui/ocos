@@ -204,3 +204,4 @@ W5: 5.1/5.2 独立; 5.3 裁决随 W2/W4 落地后执行
 | 2026-08-30 | PW-5.1 | perception 传感器上电: --watch-dir → FileSensor(目录重扫描捕获新建文件)+file_semantics 解析器(实体=路径, 状态=exists/size)→世界模型接受落库 | 同上 | (本批) |
 | 2026-08-30 | PW-4.3 | **裁决: 延后** — agent_orchestration 并行执行触碰 step 7 的单任务/tick 认知序列化约束（Phase 36 冻结语义），需要先解冻或设计并行安全的 DAG 调度；维持 EchoAgent 顺序回退 | - | - |
 | 2026-08-30 | PW-5.3 | 裁决落地: auth/belief.py/agent_orchestration_autonomous/os_v1 路由层维持 Deprecated（已在 AUDIT_KERNEL 登记）; audit/ 接 CI 列为可选 | - | - |
+| 2026-08-31 | UX-F1~F4 | 目标执行闭环修复: ①DAG 任务 LLM 执行器(描述→RUN/FILE_WRITE, 沙盒白名单+敏感路径+分段校验) ②episode 带真实输出+goal_result 摘要 ③daemon 心跳+侧栏存活 ④意图过滤+SELF 限额 ⑤**关键修复**: bridge 挂载点错误(factory 挂到 MasterAgent, AgentRuntime.step7 永远看不到) ⑥echo 假成功洞(非 AUTO/ASK 类型直达 EchoAgent) ⑦SELF 目标 7067 条积压清理 + origin_level 纠正 | 5287 绿 | a50f196+ |

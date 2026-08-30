@@ -62,10 +62,17 @@ def run_diagnosis_cycle(db_path: str) -> dict:
         diagnostics.append({"problem": report.problem,
                             "severity": signal.severity.value,
                             "category": signal.category.value})
+        WHITELIST_STEP_KEYWORDS = ("索引", "缓存", "重新连接", "归档", "修剪")
         proposals = proposer.propose(report, signal)
         for proposal in proposals:
             if not proposal.reversible:
                 continue  # 不可逆修复不自动入队（诚实保守）
+            # 步骤未白名单的修复不入队（批准了也只会诚实回滚——纯噪音）
+            if not any(any(k in s for k in WHITELIST_STEP_KEYWORDS)
+                       for s in proposal.steps):
+                logger.info("Repair proposal skipped (steps not whitelisted): %s",
+                            proposal.description[:50])
+                continue
             from ocos.execution.pending import PendingStore
             store = PendingStore(db_path=db_path)
             pending_id = store.enqueue(

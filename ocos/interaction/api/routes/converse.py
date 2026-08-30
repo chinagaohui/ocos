@@ -147,11 +147,11 @@ async def goals_from_chat(body: dict[str, Any]) -> APIResponse:
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
 
-    # UX-F4: 意图过滤 — 状态询问类消息不该变成目标（会永远空转）
+    # UX-F4: 意图过滤 — 状态询问类消息不该变成目标（会永远空转）。
+    # 放宽: 不要求句尾问号（"分析结果呢"这类陈述式追问同样拦截）
     QUESTION_MARKERS = ("结果", "怎么样了", "进度", "状态如何", "为什么",
                         "怎么没有", "了吗", "如何了", "是多少")
-    if len(message) <= 20 and message.endswith(("？", "?")) and any(
-            m in message for m in QUESTION_MARKERS):
+    if len(message) <= 20 and any(m in message for m in QUESTION_MARKERS)             and not any(k in message for k in ("跑", "执行", "生成", "写入", "创建文件")):
         raise HTTPException(
             status_code=422,
             detail="这更像状态询问而非任务 — 请直接在对话框问 OCOS，"

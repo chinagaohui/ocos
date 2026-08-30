@@ -139,6 +139,12 @@ class ResidentRuntime:
         装配知识平面 SemanticStore 镜像等 — 避免外部窥探 _runtime 私有属性。"""
         return getattr(self._runtime, "_memory_hub", None)
 
+    def attach_decision_bridge(self, bridge: Any) -> None:
+        """UX-F1: 决策执行铰链挂到内部 AgentRuntime（关键修复 —
+        此前 factory 挂到 MasterAgent, AgentRuntime.step7/8 永远看不到 bridge,
+        DAG 任务全部走 EchoAgent 假成功）。"""
+        self._runtime.attach_decision_bridge(bridge)
+
     def attach_health_loop(self, health_loop: Any) -> None:
         """GAP-P1-2: 绑定周期健康体检（须在 start() 前调用）。"""
         self._health_loop = health_loop
@@ -320,6 +326,7 @@ class ResidentRuntime:
                 "writing": GoalDomain.WRITING,
                 "analysis": GoalDomain.ANALYSIS,
             }
+            from ocos.kernel.goal_types import GoalOriginLevel, GoalAuthority
             goal = Goal(
                 goal_id=goal_id or f"GOAL-DAEMON-{int(time.time() * 1000)}",
                 level=GoalLevel.TASK,
@@ -327,6 +334,8 @@ class ResidentRuntime:
                 raw_input=description,
                 objective=description,
                 domain=domain_map.get(domain, GoalDomain.DEVELOPMENT),
+                origin_level=GoalOriginLevel.HUMAN,   # UX-F4: 用户目标是人类来源
+                authority=GoalAuthority.FRAMEWORK,
                 caller="daemon",
             )
             gs = getattr(self._runtime, "_goal_store", None)

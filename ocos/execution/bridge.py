@@ -234,6 +234,31 @@ class DecisionBridge:
         task_type = getattr(task, "task_type", "execute")
         description = getattr(task, "description", "")
 
+        # UX-F1: 目标由人工创建（→目标/CLI）= 隐式授权其子任务；
+        # LLM 优先转换为具体动作真实执行（沙盒白名单+敏感路径拦截仍生效），
+        # 转换失败/写类动作 → 待批。仅当无 LLM 时才走 ASK/echo 旧路径。
+        if self._llm_available():
+            llm = self._handler_dag_task(SimpleNamespace(payload={
+                "description": description, "task_id": getattr(task, "task_id", ""),
+                "auto_readonly": task_type in _DAG_AUTO_TYPES}))
+            if llm.get("ok"):
+                self._audit_record(
+                    contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
+                    status="completed",
+                    summary=f"dag_{task_type}: {str(llm.get('stdout', llm.get('applied', '')))[:150]}")
+                return {"status": "completed", "result": llm}
+            self._pending.append({
+                "action_type": f"dag_{task_type}",
+                "target": "dag_task",
+                "payload": {"task_id": getattr(task, "task_id", ""),
+                            "description": description,
+                            "llm_reason": llm.get("error", "")},
+                "text": description[:200],
+                "queued_at": datetime.now(timezone.utc).isoformat(),
+            })
+            return {"status": "pending_approval",
+                    "reason": llm.get("error", "LLM 无法执行此任务")}
+
         if task_type in _DAG_ASK_TYPES:
             # 写文件 / shell 执行 = 高危 → 待批 (R4-B Outbox)
             self._enqueue_pending(
@@ -289,7 +314,30 @@ class DecisionBridge:
                 )
                 return {"status": "failed", "result": result}
 
-        return {"status": "echo_fallback"}      # 无能力匹配 → 既有 EchoAgent 行为
+        # UX-F1: LLM 可用时，任何未匹配类型都先尝试 LLM 转换（杜绝 EchoAgent
+        # 假成功）；无 LLM 才回退 EchoAgent（诚实保留旧行为）
+        if self._llm_available():
+            llm = self._handler_dag_task(SimpleNamespace(payload={
+                "description": description, "task_id": getattr(task, "task_id", ""),
+                "auto_readonly": task_type in _DAG_AUTO_TYPES}))
+            if llm.get("ok"):
+                self._audit_record(
+                    contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
+                    status="completed",
+                    summary=f"dag_{task_type}: {str(llm.get('stdout', llm.get('applied', '')))[:150]}")
+                return {"status": "completed", "result": llm}
+            self._pending.append({
+                "action_type": f"dag_{task_type}",
+                "target": "dag_task",
+                "payload": {"task_id": getattr(task, "task_id", ""),
+                            "description": description,
+                            "llm_reason": llm.get("error", "")},
+                "text": description[:200],
+                "queued_at": datetime.now(timezone.utc).isoformat(),
+            })
+            return {"status": "pending_approval",
+                    "reason": llm.get("error", "LLM 无法执行此任务")}
+        return {"status": "echo_fallback"}      # 无 LLM → 既有 EchoAgent 行为
 
     # ── 裁决 ──────────────────────────────────────────────────────────────
 

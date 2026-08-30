@@ -62,7 +62,7 @@ def cmd_run(args, session) -> int:
         db_path=db_path,
     )
     # R4-A: 决策执行铰链 — 自治决策 → capability_reality 真实执行 (AUTO) / 待批 (ASK)
-    build_execution_bridge(agent, db_path=db_path)
+    rt.attach_decision_bridge(build_execution_bridge(db_path=db_path))
     print("  bridge   : DecisionBridge 已挂载 (AUTO 真实执行 / ASK 待批)")
     print("             审批: 另开终端 ocos approvals list / approve <id>")
     # AUD-F1/PW-5.1: 感知管线 — 默认零传感器；--watch-dir 注入 FileSensor
