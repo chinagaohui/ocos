@@ -868,8 +868,8 @@ class AgentRuntime:
                         _task = PlanTask.create(
                             goal_id=g.goal_id,
                             description=ug.objective or ug.raw_input or g.description,
-                            task_type="analyze", agent_type="executor",
-                        )
+                            task_type="analyze", agent_type="researcher",
+                        )   # agent_type 限合法枚举（"executor" 曾致 ValueError → 分解永远失败）
                         dag.add_task(_task)
                     else:
                         dag = TaskDecomposer.decompose(ug)
