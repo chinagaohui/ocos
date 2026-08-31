@@ -262,12 +262,7 @@ class ResidentRuntime:
             # P1-1: 周期性 dream 巩固（Episode → Belief/Pattern/Wisdom）
             if self._hb_ticks % max(1, self.dream_interval_ticks) == 0:
                 try:
-                    agent_obj = getattr(self._runtime, "agent", None)
-                    if agent_obj is not None and hasattr(agent_obj, "dream"):
-                        out = agent_obj.dream()
-                        logger.info("Dream consolidation: wisdom_total=%s",
-                                    (out.get("wisdom_stats") or {}).get(
-                                        "wisdom_total", "?"))
+                    self._run_dream_cycle()
                 except Exception:
                     logger.exception("Dream consolidation failed")
             # Phase 33: 将队列中的目标导入 runtime 的 goal_store
@@ -364,6 +359,30 @@ class ResidentRuntime:
         except Exception:
             logger.exception("Failed to import queued goal: %s", description)
             return False
+
+    def _run_dream_cycle(self) -> None:
+        """P1-1: 完整睡眠巩固序列 — 修复生命周期相位后 sleep→dream。
+
+        此前直接调 dream() 会因 lifecycle 处于 BOOTING 而抛
+        "Cannot transition BOOTING to DREAMING"（合法路径要求
+        BOOTING→ACTIVE→SLEEPING→DREAMING），巩固管线从未运转。
+        """
+        agent_obj = getattr(self._runtime, "agent", None)
+        if agent_obj is None or not hasattr(agent_obj, "dream"):
+            return
+        from ocos.agent.lifecycle import LifecyclePhase
+        cl = getattr(agent_obj, "_control_loop", None)
+        if cl is not None:
+            lc = getattr(cl, "_lifecycle", None)
+            phase = getattr(lc, "phase", None)
+            if phase == LifecyclePhase.BOOTING:
+                # BOOTING → ACTIVE（合法迁移，tick 一直在跑本就处于活跃态）
+                lc.transition_to_phase(LifecyclePhase.ACTIVE)
+        agent_obj.sleep()    # ACTIVE → SLEEPING（WM 巩固 + 持久化）
+        out = agent_obj.dream()   # SLEEPING → DREAMING → 巩固 → wake
+        logger.info("Dream consolidation: wisdom_total=%s consolidation=%s",
+                    (out.get("wisdom_stats") or {}).get("wisdom_total", "?"),
+                    out.get("consolidation_stats", {}))
 
     def _write_heartbeat(self) -> None:
         """UX-F3: 每 tick 写心跳文件（Web 侧栏/状态命令判断存活）。"""
