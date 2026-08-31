@@ -86,6 +86,11 @@ ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "hostname",
     "id",
     "ps",
+    # 只读 git（仓库分析类任务需要; commit/push 等写操作不在白名单）
+    "git log",
+    "git status",
+    "git diff",
+    "git branch",
 })
 
 # 路径沙盒 — 只允许在指定目录内操作

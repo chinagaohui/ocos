@@ -446,6 +446,62 @@ class ChatResponder:
         ]
         return {"reply": "\n".join(lines), "provider": "state-summary", "mock": True}
 
+    # ── UX-G: 目标编译器（→目标 按钮的智能前置） ────────────────────
+
+    def compile_goal(self, message: str) -> dict:
+        """把用户的一句话编译为可执行目标。
+
+        返回 {kind, description, domain, reason?}:
+          kind="task"      → description 为改写后的自包含具体描述
+                             （含明确的方法/命令提示，模板任务+LLM 执行器可直接跑）
+          kind="question"  → 状态询问，应直接对话回答而非建目标
+          kind="continue"  → "开始/继续/结果呢"类推进指令
+          kind="nonsense"  → 无操作语义
+        无 LLM 时退化为启发式（原始描述直存）。
+        """
+        if not self._has_real_llm():
+            return {"kind": "task", "description": message,
+                    "domain": "development", "fallback": True}
+
+        prompt = (
+            f"用户消息：{message[:200]}\n\n"
+            "你是 OCOS 的目标编译器。把这条消息分类并（若为任务）改写：\n"
+            "1. kind 判定：\n"
+            '   - "question"：询问状态/结果/进度（如"结果呢""怎么样了"）\n'
+            '   - "continue"：推进指令而非新任务（如"开始""继续""好"）\n'
+            '   - "nonsense"：无明确语义\n'
+            '   - "task"：真实任务请求\n'
+            "2. 若为 task，把 description 改写为**自包含、具体、可直接执行**的版本：\n"
+            "   - 写明数据来源与方法（如'执行 uname -a 与 df -h，汇总系统版本和磁盘使用'）\n"
+            "   - 不依赖对话上下文即可执行\n"
+            '   - domain 从 development/research/writing/analysis 中选一个\n'
+            "只输出一行 JSON：{\"kind\":\"...\",\"description\":\"...\",\"domain\":\"...\"}"
+        )
+        try:
+            import asyncio
+            from ocos.engines.text_generator import get_text_generator
+            tg = get_text_generator()
+            raw = asyncio.run(tg._provider.generate(
+                prompt, system_prompt="你是目标编译器。只输出一行 JSON。",
+                temperature=0.1, max_tokens=2000))
+            import json as _json
+            m = raw[raw.find("{"): raw.rfind("}") + 1]
+            parsed = _json.loads(m)
+            kind = parsed.get("kind", "task")
+            desc = (parsed.get("description") or message).strip()
+            domain = parsed.get("domain", "development")
+            if domain not in ("development", "research", "writing", "analysis"):
+                domain = "development"
+            if kind != "task" or not desc:
+                return {"kind": kind if kind != "task" else "nonsense",
+                        "reason": "非任务类消息"}
+            return {"kind": "task", "description": desc, "domain": domain}
+        except Exception as e:
+            logger.error("compile_goal LLM failed", exception=e)
+            return {"kind": "task", "description": message,
+                    "domain": "development", "fallback": True,
+                    "compile_error": str(e)}
+
     # ── FastAPI 便利入口 ─────────────────────────────────────────────
 
     async def respond_async(self, message: str) -> dict:

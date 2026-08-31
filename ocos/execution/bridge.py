@@ -251,16 +251,9 @@ class DecisionBridge:
                     status="completed",
                     summary=f"dag_{task_type}: {str(llm.get('stdout', llm.get('applied', '')))[:150]}")
                 return {"status": "completed", "result": llm}
-            self._pending.append({
-                "action_type": f"dag_{task_type}",
-                "target": "dag_task",
-                "payload": {"task_id": getattr(task, "task_id", ""),
-                            "description": description,
-                            "llm_reason": llm.get("error", "")},
-                "text": description[:200],
-                "queued_at": datetime.now(timezone.utc).isoformat(),
-            })
-            return {"status": "pending_approval",
+            # UX-G: LLM 判定不可执行（描述模糊/无动作）→ 诚实 failed，
+            # 落入 goal_result 摘要；不再堆无法批准的待批噪音
+            return {"status": "failed",
                     "reason": llm.get("error", "LLM 无法执行此任务")}
 
         if task_type in _DAG_ASK_TYPES:
@@ -290,17 +283,8 @@ class DecisionBridge:
                         status="completed",
                         summary=f"dag_{task_type}: {str(llm.get('stdout', ''))[:150]}")
                     return {"status": "completed", "result": llm}
-                # LLM 判定不可执行或失败 → 待批（写类动作需要主人批准）
-                self._pending.append({
-                    "action_type": f"dag_{task_type}",
-                    "target": "dag_task",
-                    "payload": {"task_id": getattr(task, "task_id", ""),
-                                "description": description,
-                                "llm_reason": llm.get("error", "")},
-                    "text": description[:200],
-                    "queued_at": datetime.now(timezone.utc).isoformat(),
-                })
-                return {"status": "pending_approval",
+                # LLM 判定不可执行 → 诚实 failed（归档进 goal_result）
+                return {"status": "failed",
                         "reason": llm.get("error", "LLM 无法转为只读动作")}
             if result is not None:
                 if result.get("ok"):
