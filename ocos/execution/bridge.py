@@ -676,7 +676,7 @@ class DecisionBridge:
 
         try:
             import asyncio
-            tg = self._textgen()
+            tg = self._get_textgen()
             prompt = (
                 f"任务描述：{description}\n\n"
                 "把上述任务转换为**一条**可直接执行的动作。只输出单行，格式严格为：\n"
@@ -715,7 +715,7 @@ class DecisionBridge:
             return {"ok": False, "error": f"任务无法执行: {raw[5:].strip()}"}
         return {"ok": False, "error": f"LLM 输出格式不符: {raw[:80]}"}
 
-    def _textgen(self):
+    def _get_textgen(self):
         """P3-2: 复用缓存的 TextGenerator。"""
         if self._textgen is None:
             from ocos.engines.text_generator import get_text_generator
