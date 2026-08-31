@@ -17,14 +17,14 @@ def _store_and_bridge():
 
     db_path = resolve_db_path()
     store = PendingStore(db_path=db_path)
-    bridge = DecisionBridge(pending_store=store, db_path=_db())
+    bridge = DecisionBridge(pending_store=store, db_path=db_path)
     bridge.attach_default_handlers()
     return store, bridge, db_path
 
 
 def cmd_approvals_list(args, session) -> int:
     """ocos approvals list [--all]"""
-    store, _bridge, _db = _store_and_bridge()
+    store, _bridge, _db_path = _store_and_bridge()
     status = None if args.all else "pending"
     if status:
         rows = store.list_by_status(status)
@@ -45,7 +45,7 @@ def cmd_approvals_list(args, session) -> int:
 
 def cmd_approvals_approve(args, session) -> int:
     """ocos approvals approve <id> — 人工批准并尝试真实执行"""
-    store, bridge, _db = _store_and_bridge()
+    store, bridge, _db_path = _store_and_bridge()
     row = store.get(args.pending_id)
     if row is None or row["status"] != "pending":
         print(f"Pending action not found or not pending: {args.pending_id}")
@@ -76,7 +76,7 @@ def cmd_approvals_approve(args, session) -> int:
 
 def cmd_approvals_deny(args, session) -> int:
     """ocos approvals deny <id>"""
-    store, _bridge, _db = _store_and_bridge()
+    store, _bridge, _db_path = _store_and_bridge()
     if not store.decide(args.pending_id, approved=False, decided_by="cli"):
         print(f"Pending action not found or not pending: {args.pending_id}")
         return 1
