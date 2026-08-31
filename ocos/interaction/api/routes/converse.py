@@ -40,12 +40,13 @@ async def converse(body: dict[str, Any]) -> APIResponse:
 
     from ocos.interaction.converse import ChatResponder
     responder = ChatResponder(db_path=_db())
-    out = await responder.respond_async(message)
+    out = await asyncio.to_thread(responder.respond_auto, message)
     return APIResponse(
         success=True,
         message="ok",
         data={"reply": out["reply"], "provider": out["provider"],
-              "mock": out["mock"]},
+              "mock": out["mock"], "goal_id": out.get("goal_id"),
+              "kind": out.get("kind")},
     )
 
 

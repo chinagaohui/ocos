@@ -274,13 +274,6 @@ function bubble(text, who, mock) {
   const div = document.createElement("div");
   div.className = "bubble " + who + (mock ? " mock" : "");
   div.textContent = text;
-  if (who === "user") {
-    const op = document.createElement("span");
-    op.className = "togoal"; op.textContent = "→目标";
-    op.title = "把这句话转为目标，daemon 自动认领执行";
-    op.onclick = () => toGoal(text, op);
-    div.appendChild(op);
-  }
   if (mock) {
     const tag = document.createElement("span");
     tag.className = "tag"; tag.textContent = "◦ 状态回复 · 未接入语言核心";
@@ -320,25 +313,6 @@ setInterval(() => {
   document.getElementById("clock").textContent =
     new Date().toLocaleString("zh-CN", {hour12: false});
 }, 1000);
-
-async function toGoal(text, el) {
-  el.textContent = "…";
-  try {
-    const r = await fetch("/ocos/goals-from-chat", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({message: text}),
-    });
-    const j = await r.json();
-    if (j.success) {
-      el.textContent = "✓已入列";
-      bubble(`已把「${text.slice(0, 30)}」转为目标（${j.data.goal_id}），daemon 将自动认领执行。`, "bot");
-    } else {
-      el.textContent = "✗";
-      bubble(`⚠ ${j.detail || "转换失败"}`, "bot");
-    }
-  } catch (e) { el.textContent = "✗失败"; }
-  refreshSide();
-}
 
 async function selfImprove(btn) {
   btn.disabled = true; btn.textContent = "自省中…";

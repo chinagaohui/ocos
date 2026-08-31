@@ -391,9 +391,14 @@ class ChatResponder:
         from ocos.engines.text_generator import _read_llm_config
         return bool(_read_llm_config().get("api_key"))
 
-    def respond(self, message: str) -> dict:
-        """生成回复。返回 {reply, provider, mock}。"""
+    def respond(self, message: str, goal_note: str = "") -> dict:
+        """生成回复。返回 {reply, provider, mock}。
+
+        goal_note: UX-H 目标受理提示（auto 受理时注入 prompt，
+                   让 LLM 确认任务已受理并说明后续流程）。"""
         context = self.build_context()
+        if goal_note:
+            context = f"{context}\n【目标受理】\n{goal_note}"
         if not self._has_real_llm():
             out = self._state_reply(message, context)
         else:
@@ -501,6 +506,56 @@ class ChatResponder:
             return {"kind": "task", "description": message,
                     "domain": "development", "fallback": True,
                     "compile_error": str(e)}
+
+    # ── UX-H: 对话即执行 — 任务类消息自动受理为目标 ────────────────────
+
+    def _create_goal_from_chat(self, compiled: dict) -> str:
+        from ocos.goal.store import GoalStore
+        store = GoalStore(db_path=self._db_path)
+        goal_id = f"GOAL-{uuid.uuid4().hex[:12]}"
+        store.save(
+            goal_id=goal_id, level="USER", status="PENDING",
+            description=compiled["description"][:200], priority=3.0,
+            source="chat", origin_level="HUMAN", authority="FRAMEWORK",
+            metadata={"domain": compiled.get("domain", "development"),
+                      "original": compiled.get("_original", "")},
+        )
+        return goal_id
+
+    def _daemon_alive(self) -> bool:
+        """心跳判断 daemon 是否在执行状态。"""
+        import time as _time
+        hb = Path.home() / ".ocos" / "daemon_heartbeat.json"
+        try:
+            import json as _json
+            data = _json.loads(hb.read_text(encoding="utf-8"))
+            age = _time.time() - datetime.fromisoformat(data["ts"]).timestamp()
+            return age < 30
+        except (OSError, ValueError, KeyError):
+            return False
+
+    def respond_auto(self, message: str) -> dict:
+        """UX-H: 对话即路由 — 任务类消息自动受理为目标，其余正常对话。
+
+        - compile_goal 分类：task → 自动建目标（无需点→目标），
+          daemon 在线即认领执行；离线则诚实提示
+        - question/continue/nonsense → 正常对话回复
+        - 危险子任务仍走待批二次审批（不变）
+        """
+        compiled = self.compile_goal(message)
+        goal_note, goal_id = "", None
+        if compiled["kind"] == "task":
+            compiled["_original"] = message
+            goal_id = self._create_goal_from_chat(compiled)
+            daemon_state = "在线，将自动认领执行" if self._daemon_alive()                 else "离线 — 目标已排队，启动 ocos run 后执行"
+            goal_note = (f"用户的这条消息已自动受理为目标 {goal_id}"
+                         f"（编译后描述：{compiled['description'][:120]}）。"
+                         f"daemon {daemon_state}。"
+                         "回复时确认受理并简述执行计划，不要让用户再手动操作。")
+        out = self.respond(message, goal_note=goal_note)
+        out["goal_id"] = goal_id
+        out["kind"] = compiled["kind"]
+        return out
 
     # ── FastAPI 便利入口 ─────────────────────────────────────────────
 
