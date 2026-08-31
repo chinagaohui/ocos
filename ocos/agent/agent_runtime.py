@@ -836,6 +836,9 @@ class AgentRuntime:
             # Gate 3: Goal ready + attention-aware filtering
             active = self._goal_store.load_active()
             pending = [g for g in active if getattr(g, "status", None) and g.status.name == "PENDING"]
+            # UX-I: 人工目标优先于 SELF 目标（level 排序曾让 SELF 抢占分解名额）
+            pending.sort(key=lambda g: 0 if getattr(
+                getattr(g, "origin_level", None), "value", "") == "HUMAN" else 1)
 
             # If focused on a goal, only decompose that one
             if report is not None and report.focus_type == "GOAL" and not report.recommendation.ready_for_new_goal:
@@ -856,17 +859,29 @@ class AgentRuntime:
                         domain=getattr(g, "domain", GoalDomain.WRITING) or GoalDomain.WRITING,
                         caller="runtime",
                     )
-                    dag = TaskDecomposer.decompose(ug)
-                    # UX-F1: 任务描述携带目标语境（模板产出"分析数据"这类
-                    # 无上下文描述，LLM 执行器无法转换为具体动作）
-                    goal_ctx = (ug.objective or ug.raw_input or "")[:80]
-                    for _t in dag.tasks.values():
-                        _d = getattr(_t, "description", "")
-                        if goal_ctx and goal_ctx not in _d:
-                            try:
-                                _t.description = f"{goal_ctx} — {_d}"
-                            except Exception:
-                                pass
+                    # UX-I: chat 编译目标（描述已具体化到命令级）→ 单任务
+                    # 直执行，不走模板分解——模板产出"分析数据"这类空壳
+                    # 任务，LLM 无法转换（无数据源/无动作）
+                    if getattr(g, "caller", "") == "chat":
+                        from ocos.planning.models import Task as PlanTask, TaskDAG as PlanDAG
+                        dag = PlanDAG()
+                        _task = PlanTask.create(
+                            goal_id=g.goal_id,
+                            description=ug.objective or ug.raw_input or g.description,
+                            task_type="analyze", agent_type="executor",
+                        )
+                        dag.add_task(_task)
+                    else:
+                        dag = TaskDecomposer.decompose(ug)
+                        # UX-F1: 模板任务携带目标语境
+                        goal_ctx = (ug.objective or ug.raw_input or "")[:80]
+                        for _t in dag.tasks.values():
+                            _d = getattr(_t, "description", "")
+                            if goal_ctx and goal_ctx not in _d:
+                                try:
+                                    _t.description = f"{goal_ctx} — {_d}"
+                                except Exception:
+                                    pass
                     self._active_dag = dag
                     self._dag_cursor = 0
                     self._dag_total = len(dag.tasks)

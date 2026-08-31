@@ -322,7 +322,7 @@ class ResidentRuntime:
         return 1
 
     def _import_goal(self, description: str, domain: str,
-                     goal_id: str | None) -> bool:
+                     goal_id: str | None, caller: str = "daemon") -> bool:
         """构造 agent 层 Goal 并写入 runtime._goal_store（Step 6 可消费）。
 
         UX-1 修复: 此前构造 UserGoal 传入期望 Goal 对象的 save()
@@ -346,7 +346,7 @@ class ResidentRuntime:
                 domain=domain_map.get(domain, GoalDomain.DEVELOPMENT),
                 origin_level=GoalOriginLevel.HUMAN,   # UX-F4: 用户目标是人类来源
                 authority=GoalAuthority.FRAMEWORK,
-                caller="daemon",
+                caller=caller,   # UX-I: chat 目标 → Step6 单任务直执行
             )
             gs = getattr(self._runtime, "_goal_store", None)
             if gs is not None and hasattr(gs, "save"):
@@ -439,6 +439,7 @@ class ResidentRuntime:
             logger.exception("Goal claim failed")
             return 0
         for row in claimed:
+            src_channel = row.get("source") or "daemon"
             metadata = row.get("metadata")
             if isinstance(metadata, str):
                 try:
@@ -447,7 +448,8 @@ class ResidentRuntime:
                     metadata = {}
             domain = (metadata or {}).get("domain", "writing") if isinstance(metadata, dict) else "writing"
             if self._import_goal(description=row.get("description", ""),
-                                 domain=domain, goal_id=row["id"]):
+                                 domain=domain, goal_id=row["id"],
+                                 caller=src_channel):
                 self._goal_processed += 1
                 logger.info("Claimed persisted goal: %s (domain=%s)",
                             row["id"], domain)
