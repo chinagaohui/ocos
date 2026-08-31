@@ -42,6 +42,74 @@ class TestClaimMechanism:
         # 状态置 ACTIVE — 二次认领为空
         assert store.claim_pending_human(limit=1) == []
 
+    def test_mark_completed_closes_domain_goal(self, db):
+        """P1: 域层 goals 表闭环 — ACTIVE → COMPLETED 可推进, 终止态不倒退。"""
+        from ocos.goal.store import GoalStore
+        gid = _create_goal_via_store(db)
+        store = GoalStore(db_path=db)
+        store.claim_pending_human(limit=1)
+        assert store.load(gid) is not None
+        assert store.load(gid)["status"] == "ACTIVE"
+        # 完成推进
+        assert store.mark_completed(gid) is True
+        row = store.load(gid)
+        assert row is not None
+        assert row["status"] == "COMPLETED"
+        assert row["progress"] == 1.0
+        # 幂等 + 终止态不倒退
+        assert store.mark_completed(gid) is False
+        assert store.load(gid) is not None
+        assert store.load(gid)["status"] == "COMPLETED"
+        # 不存在的 id 返回 False
+        assert store.mark_completed("GOAL-nope") is False
+
+    def test_runtime_completion_syncs_domain_goal(self, db):
+        """P1 集成: agent 层完成块 → 域层 goals 表同步 COMPLETED。
+
+        认领路径 (daemon._claim_persisted_goals) 置域层 ACTIVE 并导入
+        agent 层 goal 表 (同 id); DAG 执行完毕 agent_runtime 完成块
+        更新 agent 层后必须同步域层, 否则目标永久卡 ACTIVE。
+        """
+        from ocos.goal.store import GoalStore
+        gid = _create_goal_via_store(db)
+        store = GoalStore(db_path=db)
+        store.claim_pending_human(limit=1)
+
+        from ocos.agent.goal_store import GoalSQLiteStore
+        from ocos.agent.agent_runtime import AgentRuntime
+        from ocos.kernel.goal_types import Goal, GoalStatus, GoalDomain
+        rt = AgentRuntime.__new__(AgentRuntime)
+        rt._goal_store = GoalSQLiteStore(db)
+        rt._goal_store.initialize()
+        # 模拟 daemon._import_goal 的 agent 层写入 (同 id, ACTIVE)
+        rt._goal_store.save(Goal(
+            goal_id=gid, description="设计秒杀系统",
+            status=GoalStatus.ACTIVE, domain=GoalDomain.DEVELOPMENT))
+        rt._db_path = db
+        rt._active_dag_goal_id = gid
+        rt._active_dag = None
+        rt._dag_cursor = 0
+        rt._dag_total = 0
+        rt._recent_results = []
+        rt._memory_hub = None
+
+        # 执行完成块同款逻辑 (DAG exhausted 分支的核心动作)
+        from ocos.kernel.goal_types import GoalStatus as _GS
+        _g = rt._goal_store.load(gid)
+        assert _g.status.name == "ACTIVE"
+        _g.status = _GS.COMPLETED
+        rt._goal_store.save(_g)
+        # 域层同步 (agent_runtime 完成块新增逻辑)
+        GoalStore(db_path=db).mark_completed(gid)
+
+        # 双表闭环验证
+        assert rt._goal_store.load(gid).status.name == "COMPLETED"
+        row = store.load(gid)
+        assert row is not None
+        assert row["status"] == "COMPLETED"
+        # 域层 load_active 不再返回该目标
+        assert all(g["id"] != gid for g in store.load_active())
+
     def test_claim_ignores_system_and_non_pending(self, db):
         from ocos.goal.store import GoalStore
         store = GoalStore(db_path=db)

@@ -24,6 +24,19 @@ from ocos.opentale_bridge.organ_client import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _bypass_proxy_for_loopback(monkeypatch):
+    """P3 (2026-09-01): 环境代理隔离 — 测试必须直连 loopback。
+
+    开发机 shell 常设 ALL_PROXY=http://127.0.0.1:10808 等; no_proxy 若
+    写成 CIDR 格式 (127.0.0.0/8), urllib 不识别 → 127.0.0.1 请求被代理
+    转发, test_network_error_raises 期望立即 refused 却走代理超时。
+    显式声明 loopback 直连, 使测试在代理环境/CI 双态下行为一致。
+    """
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost,::1")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost,::1")
+
+
 class _MockOrganHandler(BaseHTTPRequestHandler):
     """最小 Organ API mock：generate 返回 running→completed 的任务状态机。"""
 

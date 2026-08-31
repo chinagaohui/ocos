@@ -630,3 +630,73 @@ class TestRegulateIntegration:
         gated = hm.regulate(enforcer=GoalOriginEnforcer(current_phase=25))
         assert len(gated.goals) == len(ungated.goals)
         assert gated.gated == []
+
+
+class TestSelfGoalDailyLimit:
+    """UX-F4: SELF 目标每日限额 + 去重 — 防 8-30 堆积事故（11289 条/日）复发。
+
+    事故根因: 限额上线前 Regulator 每 tick 生成 SELF 目标且无日限,
+    8-30 单日堆积 11289 条「探索新领域」。8-31 起 agent_runtime step 4.5
+    的 n_today>=3 限额生效（当日 3 条）。本类锁定该行为防回归。
+    """
+
+    @pytest.fixture
+    def runtime(self, tmp_path):
+        """最小 AgentRuntime 装配（仅 step 4.5 所需属性）。"""
+        from ocos.agent.agent_runtime import AgentRuntime
+        from ocos.agent.goal_store import GoalSQLiteStore
+        import types
+        rt = AgentRuntime.__new__(AgentRuntime)
+        rt._db_path = str(tmp_path / "limit.db")
+        rt._goal_store = GoalSQLiteStore(rt._db_path)
+        rt._goal_store.initialize()
+        rt._last_attention_decisions = []
+        # attention 是 property — 通过 __dict__ 注入避免 property setter 拦截
+        rt.__dict__["attention"] = types.SimpleNamespace(fatigue=None)
+        rt._cycle_count = 0
+        return rt
+
+    def _count_self_today(self, rt) -> int:
+        from datetime import datetime, timezone
+        conn = rt._goal_store.connection
+        today = datetime.now(timezone.utc).date().isoformat()
+        return conn.execute(
+            "SELECT COUNT(*) FROM goal WHERE origin_level='SELF' "
+            "AND created_at LIKE ?", (f"{today}%",)).fetchone()[0]
+
+    def test_daily_limit_caps_self_goals(self, runtime):
+        """当日 SELF 目标已达 3 → step 4.5 不再创建。"""
+        from ocos.kernel.goal_types import Goal, GoalStatus, GoalDomain
+        from ocos.kernel.goal_types import GoalOriginLevel, GoalAuthority, GoalLevel
+        # 预置 3 条当日 SELF 目标（模拟限额已满）
+        for i in range(3):
+            runtime._goal_store.save(Goal(
+                goal_id=f"GOAL-SELF-FILL-{i}", description=f"填充目标 {i}",
+                status=GoalStatus.ACTIVE, domain=GoalDomain.DEVELOPMENT,
+                origin_level=GoalOriginLevel.SELF,
+                authority=GoalAuthority.AUTONOMOUS,
+                level=GoalLevel.SHORT))
+        assert self._count_self_today(runtime) == 3
+
+        result = runtime._tick_step_homeostasis_regulation()
+        assert result["goals_created"] == 0
+        assert self._count_self_today(runtime) == 3  # 不增长
+
+    def test_dedup_skips_existing_description(self, runtime):
+        """活跃 SELF 目标已存在同 description → 去重跳过。"""
+        from ocos.kernel.goal_types import Goal, GoalStatus, GoalDomain
+        from ocos.kernel.goal_types import GoalOriginLevel, GoalAuthority, GoalLevel
+        runtime._goal_store.save(Goal(
+            goal_id="GOAL-SELF-EXPLORE", description="探索新领域：识别并吸收一条当前认知盲区的新信息",
+            status=GoalStatus.ACTIVE, domain=GoalDomain.DEVELOPMENT,
+            origin_level=GoalOriginLevel.SELF,
+            authority=GoalAuthority.AUTONOMOUS, level=GoalLevel.SHORT))
+
+        result = runtime._tick_step_homeostasis_regulation()
+        # 探索目标已被去重（活跃同 description 存在）→ 不再重复创建;
+        # 其他驱力目标（如 CONNECTION）仍可创建 — 只检查新建的（排除预置）
+        created_descs = [getattr(d, "description", "") for d in
+                         runtime._goal_store.load_active()
+                         if d.goal_id != "GOAL-SELF-EXPLORE"]
+        assert not any("探索新领域" in d for d in created_descs)
+        assert result["goals_created"] >= 0  # 去重不崩溃, 其余驱力正常走

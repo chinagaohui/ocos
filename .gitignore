@@ -31,6 +31,9 @@ logs/
 
 # Data (runtime-generated)
 data/
+*.db
+*.db-shm
+*.db-wal
 experience/feedback/
 experience/strategies/
 experience/rating_history.json

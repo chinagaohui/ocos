@@ -224,13 +224,17 @@ def test_factory_blocks_mission_all_phases():
 
 # ── GoalStore 读写 origin_level ─────────────────────────────────────
 
-def test_goalstore_save_and_load_with_origin():
-    """GoalStore 正确读写 origin_level 和 authority。"""
+def test_goalstore_save_and_load_with_origin(tmp_path):
+    """GoalStore 正确读写 origin_level 和 authority。
+
+    P4 (2026-09-01): 此前 GoalStore() 无 db_path → 写项目根 ocos.db
+    （DB_PATH 默认相对路径），单测污染生产数据。改用临时 DB 隔离。
+    """
     from ocos.goal.store import GoalStore
     import uuid
     gid = f"test-{uuid.uuid4().hex[:6]}"
 
-    store = GoalStore()
+    store = GoalStore(db_path=str(tmp_path / "origin.db"))
     store.save(
         goal_id=gid,
         level="TASK",

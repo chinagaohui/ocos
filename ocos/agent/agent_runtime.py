@@ -1065,9 +1065,9 @@ class AgentRuntime:
             except Exception as _gr_e:
                 logger.debug("goal result episode failed: %s", _gr_e)
             # UX-堆积修复: 目标生命周期闭合 ACTIVE → COMPLETED
+            gid = getattr(self, "_active_dag_goal_id", None)
             try:
                 from ocos.kernel.goal_types import GoalStatus as _GS
-                gid = getattr(self, "_active_dag_goal_id", None)
                 if gid and self._goal_store is not None:
                     _g = self._goal_store.load(gid)
                     if _g is not None and _g.status.name == "ACTIVE":
@@ -1075,6 +1075,16 @@ class AgentRuntime:
                         self._goal_store.save(_g)
             except Exception as _gc_e:
                 logger.debug("goal completion failed: %s", _gc_e)
+            # P1 (2026-09-01): 域层 goals 表同步写回 — 认领路径
+            # (daemon._claim_persisted_goals) 置域层 ACTIVE, 完成路径此前
+            # 只更新 agent 层 goal 表 → 域层永久卡 ACTIVE。此处经 GoalStore
+            # mark_completed 补齐双表闭环 (agent 层失败不阻断域层同步)。
+            try:
+                if gid and getattr(self, "_db_path", None):
+                    from ocos.goal.store import GoalStore as _DGoalStore
+                    _DGoalStore(db_path=self._db_path).mark_completed(gid)
+            except Exception as _dc_e:
+                logger.debug("domain goal completion sync failed: %s", _dc_e)
             self._active_dag_goal_id = None
             self._active_dag = None
             self._dag_cursor = 0

@@ -204,6 +204,30 @@ class GoalStore:
         conn.commit()
         return claimed
 
+    def mark_completed(self, goal_id: str) -> bool:
+        """P1 (2026-09-01): 域层 goals 表状态推进 ACTIVE → COMPLETED。
+
+        认领路径 (claim_pending_human) 置 ACTIVE 后, 完成路径此前只更新
+        agent 层 goal 表 (agent_runtime UX-堆积修复块), 域层 goals 表
+        从未写回 → 目标永久卡 ACTIVE。本方法补齐域层闭环; 终止态
+        (COMPLETED/CANCELLED/FAILED) 不再倒退。
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._conn()
+        try:
+            cur = conn.execute(
+                "UPDATE goals SET status = 'COMPLETED', progress = 1.0, "
+                "updated_at = ? WHERE id = ? "
+                "AND status NOT IN ('COMPLETED', 'CANCELLED', 'FAILED', "
+                "'SUPERSEDED', 'EXPIRED')",
+                (now, goal_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        except Exception:
+            conn.rollback()
+            raise
+
     def update_progress(self, goal_id: str, progress: float) -> bool:
         """更新 Goal 进度。progress 自动钳制到 [0.0, 1.0]。"""
         clamped = min(1.0, max(0.0, progress))
