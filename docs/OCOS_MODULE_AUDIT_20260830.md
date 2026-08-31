@@ -5,6 +5,10 @@
 > ③ 每模块测试覆盖统计（import 该包的测试文件中的 test 函数数）；
 > ④ 合并全量测试基线 5245 passed / 24 skipped / 0 failed（commit 0de4c62 后）。
 > **定位**: GAP 修复计划 + R4-A 之后的第一次全仓接线审计。
+> **⚠️ 时效声明（2026-08-31 更新）**: 本报告的部分结论已被后续 48 个 commit 推进——
+> 沉睡器官 14/24 已上电（见 POWER_ON_PLAN 执行记录）、F1-F10 全部闭环、
+> 测试基线 5245 → 5287。**当前状态以文末「九、2026-08-31 全量状态更新」为准**，
+> 第二/四节的表格保留为 08-30 快照供历史对照。
 
 ---
 
@@ -140,3 +144,65 @@
 - self/builder.py:273 — 无数据时低置信度占位（诚实标注）
 - capability/skill_registry.py:208 — 缺失 skill 占位填充（小项，可后续改进）
 - proactive/templates.py:34 — 模板 {topic} 槽位回退（非代码占位）
+
+---
+
+## 九、2026-08-31 全量状态更新（48 commits，本节为当前权威状态）
+
+> 覆盖: POWER_ON_PLAN（上电）+ LLM 接入 + 交互闭环（UX 系列）+ 审计响应（P1/P2/P3）。
+> 基线: **5287 passed / 24 skipped / 0 failed**。
+
+### 9.1 沉睡器官上电结果（对照第四节，14/24 已上电）
+
+| 器官 | 上电方式 | 实测产出 |
+|---|---|---|
+| personal_memory (WisdomStore) | dream 巩固周期触发智慧提炼 | wisdom_items 0→2 |
+| personal_intelligence | 对话统计→风格画像→回复适配 | 运行中 |
+| cognitive_continuity | dream 连续性检查点落盘 ~/.ocos/continuity.json | 运行中 |
+| event_memory | bridge 执行留痕（execute_approved 统一入口） | 运行中 |
+| evolution | self_upgrade 提案走完整治理链（影响分析→沙箱→迁移→可回滚） | 运行中 |
+| extension | cmd: 候选经 SandboxOps 真隔离试运行 | 运行中 |
+| diagnosis | 诊断循环→白名单修复→checkpoint/rollback | 运行中（含探针假阳性修复） |
+| living_verification/recovery_resilience | scripts/resilience_drill.py 评分 10/10 | 可定期跑 |
+| operations | RUN_COMMAND/HTTP_FETCH 沙盒执行层（白名单+敏感路径+分段校验） | 实测宿主机分析 |
+| digital_world | file_op 审批执行器（approval_id 强制+受保护路径拒绝） | 实测 |
+| task | AgentRuntime 任务镜像 → Stage ⑤ resolve_ready | 运行中 |
+| runtime_scheduler | PriorityQueue 上电（目标优先级+背压 50 上限） | 运行中 |
+| perception | --watch-dir 传感器 + 文件语义解析器 → 世界模型接受落库 | 实测 |
+| agent_orchestration | 维持沉睡（裁决: 并行执行触碰 step7 冻结语义，延后） | — |
+
+维持沉睡/裁决项: auth、belief.py、agent_orchestration_autonomous、os_v1 路由层、persistence（Deprecated 登记或分工裁决，见 AUDIT_KERNEL 清单）。
+
+### 9.2 本节 F1-F10 全部闭环
+
+F1 半接线 ✓（run.py 装配+镜像 on）· F2 双调度器裁决 ✓ · F3 docstring ✓ · F4 day7 fail-closed ✓ · F5/F6/F7 裁决 ✓ · F8 goal/plan 落库+schema v4 ✓ · F9 引擎注册（stub 降级消灭）✓ · F10 候选裁撤登记 ✓。
+
+### 9.3 新能力（审计之后长出来的）
+
+| 能力 | 说明 |
+|---|---|
+| 对话即执行 | 说任务自动受理为目标（LLM 编译器分类+改写），无按钮；question/continue 拦截 |
+| 真实任务执行 | chat 目标单任务直执行（不走模板分解）；LLM→RUN/FILE_WRITE→沙盒白名单+敏感路径+分段校验；被拦截带反馈重试 |
+| 结果自动回推 | 目标完成 → outbox 出站通道 → Web 对话流自动弹 📋 结果气泡（无需询问） |
+| LLM 语言核心 | DeepSeek (deepseek-v4-flash) 经 OpenAI 兼容端点接入；日预算 500 次封顶 |
+| 内视 | 人型 UI 器官点击 + /ocos/introspect 全模块报告（身份/引擎/记忆/目标/连续性/风格/执行史） |
+| 自我迭代 | 自省→治理链提案→审批→self_knowledge 回注提示词，可回滚 |
+| 免疫 | 体检→故障检测→白名单修复→checkpoint/rollback；resilience_drill 10/10 |
+| 记忆闭环 | 对话自动沉淀 episode；dream 每 200 tick 巩固→belief/wisdom（实测 belief 0→4, wisdom 0→2） |
+
+### 9.4 期间修复的关键静默失效（模式备忘）
+
+| 模式 | 案例 |
+|---|---|
+| 缺顶层 import | agent_runtime 缺 datetime → F4 去重静默失效（一夜 4000+ 堆积）|
+| 属性遮蔽方法 | bridge._textgen=None 遮蔽 _textgen() → 'NoneType' not callable |
+| 枚举校验 | Task agent_type='executor' 不在枚举 → 分解永远失败 |
+| DB 往返丢字段 | goal 表不存 caller → chat 单任务路径永不触发 |
+| 探针调不存在 API | event_memory.count() 不存在 → 假阳性修复循环 148 条 |
+| 进程旧代码 | ocos run/server 重启前不加载新代码（多次"修了没生效"的元凶）|
+
+### 9.5 待办余量
+
+- PW-4.3 并行执行（延后裁决）、PW-5.2 营养指标内视化（低优）
+- 模板任务描述质量：development 模板仍产出"设计架构"类空壳描述（chat 目标已走单任务路径绕开；SELF/CLI 目标仍受影响）
+- consciousness 打通后 belief/wisdom 的消费端（对话上下文已接，决策引用未接）
