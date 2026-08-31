@@ -80,6 +80,8 @@ class GoalSQLiteStore:
         existing = {r[1] for r in self._conn.execute("PRAGMA table_info(goal)").fetchall()}
         if existing and "domain" not in existing:
             self._conn.execute("ALTER TABLE goal ADD COLUMN domain TEXT NOT NULL DEFAULT 'writing'")
+        if existing and "caller" not in existing:
+            self._conn.execute("ALTER TABLE goal ADD COLUMN caller TEXT NOT NULL DEFAULT 'unknown'")
         self._conn.commit()
         logger.info("GoalSQLiteStore initialized at %s", self._db_path)
 
@@ -102,8 +104,8 @@ class GoalSQLiteStore:
             """INSERT OR REPLACE INTO goal
                (goal_id, level, description, parent_id, priority,
                 created_at, deadline, status, result_json,
-                origin_level, authority, domain)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                origin_level, authority, domain, caller)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 goal.goal_id,
                 goal.level.value,
@@ -119,6 +121,7 @@ class GoalSQLiteStore:
                 str(getattr(goal, "domain", GoalDomain.WRITING).value
                     if hasattr(getattr(goal, "domain", None), "value")
                     else getattr(goal, "domain", "writing")),
+                str(getattr(goal, "caller", "unknown")),
             ),
         )
         self.connection.commit()
@@ -175,4 +178,5 @@ class GoalSQLiteStore:
             origin_level=GoalOriginLevel(d.get("origin_level", "SYSTEM")),
             authority=GoalAuthority(d.get("authority", "AUTONOMOUS")),
             domain=_domain_from_str(d.get("domain", "writing")),
+            caller=d.get("caller", "unknown"),
         )
