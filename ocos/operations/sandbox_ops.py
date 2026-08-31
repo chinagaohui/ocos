@@ -86,6 +86,8 @@ ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "hostname",
     "id",
     "ps",
+    "lscpu",
+    "ip addr",
     # 只读 git（仓库分析类任务需要; commit/push 等写操作不在白名单）
     "git log",
     "git status",

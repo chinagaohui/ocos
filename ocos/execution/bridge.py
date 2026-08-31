@@ -678,6 +678,20 @@ class DecisionBridge:
         except Exception as e:
             return {"ok": False, "error": f"LLM 规划失败: {e}"}
 
+        def _convert(feedback_text: str) -> str:
+            """UX-K: 被沙盒拦截后带反馈重试一次。"""
+            return asyncio.run(tg._provider.generate(
+                f"{prompt}\n\n【上次尝试被拒绝】{feedback_text}\n"
+                "请改用白名单内的只读命令重新输出，或输出 NONE|原因。",
+                system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的单行动作。",
+                temperature=0.1, max_tokens=2000))
+
+        def _first_line(text: str) -> str:
+            t = text.strip()
+            if t.startswith("```"):
+                t = t.strip("`").lstrip()
+            return t.splitlines()[0].strip()
+
         if raw.startswith("RUN|"):
             command = raw[4:].strip()
             # UX-F1: 自主路径（auto_readonly）下命令必须只读——
@@ -686,7 +700,15 @@ class DecisionBridge:
                         ("write", "echo >", ">", "tee ", "rm", "mv", "mkdir")):
                 return {"ok": False,
                         "error": "自主路径仅允许只读命令——写操作需转待批"}
-            return self._handler_run_command(SimpleNamespace(payload={"command": command}))
+            run_result = self._handler_run_command(
+                SimpleNamespace(payload={"command": command}))
+            if not run_result.get("ok") and run_result.get("blocked"):
+                # UX-K: 沙盒拦截（白名单外/敏感路径）→ 带反馈重试一次
+                raw2 = _first_line(_convert(run_result.get("block_reason", "")))
+                if raw2.startswith("RUN|"):
+                    run_result = self._handler_run_command(
+                        SimpleNamespace(payload={"command": raw2[4:].strip()}))
+            return run_result
         if raw.startswith("FILE_WRITE|"):
             parts = raw.split("|", 2)
             if len(parts) == 3:
