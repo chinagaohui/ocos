@@ -368,6 +368,20 @@ async function decide(pid, action) {
   await fetch(`/ocos/approvals/${pid}/${action}`, {method: "POST"});
   refreshSide();
 }
+/* UX-J: 出站消息轮询 — 目标完成后结果自动弹入对话流 */
+let _outboxCursor = 0;
+async function pollOutbox() {
+  try {
+    const j = await (await fetch(`/ocos/outbox?after=${_outboxCursor}`)).json();
+    for (const m of j.data.messages) {
+      bubble("📋 " + m.content, "bot");
+      _outboxCursor = Math.max(_outboxCursor, m.rid);
+    }
+  } catch (e) { /* 静默 */ }
+}
+setInterval(pollOutbox, 3000);
+pollOutbox();
+
 refreshSide(); setInterval(refreshSide, 5000);
 input.focus();
 

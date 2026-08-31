@@ -111,6 +111,18 @@ async def summary() -> APIResponse:
     return APIResponse(success=True, message="ok", data=data)
 
 
+# ── UX-J: 出站消息（目标结果自动回推） ──────────────────────────────
+
+@router.get("/ocos/outbox", tags=["converse"])
+async def outbox(after: int = 0) -> APIResponse:
+    """GET /ocos/outbox?after=<rowid> — 增量拉取 agent 主动消息。"""
+    from ocos.interaction.inbox import UserInbox
+    rows = UserInbox(db_path=_db()).list_outbound_after(after)
+    next_cursor = max((r["rid"] for r in rows), default=after)
+    return APIResponse(success=True, message="ok",
+                       data={"messages": rows, "next_cursor": next_cursor})
+
+
 # ── E: 内视 ─────────────────────────────────────────────────────────
 
 @router.get("/ocos/introspect", tags=["converse"])

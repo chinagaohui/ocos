@@ -134,6 +134,38 @@ class UserInbox:
             time.sleep(interval)
         return self.get(mid)
 
+    def post_outbound(self, content: str) -> str:
+        """UX-J: agent 主动消息（目标执行结果自动回推对话流）。"""
+        mid = f"MSG-{uuid.uuid4().hex[:8]}"
+        conn = self._conn()
+        conn.execute(
+            """INSERT INTO user_messages
+               (id, sender, content, status, created_at)
+               VALUES (?, 'ocos', ?, 'outbound', ?)""",
+            (mid, content[:2000], datetime.now(timezone.utc).isoformat()))
+        conn.commit()
+        return mid
+
+    def list_outbound_after(self, after_rowid: int = 0,
+                            limit: int = 20) -> list[dict]:
+        """UX-J: 增量拉取 agent 主动消息（UI 轮询用，按 rowid 游标）。"""
+        conn = self._conn()
+        rows = conn.execute(
+            f"SELECT rowid AS rid, {_COLS} FROM user_messages "
+            "WHERE sender = 'ocos' AND rowid > ? ORDER BY rowid LIMIT ?",
+            (after_rowid, limit)).fetchall()
+        out = []
+        for r in rows:
+            d = _row_to_dict(r[1:])   # r[0]=rid, 其余按 _COLS 顺序
+            d["rid"] = r[0]
+            out.append(d)
+        return out
+
+    def max_rowid(self) -> int:
+        conn = self._conn()
+        return conn.execute(
+            "SELECT COALESCE(MAX(rowid), 0) FROM user_messages").fetchone()[0]
+
     def count_queued(self) -> int:
         conn = self._conn()
         return conn.execute(

@@ -102,6 +102,8 @@ class ResidentRuntime:
             logger.debug("PriorityQueue unavailable: %s", e)
         self._user_inbox: Any = None
         self._responder: Any = None
+        self._last_result_rowid: int = 0    # UX-J: goal_result 增量游标
+        self._result_cursor_init: bool = False
         if db_path and db_path != ":memory:":
             try:
                 from ocos.interaction.inbox import UserInbox
@@ -259,6 +261,13 @@ class ResidentRuntime:
                     self._write_heartbeat()
                 except Exception:
                     pass
+            # UX-J: 目标完成 → 自动回推结果到对话流
+            if self._hb_ticks % 5 == 0:
+                try:
+                    self._push_goal_results()
+                except Exception:
+                    logger.exception("goal result push failed")
+
             # P1-1: 周期性 dream 巩固（Episode → Belief/Pattern/Wisdom）
             if self._hb_ticks % max(1, self.dream_interval_ticks) == 0:
                 try:
@@ -359,6 +368,33 @@ class ResidentRuntime:
         except Exception:
             logger.exception("Failed to import queued goal: %s", description)
             return False
+
+    def _push_goal_results(self) -> None:
+        """UX-J: 新 goal_result episode → 出站消息（UI 自动弹出结果）。"""
+        if self._user_inbox is None:
+            return
+        conn = __import__("sqlite3").connect(
+            self._user_inbox._db_path)  # noqa — 只读查询同库
+        try:
+            if not self._result_cursor_init:
+                # 首次调用: 游标定位到当前最大 rowid（历史不重播），
+                # 之后新增的 goal_result 全部推送（修掉游标 -1 永久抑制的 bug）
+                self._last_result_rowid = conn.execute(
+                    "SELECT COALESCE(MAX(rowid), 0) FROM episodes "
+                    "WHERE tags LIKE '%goal_result%'").fetchone()[0]
+                self._result_cursor_init = True
+                return
+            rows = conn.execute(
+                "SELECT rowid, substr(decision,1,600), created_at FROM episodes "
+                "WHERE tags LIKE '%goal_result%' AND rowid > ? "
+                "ORDER BY rowid LIMIT 5",
+                (self._last_result_rowid,)).fetchall()
+        finally:
+            conn.close()
+        for rid, decision, created in rows:
+            self._user_inbox.post_outbound(
+                f"目标执行完成（{created[11:19]}）：\n{decision}")
+            self._last_result_rowid = rid
 
     def _run_dream_cycle(self) -> None:
         """P1-1: 完整睡眠巩固序列 — 修复生命周期相位后 sleep→dream。
