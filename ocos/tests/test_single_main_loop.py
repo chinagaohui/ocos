@@ -113,7 +113,8 @@ def test_t3_daemon_ticks_through_kernel():
         time.sleep(0.35)
         # runtime cycle 与 kernel tick 同步增长（每轮 daemon → kernel.tick_loop(1) → agent driver）
         assert rt.cycle_count >= 3, f"runtime cycles={rt.cycle_count}"
-        assert rt._kernel.tick_count == rt.cycle_count, (
+        # stop 时在飞 tick 可能已完成计数（±1 竞态，与 phase33 同源）
+        assert abs(rt._kernel.tick_count - rt.cycle_count) <= 1, (
             f"kernel tick({rt._kernel.tick_count}) 应等于 runtime cycle({rt.cycle_count})"
         )
         # driver 已把 AgentRuntime.tick 注入 kernel（最近一次 agent 执行结果可查）

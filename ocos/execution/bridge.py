@@ -131,6 +131,10 @@ class DecisionBridge:
         self._pending_store = pending_store     # AUD-F12: 有 store 则跨进程存活
         self._db_path = db_path
         self._lifecycle_store: Any = None       # PW-1.4: event_memory EventStore（惰性）
+        # P2-2: LLM 日预算 — 超限后任务转待批（诚实降级，不烧 token）
+        self._llm_calls_today: int = 0
+        self._llm_calls_date: str = ""
+        self._textgen: Any = None
         self._pending: list[dict] = []          # 无 store 时的内存回退（诚实降级）
         self._reports: list[BridgeReport] = []
 
@@ -662,15 +666,17 @@ class DecisionBridge:
         if not description:
             return {"ok": False, "error": "empty task description"}
 
-        from ocos.engines.text_generator import TextGenerator
         if not self._llm_available():
             return {"ok": False,
                     "error": "需要语言核心（LLM key）才能把任务描述转换为可执行动作",
                     "honest_blocked": True}
+        budget_ok, budget_reason = self._llm_budget_ok()
+        if not budget_ok:
+            return {"ok": False, "error": budget_reason, "honest_blocked": True}
 
         try:
             import asyncio
-            tg = TextGenerator()
+            tg = self._textgen()
             prompt = (
                 f"任务描述：{description}\n\n"
                 "把上述任务转换为**一条**可直接执行的动作。只输出单行，格式严格为：\n"
@@ -708,6 +714,26 @@ class DecisionBridge:
         if raw.startswith("NONE|"):
             return {"ok": False, "error": f"任务无法执行: {raw[5:].strip()}"}
         return {"ok": False, "error": f"LLM 输出格式不符: {raw[:80]}"}
+
+    def _textgen(self):
+        """P3-2: 复用缓存的 TextGenerator。"""
+        if self._textgen is None:
+            from ocos.engines.text_generator import get_text_generator
+            self._textgen = get_text_generator()
+        return self._textgen
+
+    def _llm_budget_ok(self) -> tuple[bool, str]:
+        """P2-2: LLM 日预算 — 默认 500 次/天（OCOS_LLM_DAILY_CAP 可调）。"""
+        import os as _os
+        today = datetime.now(timezone.utc).date().isoformat()
+        if self._llm_calls_date != today:
+            self._llm_calls_date = today
+            self._llm_calls_today = 0
+        cap = int(_os.environ.get("OCOS_LLM_DAILY_CAP", "500"))
+        if self._llm_calls_today >= cap:
+            return False, f"LLM 日预算已用尽（{cap}/天）— 任务转待批明日再试"
+        self._llm_calls_today += 1
+        return True, ""
 
     def _llm_available(self) -> bool:
         import os

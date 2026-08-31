@@ -33,6 +33,8 @@ from ocos.interaction.cli.paths import DEFAULT_DB, resolve_db_path  # AUD-F8: �
 def cmd_run(args, session) -> int:
     """ocos run [--ticks N] [--interval S] [--db PATH] [--agent-id ID]"""
     db_path = resolve_db_path(args.db)
+    # P1-2: LLM 任务单步 3-12s — daemon 默认放宽 tick 预算（可覆盖）
+    os.environ.setdefault("OCOS_TICK_BUDGET", "15")
     if db_path != ":memory:":
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 

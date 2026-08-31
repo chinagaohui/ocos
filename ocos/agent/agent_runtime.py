@@ -9,6 +9,7 @@ Phase 26: Tick Step 9 (result_ingest) 支持 ResultUnderstandingLayer
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 import threading
 import time
@@ -105,7 +106,9 @@ class AgentRuntime:
 
         # Phase 34A: EventBus — 感知神经中枢
         self._event_bus: Any = None  # EventBus, initialized in boot()
-        self._tick_budget: float = 0.5  # 500ms budget per tick
+        # P1-2: 预算可配 — LLM 任务（每任务 3-12s）远超 500ms，
+        # 固定 0.5s 会让告警永远在响（审计 P1-2）
+        self._tick_budget: float = float(os.environ.get("OCOS_TICK_BUDGET", "0.5"))
         # Phase 24-A: PermissionGateway 集成 — 所有外部交互必经网关
         self._gateway: Any = None
         # Phase 26: ResultUnderstandingLayer — 验证→结构化→学习管道

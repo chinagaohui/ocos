@@ -270,8 +270,8 @@ class ChatResponder:
             "没有值得记的就输出：无"
         )
         try:
-            from ocos.engines.text_generator import TextGenerator
-            tg = TextGenerator()
+            from ocos.engines.text_generator import get_text_generator
+            tg = get_text_generator()
             raw = asyncio.run(tg._provider.generate(
                 prompt, system_prompt=_SYSTEM_PROMPT,
                 temperature=0.4, max_tokens=2000))

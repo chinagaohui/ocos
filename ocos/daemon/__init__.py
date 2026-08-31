@@ -88,6 +88,10 @@ class ResidentRuntime:
             except Exception as e:
                 logger.warning("GoalStore unavailable, goal claim disabled: %s", e)
         # UX-P2: 用户消息收件箱（ocos say → daemon 消费 → 感知事件）
+        # P1-1: dream 巩固周期 — 每 dream_interval_ticks 触发一次睡眠巩固
+        # （此前 dream 只挂在 LifeCycleOrchestrator 的 SLEEP 分支，daemon
+        #   不经过该编排器 → 生产环境巩固管线从未运转，belief/pattern 恒 0）
+        self.dream_interval_ticks: int = 200
         # PW-4.4: 目标队列背压阈值 + runtime_scheduler PriorityQueue 上电
         self.max_queue_size: int = 50
         self._priority_queue: Any = None
@@ -255,6 +259,17 @@ class ResidentRuntime:
                     self._write_heartbeat()
                 except Exception:
                     pass
+            # P1-1: 周期性 dream 巩固（Episode → Belief/Pattern/Wisdom）
+            if self._hb_ticks % max(1, self.dream_interval_ticks) == 0:
+                try:
+                    agent_obj = getattr(self._runtime, "agent", None)
+                    if agent_obj is not None and hasattr(agent_obj, "dream"):
+                        out = agent_obj.dream()
+                        logger.info("Dream consolidation: wisdom_total=%s",
+                                    (out.get("wisdom_stats") or {}).get(
+                                        "wisdom_total", "?"))
+                except Exception:
+                    logger.exception("Dream consolidation failed")
             # Phase 33: 将队列中的目标导入 runtime 的 goal_store
             self._drain_goal_queue()
             # UX-1: 认领 CLI 创建的持久化目标（每 tick 最多 1 个）

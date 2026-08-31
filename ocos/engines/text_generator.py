@@ -410,6 +410,17 @@ class GenerationResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+_TEXTGEN_CACHE: dict = {}
+
+def get_text_generator() -> "TextGenerator":
+    """P3-2: TextGenerator 实例缓存 — 此前每个调用点每 tick 重建
+    （Provider 重初始化 + 日志噪音）。"""
+    global _TEXTGEN_CACHE
+    if "instance" not in _TEXTGEN_CACHE:
+        _TEXTGEN_CACHE["instance"] = TextGenerator()
+    return _TEXTGEN_CACHE["instance"]
+
+
 def _read_llm_config() -> dict:
     """读取 ~/.ocos/config.json 的 llm 段（环境变量优先于配置文件）。"""
     path = os.path.join(os.path.expanduser("~"), ".ocos", "config.json")

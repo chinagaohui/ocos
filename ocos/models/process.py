@@ -42,7 +42,13 @@ class ProcessType(str, Enum):
             DeprecationWarning,
             stacklevel=2,
         )
-        logger.warning("ProcessType used (deprecated): %s", value)
+        _warned = getattr(cls, "_warned_values", None)
+        if _warned is None:
+            _warned = set()
+            cls._warned_values = _warned
+        if value not in _warned:   # P3-1: 每值仅告警一次（此前每 tick 刷 7 行）
+            _warned.add(value)
+            logger.warning("ProcessType used (deprecated): %s", value)
         obj = str.__new__(cls, value)
         obj._value_ = value
         return obj
