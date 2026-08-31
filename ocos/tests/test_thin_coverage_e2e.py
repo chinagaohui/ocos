@@ -119,3 +119,47 @@ class TestExecutionDenyE2E:
         result = dispatcher.dispatch(ActionType.WRITE_CHAPTER, "open_tale", {})
         assert result.status == "failed"
         assert "No handler" in str(result.result)
+
+
+class TestSandboxPathGate:
+    """P6 (2026-09-01): 沙盒敏感路径拦截 — 公开只读文件放行, 敏感文件仍拦。
+
+    回归场景: 宿主机信息收集任务 (cat /etc/os-release) 此前被 /etc 前缀
+    一刀切拦截 → LLM 规划失败 → 目标 honest failed。修复后精确放行
+    /etc/os-release; /etc/shadow 等敏感文件必须继续拦截。
+    """
+
+    def _bridge(self):
+        from ocos.execution.bridge import DecisionBridge
+        bridge = DecisionBridge()
+        bridge.attach_default_handlers()
+        return bridge
+
+    def _cmd(self, command: str):
+        """构造 RUN_COMMAND DispatchedAction（真实类型, 非 duck-type）。"""
+        from ocos.autonomous_runtime.action_dispatcher import (
+            ActionDispatcher, ActionType, DispatchedAction)
+        return DispatchedAction(ActionType.RUN_COMMAND, "sandbox",
+                                {"command": command})
+
+    def test_public_os_release_allowed(self):
+        """cat /etc/os-release（公开只读）→ 放行, 不触发敏感拦截。"""
+        bridge = self._bridge()
+        result = bridge._handler_run_command(self._cmd("cat /etc/os-release"))
+        assert result.get("blocked") is not True
+        assert not result.get("block_reason")
+
+    def test_sensitive_etc_shadow_still_blocked(self):
+        """cat /etc/shadow（敏感）→ 仍拦截。"""
+        bridge = self._bridge()
+        result = bridge._handler_run_command(self._cmd("cat /etc/shadow"))
+        assert result.get("blocked") is True
+        assert "敏感路径" in result.get("block_reason", "")
+
+    def test_compound_command_segments_checked(self):
+        """复合命令分段校验: 合法段 + 敏感段 → 敏感段仍拦截。"""
+        bridge = self._bridge()
+        result = bridge._handler_run_command(
+            self._cmd("uname -a && cat /etc/shadow"))
+        assert result.get("blocked") is True
+        assert "敏感路径" in result.get("block_reason", "")

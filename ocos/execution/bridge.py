@@ -428,6 +428,12 @@ class DecisionBridge:
         SENSITIVE_PREFIXES = ("/etc", "/root", "/proc", "/sys", "/boot",
                               "/dev", "/var/log",
                               "/home/laogao/.ssh", "/home/laogao/.config")
+        # P6 (2026-09-01): 公开只读系统信息文件 — 精确放行（world-readable,
+        # 无密钥无凭据）; 此前 /etc 前缀一刀切误伤 cat /etc/os-release
+        # （宿主机信息收集是常见合法任务）。敏感文件仍被前缀规则拦截。
+        PUBLIC_READONLY_PATHS = frozenset({
+            "/etc/os-release",
+        })
         try:
             from ocos.operations.sandbox_ops import SandboxOps
             for seg in segments:
@@ -437,6 +443,8 @@ class DecisionBridge:
                 # 敏感路径拦截: 命令参数指向系统敏感目录即拒绝
                 for token in _re.findall(r"[~/][\w./-]*", seg):
                     resolved = os.path.abspath(os.path.expanduser(token))
+                    if resolved in PUBLIC_READONLY_PATHS:
+                        continue  # 公开只读文件（如 /etc/os-release）放行
                     if any(resolved.startswith(p) for p in SENSITIVE_PREFIXES):
                         return {"ok": False, "blocked": True,
                                 "block_reason": f"敏感路径: {token[:50]}"}
