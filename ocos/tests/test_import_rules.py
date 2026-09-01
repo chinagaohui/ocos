@@ -57,7 +57,7 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
     "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity",
-                         "ocos.evolution", "ocos.extension", "ocos.task", "ocos.initiative"],
+                         "ocos.evolution", "ocos.extension", "ocos.task", "ocos.initiative", "ocos.collaboration"],
                          # PW-2: 自我迭代治理链上电
     "ocos.extension": ["ocos.extension", "ocos.operations"],
                          # PW-2.2: 沙箱真隔离复用 operations 闸门
@@ -114,6 +114,8 @@ ALLOWED_IMPORTS = {
     "ocos.planning": ["ocos.goal", "ocos.memory", "ocos.capability"],
     # Phase 28: Agent Orchestration 层 — Agent调度，不导入 Self
     "ocos.agent_orchestration": ["ocos.agent", "ocos.planning", "ocos.goal"],
+    # Phase 64: Agent Collaboration — 多Agent协作
+    "ocos.collaboration": ["ocos.logging", "ocos.agent_orchestration", "ocos.planning"],
     # Phase 29: Digital World 层 — 数字世界操作，不导入 Self
     "ocos.digital_world": ["ocos.agent", "ocos.planning"],
     # Phase 39.1: Runtime Skeleton — 只依赖自身 + kernel.goal_types（类型定义）
