@@ -57,7 +57,7 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
     "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity",
-                         "ocos.evolution", "ocos.extension", "ocos.task", "ocos.initiative", "ocos.collaboration"],
+                         "ocos.evolution", "ocos.extension", "ocos.task", "ocos.initiative", "ocos.collaboration", "ocos.autonomous"],
                          # PW-2: 自我迭代治理链上电
     "ocos.extension": ["ocos.extension", "ocos.operations"],
                          # PW-2.2: 沙箱真隔离复用 operations 闸门
@@ -204,6 +204,13 @@ ALLOWED_IMPORTS = {
                     "ocos.perception", "ocos.world_model", "ocos.knowledge",
                     "ocos.execution", "ocos.engines", "ocos.events", "ocos.diagnosis",
                     "ocos.capability_reality"],  # AUD-F9: 引擎实例化; PW-3.1 修复重连
+    # Phase L: Autonomous Goal Manager — 自主目标系统
+    "ocos.autonomous": [
+        "ocos.logging",
+        "ocos.goal.store",
+        "ocos.goal.enforcer",
+        "ocos.kernel.goal_types",
+    ],
 }
 
 # 测试文件允许的 import 例外（白名单，当前 unused—保留供将来使用）

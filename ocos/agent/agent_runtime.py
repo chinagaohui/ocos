@@ -241,6 +241,9 @@ class AgentRuntime:
             # Phase I: 初始化 True Initiative
             self._init_true_initiative()
 
+            # Phase L: 初始化 Goal Manager
+            self._init_goal_manager()
+
             # 先于 agent.boot(): Phase 22-A 注入 EngineBridge 供 act() 真实化
             if hasattr(self.agent, "set_engine_bridge"):
                 self.agent.set_engine_bridge(self.engine_bridge)
@@ -382,6 +385,19 @@ class AgentRuntime:
             logger.info("TrueInitiative initialized. Proactive output ready.")
         else:
             logger.debug("MasterAgent not available, TrueInitiative skipped.")
+
+    def _init_goal_manager(self) -> None:
+        """Phase L: 初始化 GoalManager — 自主目标管理系统."""
+        from ocos.autonomous import create_goal_manager
+
+        goal_mgr = create_goal_manager()
+        # 注入到 MasterAgent
+        agent_obj = getattr(self, '_agent', None)
+        if agent_obj is not None:
+            agent_obj._goal_manager = goal_mgr
+            logger.info("GoalManager initialized. Endogenous goal support ready.")
+        else:
+            logger.debug("MasterAgent not available, GoalManager skipped.")
 
     @property
     def user_memory(self) -> Any:

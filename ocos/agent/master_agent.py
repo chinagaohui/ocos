@@ -95,6 +95,8 @@ class MasterAgent:
         proactive_output_callback: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
+        # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
+        goal_manager: Any = None,
     ):
         self.agent_id = agent_id
         self.identity = identity
@@ -151,6 +153,8 @@ class MasterAgent:
         self._orchestration_supervisor = orchestration_supervisor
         # Phase H: Memory Recall (optional, set by AgentRuntime)
         self._memory_recall: Any = None
+        # Phase L: Goal Manager (optional, set by AgentRuntime)
+        self._goal_manager: Any = goal_manager
 
         # 全局状态锁：保证 sleep() 状态切片的绝对原子性
         self._state_lock = self._lifecycle.lock
@@ -176,6 +180,11 @@ class MasterAgent:
     @property
     def bridge(self) -> CognitiveBridge:
         return self._bridge
+
+    @property
+    def goal_manager(self) -> Any:
+        """Phase L: 自主目标管理器."""
+        return self._goal_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
