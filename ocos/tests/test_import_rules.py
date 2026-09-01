@@ -57,7 +57,7 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
     "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity",
-                         "ocos.evolution", "ocos.extension", "ocos.task"],
+                         "ocos.evolution", "ocos.extension", "ocos.task", "ocos.initiative"],
                          # PW-2: 自我迭代治理链上电
     "ocos.extension": ["ocos.extension", "ocos.operations"],
                          # PW-2.2: 沙箱真隔离复用 operations 闸门

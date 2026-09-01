@@ -235,6 +235,12 @@ class AgentRuntime:
             # Phase G: 初始化 User Model
             self._init_user_model()
 
+            # Phase H: 初始化 Memory Recall
+            self._init_memory_recall()
+
+            # Phase I: 初始化 True Initiative
+            self._init_true_initiative()
+
             # 先于 agent.boot(): Phase 22-A 注入 EngineBridge 供 act() 真实化
             if hasattr(self.agent, "set_engine_bridge"):
                 self.agent.set_engine_bridge(self.engine_bridge)
@@ -354,6 +360,28 @@ class AgentRuntime:
             db_path = "/tmp/ocos_user_model.db"
         self._user_memory = UserMemory(db_path)
         logger.info("UserModel initialized at %s", db_path)
+
+    def _init_memory_recall(self) -> None:
+        """Phase H: 初始化 MemoryRecall — 跨会话记忆检索."""
+        from ocos.memory.recall import MemoryRecall
+
+        self._memory_recall = MemoryRecall(memory_hub=self._memory_hub)
+        logger.info("MemoryRecall initialized. Ready for cross-session retrieval.")
+
+    def _init_true_initiative(self) -> None:
+        """Phase I: 初始化 TrueInitiative — 真正主动性引擎."""
+        from ocos.initiative import TrueInitiative
+
+        # 注入到 MasterAgent
+        agent_obj = getattr(self, '_agent', None)
+        if agent_obj is not None:
+            agent_obj._true_initiative = TrueInitiative(
+                user_memory=self._user_memory,
+                memory_recall=self._memory_recall,
+            )
+            logger.info("TrueInitiative initialized. Proactive output ready.")
+        else:
+            logger.debug("MasterAgent not available, TrueInitiative skipped.")
 
     @property
     def user_memory(self) -> Any:
