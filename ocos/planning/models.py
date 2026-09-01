@@ -57,6 +57,9 @@ VALID_AGENT_TYPES: frozenset[str] = frozenset({
     "researcher",
     "reviewer",
     "data_processor",
+    "code_executor",
+    "summarizer",
+    "planner",
 })
 
 

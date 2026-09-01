@@ -183,11 +183,16 @@ class AgentRuntime:
         if self._orchestrator is None:
             from ocos.capability.orchestrator import CapabilityOrchestrator
             from ocos.capability.echo_agent import EchoAgent
+            from ocos.capability.agents import ResearchAgent, CodeAgent, SummarizerAgent, PlannerAgent
             self._orchestrator = CapabilityOrchestrator(
                 providers={
                     "writer": EchoAgent(prefix="Writer"),
-                    "researcher": EchoAgent(prefix="Researcher"),
+                    "researcher": ResearchAgent(prefix="Researcher"),
                     "reviewer": EchoAgent(prefix="Reviewer"),
+                    "data_processor": EchoAgent(prefix="DataProcessor"),
+                    "code_executor": CodeAgent(prefix="CodeExecutor"),
+                    "summarizer": SummarizerAgent(prefix="Summarizer"),
+                    "planner": PlannerAgent(prefix="Planner"),
                     "echo": EchoAgent(),
                 },
                 auto_learn=False,  # Phase 32 再开学习
