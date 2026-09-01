@@ -413,8 +413,11 @@ class HealthReport:
 class ResourceMonitor:
     """资源监控：CPU / Memory / Storage / LLM calls。"""
 
+    def __init__(self, llm_calls_this_hour: int = 0) -> None:
+        self._llm_calls_this_hour = llm_calls_this_hour
+
     def sample(self) -> ResourceMetrics:
-        m = ResourceMetrics()
+        m = ResourceMetrics(llm_calls_this_hour=self._llm_calls_this_hour)
         try:
             m.cpu_percent = self._get_cpu()
         except Exception:
@@ -428,6 +431,10 @@ class ResourceMonitor:
         except Exception:
             pass
         return m
+
+    def update_llm_calls(self, count: int) -> None:
+        """累加本小时 LLM 调用次数。"""
+        self._llm_calls_this_hour += count
 
     def _get_cpu(self) -> float:
         try:
@@ -454,20 +461,52 @@ class ResourceMonitor:
 class MemoryMonitor:
     """记忆监控：Working/Episode/Long-term Memory 状态。"""
 
-    def __init__(self) -> None:
-        self._wm: Any = None  # WorkingMemory ref
-        self._em: Any = None  # EpisodeMemory ref
-        self._kg: Any = None  # KnowledgeGraph ref（替代 LTM 大小查询）
+    def __init__(
+        self,
+        working_memory: Any = None,
+        episode_store: Any = None,
+        belief_store: Any = None,
+    ) -> None:
+        self._wm = working_memory
+        self._em = episode_store
+        self._belief_store = belief_store
 
     def sample(self) -> MemoryMetrics:
-        return MemoryMetrics()
+        m = MemoryMetrics()
+        if self._wm is not None:
+            try:
+                m.working_memory_items = len(self._wm) if hasattr(self._wm, "__len__") else 0
+            except Exception:
+                pass
+        if self._em is not None:
+            try:
+                m.episode_memory_items = self._em.count() if hasattr(self._em, "count") else 0
+            except Exception:
+                pass
+        if self._belief_store is not None:
+            try:
+                cnt = self._belief_store.count_by_status()
+                m.belief_count = sum(cnt.values())
+            except Exception:
+                pass
+        return m
 
 
 class GoalMonitor:
     """Goal 监控：活跃/阻塞/过期数量。"""
 
+    def __init__(self, goal_stack: Any = None) -> None:
+        self._goal_stack = goal_stack
+
     def sample(self) -> GoalMetrics:
-        return GoalMetrics()
+        m = GoalMetrics()
+        if self._goal_stack is None:
+            return m
+        try:
+            m.active_goal_count = self._goal_stack.depth()
+        except Exception:
+            pass
+        return m
 
 
 class HealthMonitor:
@@ -567,13 +606,23 @@ class HomeostasisManager:
     def __init__(
         self,
         thresholds: HomeostasisThresholds | None = None,
+        # 注入式：允许外部将真实引用挂入 monitor
+        working_memory: Any = None,
+        episode_store: Any = None,
+        belief_store: Any = None,
+        goal_stack: Any = None,
+        llm_calls_this_hour: int = 0,
     ) -> None:
         self._thresholds = thresholds or HomeostasisThresholds()
 
         # 6 monitors
-        self._resource = ResourceMonitor()
-        self._memory = MemoryMonitor()
-        self._goal = GoalMonitor()
+        self._resource = ResourceMonitor(llm_calls_this_hour=llm_calls_this_hour)
+        self._memory = MemoryMonitor(
+            working_memory=working_memory,
+            episode_store=episode_store,
+            belief_store=belief_store,
+        )
+        self._goal = GoalMonitor(goal_stack=goal_stack)
         self._health = HealthMonitor()
         self._context = ContextMonitor()
         self._identity = IdentityMonitor()
