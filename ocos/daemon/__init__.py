@@ -78,6 +78,24 @@ class ResidentRuntime:
             self._orchestrator = LifeCycleOrchestrator(agent)
         except Exception as e:
             logger.warning("LifeCycleOrchestrator unavailable: %s", e)
+        # Phase E: 自我演化监控 — 定期检查 SelfModel 是否需要演化
+        self._self_monitor: Any = None
+        self._self_monitor_eligible: bool = False
+        try:
+            from ocos.self.monitor import SelfMonitor
+            from ocos.self.builder import SelfModelBuilder
+            from ocos.self.governor import SelfGovernor
+            from ocos.self.identity_boundary import IdentityBoundary
+            belief_store = self.memory_hub.belief() if self.memory_hub else None
+            if belief_store is not None:
+                boundary = IdentityBoundary.create_default()
+                builder = SelfModelBuilder(belief_store, boundary)
+                governor = SelfGovernor(boundary)
+                self._self_monitor = SelfMonitor(builder, governor, belief_store)
+                self._self_monitor_eligible = True
+                logger.info("SelfMonitor initialized — evolution checks enabled")
+        except Exception as e:
+            logger.debug("SelfMonitor unavailable (evolution passive): %s", e)
         # P1-C 循环收敛: 认知循环宿主 = RuntimeKernel（默认自建）。
         # kernel 不 import ocos.agent — AgentRuntime.tick 经 driver 注入。
         if kernel is None:
@@ -323,6 +341,16 @@ class ResidentRuntime:
                             agent_obj.maybe_proactive_output()
                 except Exception:
                     pass
+
+            # Phase E: 自我演化监控 — 每 120 tick（≈10min）检查一次 SelfModel 是否需要演化
+            if self._self_monitor_eligible and self._self_monitor is not None:
+                try:
+                    if self._hb_ticks % 120 == 0:
+                        result = self._self_monitor.run_once()
+                        logger.info("Self evolution check: action=%s message=%s",
+                                   result.action.value, result.message)
+                except Exception:
+                    logger.debug("SelfMonitor tick failed", exc_info=True)
 
             # GAP-P1-2: 周期健康体检（HealthLoop 内部按 interval_ticks 节流）
             if self._health_loop is not None:
