@@ -116,6 +116,8 @@ ALLOWED_IMPORTS = {
     "ocos.agent_orchestration": ["ocos.agent", "ocos.planning", "ocos.goal"],
     # Phase 64: Agent Collaboration — 多Agent协作
     "ocos.collaboration": ["ocos.logging", "ocos.agent_orchestration", "ocos.planning"],
+    # Phase 65: Knowledge Management — 统一知识管理
+    "ocos.knowledge": ["ocos.logging", "ocos.agent", "ocos.memory", "ocos.knowledge.store"],
     # Phase 29: Digital World 层 — 数字世界操作，不导入 Self
     "ocos.digital_world": ["ocos.agent", "ocos.planning"],
     # Phase 39.1: Runtime Skeleton — 只依赖自身 + kernel.goal_types（类型定义）
