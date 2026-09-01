@@ -135,6 +135,9 @@ class AgentRuntime:
         self._tick_errors: int = 0
         self._boot_time: Optional[float] = None
 
+        # Phase G: User Model — 用户画像与记忆中枢
+        self._user_memory: Any = None  # UserMemory, initialized in boot()
+
     @property
     def state(self) -> RuntimeState:
         return self._state
@@ -228,6 +231,9 @@ class AgentRuntime:
 
             # 0.6 Phase 34E: 验证 Identity Continuity
             self._verify_identity_continuity()
+
+            # Phase G: 初始化 User Model
+            self._init_user_model()
 
             # 先于 agent.boot(): Phase 22-A 注入 EngineBridge 供 act() 真实化
             if hasattr(self.agent, "set_engine_bridge"):
@@ -339,6 +345,20 @@ class AgentRuntime:
                     logger.debug("EngineLoader: skip %s — %s", engine_id, e)
             self.engine_bridge.register_all()
             logger.info("Dynamic engines loaded: %s", self.engine_bridge.get_available_engines())
+
+    def _init_user_model(self) -> None:
+        """Phase G: 初始化 User Model — 用户画像与记忆中枢."""
+        from ocos.memory.user import UserMemory
+        db_path = self._db_path
+        if db_path == ":memory:":
+            db_path = "/tmp/ocos_user_model.db"
+        self._user_memory = UserMemory(db_path)
+        logger.info("UserModel initialized at %s", db_path)
+
+    @property
+    def user_memory(self) -> Any:
+        """Phase G: 用户记忆中枢访问器."""
+        return self._user_memory
 
     def tick(self) -> dict[str, Any]:
         """Phase 22-C: 10 步持久化认知 Tick 循环。
