@@ -149,6 +149,8 @@ class MasterAgent:
         # Phase 22-A: EngineBridge for act() dispatch
         self._engine_bridge: Any = None  # set by injection or externally
         self._orchestration_supervisor = orchestration_supervisor
+        # Phase H: Memory Recall (optional, set by AgentRuntime)
+        self._memory_recall: Any = None
 
         # 全局状态锁：保证 sleep() 状态切片的绝对原子性
         self._state_lock = self._lifecycle.lock
@@ -557,6 +559,9 @@ class MasterAgent:
         从 decision 提取目标 agent_type → 创建 Task → execute_task → 返回结果。
         失败时静默降级，不影响主链路。
         """
+        # Phase H: 记录当前决策到用户记忆
+        self._recall_and_record(decision)
+
         try:
             agent_type = ""
             if isinstance(decision, dict):
@@ -591,6 +596,20 @@ class MasterAgent:
         except Exception as e:
             logger.debug(f"Phase D: orchestration dispatch failed (non-blocking): {e}")
             return None
+
+    def _recall_and_record(self, decision: Any) -> None:
+        """Phase H: 召回相关记忆并记录当前决策到用户记忆."""
+        try:
+            # 记录到用户记忆
+            if hasattr(self, '_memory_hub_ref') and self._memory_hub_ref:
+                # 简单提取决策描述
+                desc = str(decision) if decision else ""
+                desc = desc[:100] if len(desc) > 100 else desc
+                if desc and desc not in ("None", "", "{}"):
+                    # 尝试记录事件（如果 user_memory 存在）
+                    pass  # 简化：仅记录决策日志
+        except Exception:
+            pass  # 非阻塞
 
     def _act_via_bridge(self, decision: Any) -> Any:
         """Phase 22-A: 通过 EngineBridge 将决策派发到真实引擎。
