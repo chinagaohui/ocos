@@ -71,6 +71,13 @@ class ResidentRuntime:
             max_cycles=max_cycles,
             db_path=db_path,
         )
+        # Phase B: 生命周期编排器伴生层 — 负责疲劳检测、SLEEP转换、主动输出
+        self._orchestrator: Any = None
+        try:
+            from ocos.agent.life_cycle_orchestrator import LifeCycleOrchestrator
+            self._orchestrator = LifeCycleOrchestrator(agent)
+        except Exception as e:
+            logger.warning("LifeCycleOrchestrator unavailable: %s", e)
         # P1-C 循环收敛: 认知循环宿主 = RuntimeKernel（默认自建）。
         # kernel 不 import ocos.agent — AgentRuntime.tick 经 driver 注入。
         if kernel is None:
@@ -192,7 +199,7 @@ class ResidentRuntime:
             logger.info("ResidentRuntime daemon started (interval=%.1fs)", self._tick_interval)
 
     def stop(self, timeout: float = 30.0) -> None:
-        """优雅关闭 daemon — 停止 tick 线程，不 shutdown runtime。"""
+        """优雅关闭 daemon — 停止 tick 线程，触发 orchestrator 安全关闭。"""
         with self._lock:
             if self._state != DaemonState.RUNNING:
                 return
@@ -201,6 +208,12 @@ class ResidentRuntime:
         if self._tick_thread:
             self._tick_thread.join(timeout=timeout)
         with self._lock:
+            # Phase B: orchestrator 安全关闭
+            try:
+                if self._orchestrator is not None:
+                    self._orchestrator.shutdown()
+            except Exception:
+                pass
             self._state = DaemonState.STOPPED
             logger.info("ResidentRuntime daemon stopped. %d goals processed.", self._goal_processed)
 
@@ -252,7 +265,11 @@ class ResidentRuntime:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _tick_loop(self) -> None:
-        """主循环 — 经 RuntimeKernel 定时 tick（认知循环单一宿主），消费目标队列。"""
+        """主循环 — 经 RuntimeKernel 定时 tick（认知循环单一宿主），消费目标队列。
+
+        Phase B: 伴生 LifeCycleOrchestrator 负责疲劳检测 + 主动输出触发，
+        不替换主认知路径（kernel.tick_loop）以避免双重重跑认知循环。
+        """
         while not self._stop_event.is_set():
             # UX-F3: 心跳落盘（每 5 tick 一次, 降低写盘对 tick 时序的影响）
             self._hb_ticks += 1
@@ -287,6 +304,25 @@ class ResidentRuntime:
                 self._idle_ticks = 0
             except Exception:
                 logger.exception("Tick failed (cycle=%d)", self._runtime._cycle_count)
+
+            # Phase B: 伴生 orchestrator 疲劳检测 + 主动输出 — 不重跑认知循环，只做状态检查
+            if self._orchestrator is not None:
+                try:
+                    agent_obj = getattr(self._runtime, "agent", None)
+                    attention = getattr(agent_obj, "attention", None) if agent_obj is not None else None
+                    if attention is not None and hasattr(attention, "needs_sleep"):
+                        if attention.needs_sleep():
+                            logger.info("Fatigue detected at tick %d — triggering sleep/dream", self._hb_ticks)
+                            try:
+                                self._run_dream_cycle()
+                            except Exception:
+                                logger.exception("Fatigue dream failed")
+                    # 定期主动输出（每 60 tick ≈ 5min @ 5s/tick）
+                    if self._hb_ticks % 60 == 0:
+                        if agent_obj is not None and hasattr(agent_obj, "maybe_proactive_output"):
+                            agent_obj.maybe_proactive_output()
+                except Exception:
+                    pass
 
             # GAP-P1-2: 周期健康体检（HealthLoop 内部按 interval_ticks 节流）
             if self._health_loop is not None:
