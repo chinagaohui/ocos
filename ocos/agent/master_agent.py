@@ -19,10 +19,13 @@ Agent 是整个 OCOS 的唯一意识主体。所有 Engine 是器官，Agent 是
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from ocos.agent.state import AgentState, AgentStatus
 from ocos.agent.lifecycle import LifecycleManager, LifecyclePhase, MicroState
@@ -90,6 +93,8 @@ class MasterAgent:
         pattern_store: Any = None,
         # P2-D: 主动输出通道（可选注入；默认本地日志）
         proactive_output_callback: Any = None,
+        # Phase D: Agent 编排（可选注入；默认降级为 simulated）
+        orchestration_supervisor: Any = None,
     ):
         self.agent_id = agent_id
         self.identity = identity
@@ -143,6 +148,7 @@ class MasterAgent:
 
         # Phase 22-A: EngineBridge for act() dispatch
         self._engine_bridge: Any = None  # set by injection or externally
+        self._orchestration_supervisor = orchestration_supervisor
 
         # 全局状态锁：保证 sleep() 状态切片的绝对原子性
         self._state_lock = self._lifecycle.lock
@@ -534,8 +540,57 @@ class MasterAgent:
             "based_on": d,
             "result": action_result_raw,
         }
+
+        # Phase D: 尝试通过编排器触发子 agent 执行
+        if self._orchestration_supervisor is not None:
+            orchestrator_result = self._dispatch_to_orchestrator(d, action_result_raw)
+            if orchestrator_result and orchestrator_result.get("sub_agent_triggered"):
+                action_result["orchestrated"] = True
+                action_result["sub_agent_result"] = orchestrator_result
+
         self._last_action_result = action_result
         return action_result
+
+    def _dispatch_to_orchestrator(self, decision: Any, bridge_result: Any) -> dict | None:
+        """Phase D: 将决策分发给 ExecutionSupervisor 执行子 agent。
+
+        从 decision 提取目标 agent_type → 创建 Task → execute_task → 返回结果。
+        失败时静默降级，不影响主链路。
+        """
+        try:
+            agent_type = ""
+            if isinstance(decision, dict):
+                selected = str(decision.get("selected", "") or "")
+                # 从 selected 推断 agent_type（如 "writer-v2" → "writer"）
+                agent_type = selected.split("-")[0] if selected else ""
+
+            if not agent_type:
+                return None
+
+            from ocos.planning.models import Task
+            import uuid
+
+            task_id = f"task-{uuid.uuid4().hex[:8]}"
+            goal_id = f"goal-{self.agent_id}"
+            task = Task(
+                id=task_id,
+                goal_id=goal_id,
+                description=str(decision.get("based_on", decision)),
+                task_type="execute",
+                agent_type=agent_type,
+                inputs=(),
+            )
+            record = self._orchestration_supervisor.execute_task_sync(task)
+            return {
+                "sub_agent_triggered": True,
+                "task_id": task_id,
+                "agent_type": agent_type,
+                "contract_id": record.contract_id if hasattr(record, "contract_id") else None,
+                "status": record.status if hasattr(record, "status") else "unknown",
+            }
+        except Exception as e:
+            logger.debug(f"Phase D: orchestration dispatch failed (non-blocking): {e}")
+            return None
 
     def _act_via_bridge(self, decision: Any) -> Any:
         """Phase 22-A: 通过 EngineBridge 将决策派发到真实引擎。
