@@ -131,6 +131,8 @@ class MasterAgent:
         self_diagnosis_manager: Any = None,
         # Phase AI: 工具集成管理器（可选注入；由 AgentRuntime 组装）
         tool_manager: Any = None,
+        # Phase AJ: 增强型主动输出管理器（可选注入；由 AgentRuntime 组装）
+        proactive_output_enhanced: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -219,6 +221,9 @@ class MasterAgent:
 
         # Phase AI: Tool Integration (optional)
         self._tool_manager = tool_manager
+
+        # Phase AJ: Proactive Output Enhanced (optional)
+        self._proactive_output_enhanced = proactive_output_enhanced
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -375,6 +380,11 @@ class MasterAgent:
     def tool_manager(self) -> Any:
         """Phase AI: 工具集成管理器."""
         return self._tool_manager
+
+    @property
+    def proactive_output_enhanced(self) -> Any:
+        """Phase AJ: 增强型主动输出管理器."""
+        return self._proactive_output_enhanced
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -2075,6 +2085,12 @@ class MasterAgent:
                 result["tool"] = self._tool_manager.get_status()
             except Exception as e:
                 logger.warning("Get tool stats failed: %s", e)
+
+        if self._proactive_output_enhanced is not None:
+            try:
+                result["proactive_output"] = self._proactive_output_enhanced.get_status()
+            except Exception as e:
+                logger.warning("Get proactive output stats failed: %s", e)
 
         return result
 
