@@ -101,6 +101,8 @@ class MasterAgent:
         knowledge_graph: Any = None,
         # Phase T: 多模态感知管理器（可选注入；由 AgentRuntime 组装）
         multimodal_perception: Any = None,
+        # Phase U: 自主睡眠与梦境管理器（可选注入；由 AgentRuntime 组装）
+        sleep_dream_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -144,6 +146,9 @@ class MasterAgent:
 
         # Phase T: Multi-modal Perception (optional)
         self._multimodal_perception = multimodal_perception
+
+        # Phase U: Sleep & Dream (optional)
+        self._sleep_dream_manager = sleep_dream_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -225,6 +230,11 @@ class MasterAgent:
     def multimodal_perception(self) -> Any:
         """Phase T: 多模态感知管理器."""
         return self._multimodal_perception
+
+    @property
+    def sleep_dream_manager(self) -> Any:
+        """Phase U: 自主睡眠与梦境管理器."""
+        return self._sleep_dream_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1325,6 +1335,52 @@ class MasterAgent:
         except Exception as e:
             logger.warning("Perception stats failed: %s", e)
             return {"error": str(e)}
+
+    def check_sleep_need(self) -> dict[str, Any]:
+        """检查是否需要睡眠（Phase U）。"""
+        if self._sleep_dream_manager is None:
+            return {"should_sleep": False, "reason": "sleep_manager_not_injected"}
+        try:
+            decision = self._sleep_dream_manager.decide_sleep()
+            return {
+                "should_sleep": decision.should_sleep,
+                "reason": decision.reason,
+                "sleep_type": decision.sleep_type,
+                "estimated_duration": decision.estimated_duration,
+            }
+        except Exception as e:
+            logger.warning("Sleep check failed: %s", e)
+            return {"should_sleep": False, "reason": str(e)}
+
+    def initiate_sleep(self) -> dict[str, Any]:
+        """发起睡眠周期（Phase U）。"""
+        if self._sleep_dream_manager is None:
+            return {"status": "error", "reason": "sleep_manager_not_injected"}
+        try:
+            return self._sleep_dream_manager.run_sleep_cycle()
+        except Exception as e:
+            logger.warning("Sleep cycle failed: %s", e)
+            return {"status": "error", "reason": str(e)}
+
+    def get_sleep_stats(self) -> dict[str, Any]:
+        """获取睡眠统计。"""
+        if self._sleep_dream_manager is None:
+            return {"error": "sleep_dream_manager not injected"}
+        try:
+            return self._sleep_dream_manager.get_stats()
+        except Exception as e:
+            logger.warning("Sleep stats failed: %s", e)
+            return {"error": str(e)}
+
+    def get_sleep_report(self) -> str:
+        """生成睡眠报告。"""
+        if self._sleep_dream_manager is None:
+            return "睡眠管理器未注入"
+        try:
+            return self._sleep_dream_manager.generate_report()
+        except Exception as e:
+            logger.warning("Sleep report failed: %s", e)
+            return f"睡眠报告生成失败: {e}"
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 
