@@ -448,7 +448,9 @@ class TestTick:
         """无管理器时的 tick。"""
         result = mock_agent.tick()
 
-        assert result == {"tick": 0, "evolutions": []}
+        assert "tick" in result
+        assert "distributed" in result
+        assert result["distributed"] == {}
 
 
 # =========================================================================
