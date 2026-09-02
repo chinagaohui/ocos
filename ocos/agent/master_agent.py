@@ -99,6 +99,8 @@ class MasterAgent:
         continuous_learning: Any = None,
         # Phase S: 知识图谱管理器（可选注入；由 AgentRuntime 组装）
         knowledge_graph: Any = None,
+        # Phase T: 多模态感知管理器（可选注入；由 AgentRuntime 组装）
+        multimodal_perception: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -139,6 +141,9 @@ class MasterAgent:
 
         # Phase S: Knowledge Graph (optional)
         self._knowledge_graph = knowledge_graph
+
+        # Phase T: Multi-modal Perception (optional)
+        self._multimodal_perception = multimodal_perception
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -215,6 +220,11 @@ class MasterAgent:
     def knowledge_graph(self) -> Any:
         """Phase S: 知识图谱管理器."""
         return self._knowledge_graph
+
+    @property
+    def multimodal_perception(self) -> Any:
+        """Phase T: 多模态感知管理器."""
+        return self._multimodal_perception
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1261,6 +1271,59 @@ class MasterAgent:
             return self._knowledge_graph.get_stats()
         except Exception as e:
             logger.warning("Knowledge stats failed: %s", e)
+            return {"error": str(e)}
+
+    def perceive(self) -> list[dict[str, Any]]:
+        """执行一次感知周期（Phase T）。
+
+        防御式：multimodal_perception 未注入时返回空列表。
+        """
+        if self._multimodal_perception is None:
+            return []
+        try:
+            events = self._multimodal_perception.tick()
+            return [
+                {
+                    "type": e.type.name if e.type else "unknown",
+                    "sensor": e.sensor_name,
+                    "content": str(e.observation.content)[:100] if e.observation else "",
+                    "confidence": e.observation.confidence if e.observation else 0.0,
+                }
+                for e in events
+            ]
+        except Exception as e:
+            logger.warning("Perception tick failed: %s", e)
+            return []
+
+    def feed_perception(self, modality: str, data: Any) -> None:
+        """向指定模态输入数据（Phase T）。"""
+        if self._multimodal_perception is None:
+            return
+        try:
+            if modality == "text":
+                self._multimodal_perception.feed_text(str(data))
+            elif modality == "audio":
+                self._multimodal_perception.feed_audio(data)
+            elif modality == "vision":
+                self._multimodal_perception.feed_vision(data)
+            elif modality == "api":
+                if isinstance(data, dict):
+                    self._multimodal_perception.feed_api(data)
+            elif modality == "event":
+                event_type = data.get("type") if isinstance(data, dict) else str(data)
+                payload = data.get("payload") if isinstance(data, dict) else None
+                self._multimodal_perception.emit_event(event_type or "unknown", payload)
+        except Exception as e:
+            logger.warning("Perception feed failed: %s", e)
+
+    def get_perception_stats(self) -> dict[str, Any]:
+        """获取感知统计。"""
+        if self._multimodal_perception is None:
+            return {"error": "multimodal_perception not injected"}
+        try:
+            return self._multimodal_perception.get_stats()
+        except Exception as e:
+            logger.warning("Perception stats failed: %s", e)
             return {"error": str(e)}
 
     # ── 辅助 ──────────────────────────────────────────────────────────
