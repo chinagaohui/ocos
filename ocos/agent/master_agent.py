@@ -23,7 +23,7 @@ import logging
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,8 @@ class MasterAgent:
         pattern_store: Any = None,
         # P2-D: 主动输出通道（可选注入；默认本地日志）
         proactive_output_callback: Any = None,
+        # Phase Q: 外部交互通道管理（可选注入；由 AgentRuntime 组装）
+        external_interaction: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -115,7 +117,7 @@ class MasterAgent:
         self._experience_builder = experience_builder
         self._episode_store = episode_store
 
-        # P2-C: Dream consolidation stores（惰性创建内存存储，显式注入优先）
+        # P2-D: Dream consolidation stores（惰性创建内存存储，显式注入优先）
         self._belief_store = belief_store
         self._pattern_store = pattern_store
         if self._belief_store is None:
@@ -124,6 +126,9 @@ class MasterAgent:
         if self._pattern_store is None:
             self._pattern_store = PatternStore(db_path=":memory:")
             self._pattern_store.initialize()
+
+        # Phase Q: External Interaction (optional)
+        self._external_interaction = external_interaction
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -185,6 +190,11 @@ class MasterAgent:
     def goal_manager(self) -> Any:
         """Phase L: 自主目标管理器."""
         return self._goal_manager
+
+    @property
+    def external_interaction(self) -> Any:
+        """Phase Q: 外部交互管理器."""
+        return self._external_interaction
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1138,11 +1148,25 @@ class MasterAgent:
                     attention=self.attention,
                     permission_guard=self._permission_guard,
                     constitution=self._constitution,
-                    output_callback=self._proactive_output_callback,
+                    output_callback=self._build_proactive_callback(),
                 )
             return self._proactive_engine.maybe_proactive_output()
         except Exception:  # pragma: no cover - 防御兜底
             return None
+
+    def _build_proactive_callback(self) -> Optional[Callable[[str], None]]:
+        """构建 ProactiveEngine 输出回调，注入 ExternalInteraction 通道。"""
+        if self._external_interaction is None:
+            return self._proactive_output_callback
+        sent_channels = []
+
+        def callback(message: str) -> None:
+            try:
+                results = self._external_interaction.send(message, priority=0)
+                sent_channels.extend(k for k, v in results.items() if v)
+            except Exception as e:
+                logger.warning("ExternalInteraction send failed: %s", e)
+        return callback
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 
