@@ -119,6 +119,8 @@ class MasterAgent:
         distributed_manager: Any = None,
         # Phase AC: 生态集成管理器（可选注入；由 AgentRuntime 组装）
         ecosystem_manager: Any = None,
+        # Phase AD: 人机协同管理器（可选注入；由 AgentRuntime 组装）
+        human_ai_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -189,6 +191,9 @@ class MasterAgent:
 
         # Phase AC: Ecosystem Integration (optional)
         self._ecosystem_manager = ecosystem_manager
+
+        # Phase AD: Human-AI Collaboration (optional)
+        self._human_ai_manager = human_ai_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -315,6 +320,11 @@ class MasterAgent:
     def ecosystem_manager(self) -> Any:
         """Phase AC: 生态集成管理器."""
         return self._ecosystem_manager
+
+    @property
+    def human_ai_manager(self) -> Any:
+        """Phase AD: 人机协同管理器."""
+        return self._human_ai_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1867,8 +1877,8 @@ class MasterAgent:
             return []
 
     def tick(self) -> dict:
-        """主循环 tick（Phase AA/AB/AC 扩展）。"""
-        result = {"tick": 0, "evolutions": [], "distributed": {}, "ecosystem": {}}
+        """主循环 tick（Phase AA/AB/AC/AD 扩展）。"""
+        result = {"tick": 0, "evolutions": [], "distributed": {}, "ecosystem": {}, "human_ai": {}}
         if self._self_evolution_manager is not None:
             try:
                 result["evolutions"] = self._self_evolution_manager.tick()
@@ -1884,6 +1894,11 @@ class MasterAgent:
                 result["ecosystem"] = self._ecosystem_manager.get_stats()
             except Exception as e:
                 logger.warning("Ecosystem tick failed: %s", e)
+        if self._human_ai_manager is not None:
+            try:
+                result["human_ai"] = self._human_ai_manager.get_stats()
+            except Exception as e:
+                logger.warning("HumanAI tick failed: %s", e)
         return result
 
     # ── Phase AC: Ecosystem Integration ─────────────────────────────
@@ -1968,6 +1983,64 @@ class MasterAgent:
         if self._ecosystem_manager is None:
             return {"error": "ecosystem_manager not injected"}
         return self._ecosystem_manager.get_stats()
+
+    # ── Phase AD: Human-AI Collaboration ─────────────────────────
+
+    def set_preference(self, key: str, value: Any, source: str = "explicit") -> dict[str, Any]:
+        """设置用户偏好（Phase AD）。"""
+        if self._human_ai_manager is None:
+            return {"error": "human_ai_manager not injected"}
+        try:
+            pref = self._human_ai_manager.set_preference(key, value, source)
+            if pref:
+                return {"preference_id": pref.preference_id, "key": pref.key, "value": pref.value}
+            return {"error": "max preferences reached"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def get_preference(self, key: str) -> Any:
+        """获取用户偏好（Phase AD）。"""
+        if self._human_ai_manager is None:
+            return None
+        return self._human_ai_manager.get_preference(key)
+
+    def record_feedback(self, feedback_type: str, content: str, context: dict | None = None) -> dict[str, Any]:
+        """记录用户反馈（Phase AD）。"""
+        if self._human_ai_manager is None:
+            return {"error": "human_ai_manager not injected"}
+        from ocos.human.manager import FeedbackType
+        try:
+            fb_type = FeedbackType(feedback_type)
+            feedback = self._human_ai_manager.record_feedback(fb_type, content, context)
+            return {"feedback_id": feedback.feedback_id, "type": feedback.type.value}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def start_conversation(self, mode: str = "assistant") -> dict[str, Any]:
+        """开始对话（Phase AD）。"""
+        if self._human_ai_manager is None:
+            return {"error": "human_ai_manager not injected"}
+        from ocos.human.manager import CollaborationMode
+        try:
+            conv_mode = CollaborationMode(mode)
+            conv = self._human_ai_manager.start_conversation(conv_mode)
+            if conv:
+                return {"conversation_id": conv.conversation_id, "mode": conv.mode.value}
+            return {"error": "max conversations reached"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def infer_intent(self, message: str) -> dict[str, Any]:
+        """推断用户意图（Phase AD）。"""
+        if self._human_ai_manager is None:
+            return {"error": "human_ai_manager not injected"}
+        return self._human_ai_manager.infer_intent(message)
+
+    def get_human_ai_stats(self) -> dict[str, Any]:
+        """获取人机协同统计（Phase AD）。"""
+        if self._human_ai_manager is None:
+            return {"error": "human_ai_manager not injected"}
+        return self._human_ai_manager.get_stats()
 
     def register_cognition_instance(
         self, instance_id: str, host: str, port: int,
