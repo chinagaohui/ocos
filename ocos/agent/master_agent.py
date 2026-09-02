@@ -123,6 +123,8 @@ class MasterAgent:
         human_ai_manager: Any = None,
         # Phase AE: 自我反思管理器（可选注入；由 AgentRuntime 组装）
         self_reflection_manager: Any = None,
+        # Phase AF: 自我优化管理器（可选注入；由 AgentRuntime 组装）
+        self_optimization_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -199,6 +201,9 @@ class MasterAgent:
 
         # Phase AE: Self-Reflection (optional)
         self._self_reflection_manager = self_reflection_manager
+
+        # Phase AF: Self-Optimization (optional)
+        self._self_optimization_manager = self_optimization_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -335,6 +340,11 @@ class MasterAgent:
     def self_reflection_manager(self) -> Any:
         """Phase AE: 自我反思管理器."""
         return self._self_reflection_manager
+
+    @property
+    def self_optimization_manager(self) -> Any:
+        """Phase AF: 自我优化管理器."""
+        return self._self_optimization_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1887,8 +1897,8 @@ class MasterAgent:
             return []
 
     def tick(self) -> dict:
-        """主循环 tick（Phase AA/AB/AC/AD/AE 扩展）。"""
-        result = {"tick": 0, "evolutions": [], "distributed": {}, "ecosystem": {}, "human_ai": {}, "reflection": {}}
+        """主循环 tick（Phase AA/AB/AC/AD/AE/AF 扩展）。"""
+        result = {"tick": 0, "evolutions": [], "distributed": {}, "ecosystem": {}, "human_ai": {}, "reflection": {}, "optimization": {}}
         if self._self_evolution_manager is not None:
             try:
                 result["evolutions"] = self._self_evolution_manager.tick()
@@ -1914,6 +1924,11 @@ class MasterAgent:
                 result["reflection"] = self._self_reflection_manager.get_stats()
             except Exception as e:
                 logger.warning("Reflection tick failed: %s", e)
+        if self._self_optimization_manager is not None:
+            try:
+                result["optimization"] = self._self_optimization_manager.get_stats()
+            except Exception as e:
+                logger.warning("Optimization tick failed: %s", e)
         return result
 
     # ── Phase AC: Ecosystem Integration ─────────────────────────────
@@ -2118,6 +2133,69 @@ class MasterAgent:
         if self._self_reflection_manager is None:
             return {"error": "self_reflection_manager not injected"}
         return self._self_reflection_manager.get_stats()
+
+    # ── Phase AF: Self-Optimization ─────────────────────────────
+
+    def set_optimization_baseline(self, metric_name: str, value: float) -> None:
+        """设置优化基线（Phase AF）。"""
+        if self._self_optimization_manager is None:
+            return
+        self._self_optimization_manager.set_baseline(metric_name, value)
+
+    def get_optimization_baseline(self, metric_name: str) -> float | None:
+        """获取优化基线（Phase AF）。"""
+        if self._self_optimization_manager is None:
+            return None
+        return self._self_optimization_manager.get_baseline(metric_name)
+
+    def propose_optimization(
+        self,
+        opt_type: str,
+        description: str,
+        expected_improvement: float,
+        risk_level: str = "low",
+    ) -> dict[str, Any]:
+        """提出优化提案（Phase AF）。"""
+        if self._self_optimization_manager is None:
+            return {"error": "self_optimization_manager not injected"}
+        from ocos.optimization.manager import OptimizationType
+        try:
+            ot = OptimizationType[opt_type.upper()]
+            proposal = self._self_optimization_manager.propose_optimization(
+                ot, description, expected_improvement, risk_level
+            )
+            if proposal:
+                return {"proposal_id": proposal.proposal_id, "type": proposal.opt_type.name}
+            return {"error": "max proposals reached"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def apply_optimization(self, proposal_id: str, before_metrics: dict[str, float]) -> dict[str, Any]:
+        """应用优化方案（Phase AF）。"""
+        if self._self_optimization_manager is None:
+            return {"error": "self_optimization_manager not injected"}
+        result = self._self_optimization_manager.apply_optimization(proposal_id, before_metrics)
+        if result:
+            return {"result_id": result.result_id, "status": result.status.value}
+        return {"error": "proposal not found"}
+
+    def validate_optimization(self, result_id: str, after_metrics: dict[str, float]) -> bool:
+        """验证优化效果（Phase AF）。"""
+        if self._self_optimization_manager is None:
+            return False
+        return self._self_optimization_manager.validate_optimization(result_id, after_metrics)
+
+    def rollback_optimization(self, result_id: str) -> bool:
+        """回滚优化（Phase AF）。"""
+        if self._self_optimization_manager is None:
+            return False
+        return self._self_optimization_manager.rollback_optimization(result_id)
+
+    def get_optimization_stats(self) -> dict[str, Any]:
+        """获取优化统计（Phase AF）。"""
+        if self._self_optimization_manager is None:
+            return {"error": "self_optimization_manager not injected"}
+        return self._self_optimization_manager.get_stats()
 
     def register_cognition_instance(
         self, instance_id: str, host: str, port: int,
