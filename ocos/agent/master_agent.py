@@ -109,6 +109,8 @@ class MasterAgent:
         server_manager: Any = None,
         # Phase X: 安全加固管理器（可选注入；由 AgentRuntime 组装）
         security_manager: Any = None,
+        # Phase Y: 监控与可观测性管理器（可选注入；由 AgentRuntime 组装）
+        monitoring_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -164,6 +166,9 @@ class MasterAgent:
 
         # Phase X: Security Hardening (optional)
         self._security_manager = security_manager
+
+        # Phase Y: Monitoring & Observability (optional)
+        self._monitoring_manager = monitoring_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -265,6 +270,11 @@ class MasterAgent:
     def security_manager(self) -> Any:
         """Phase X: 安全加固管理器."""
         return self._security_manager
+
+    @property
+    def monitoring_manager(self) -> Any:
+        """Phase Y: 监控与可观测性管理器."""
+        return self._monitoring_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1582,6 +1592,65 @@ class MasterAgent:
         except Exception as e:
             logger.warning("Get security events failed: %s", e)
             return []
+
+    def get_monitoring_stats(self) -> dict[str, Any]:
+        """获取监控统计（Phase Y）。"""
+        if self._monitoring_manager is None:
+            return {"error": "monitoring_manager not injected"}
+        try:
+            return self._monitoring_manager.get_stats()
+        except Exception as e:
+            logger.warning("Monitoring stats failed: %s", e)
+            return {"error": str(e)}
+
+    def get_metrics(self) -> str:
+        """获取 Prometheus 格式指标（Phase Y）。"""
+        if self._monitoring_manager is None:
+            return "# monitoring not injected"
+        try:
+            return self._monitoring_manager.get_metrics()
+        except Exception as e:
+            logger.warning("Get metrics failed: %s", e)
+            return f"# error: {e}"
+
+    def get_health_status(self) -> dict[str, Any]:
+        """获取综合健康状态（Phase Y）。"""
+        if self._monitoring_manager is None:
+            return {"error": "monitoring_manager not injected"}
+        try:
+            return self._monitoring_manager.get_health_status()
+        except Exception as e:
+            logger.warning("Health status failed: %s", e)
+            return {"error": str(e)}
+
+    def record_metric(self, name: str, value: float, metric_type: str = "counter",
+                      labels: Optional[dict[str, str]] = None) -> None:
+        """记录指标（Phase Y）。"""
+        if self._monitoring_manager is None:
+            return
+        try:
+            self._monitoring_manager.record_metric(name, value, metric_type=metric_type, labels=labels)
+        except Exception as e:
+            logger.warning("Record metric failed: %s", e)
+
+    def start_monitoring(self) -> bool:
+        """启动监控服务（Phase Y）。"""
+        if self._monitoring_manager is None:
+            return False
+        try:
+            return self._monitoring_manager.start_http()
+        except Exception as e:
+            logger.warning("Start monitoring failed: %s", e)
+            return False
+
+    def stop_monitoring(self) -> None:
+        """停止监控服务（Phase Y）。"""
+        if self._monitoring_manager is None:
+            return
+        try:
+            self._monitoring_manager.stop_http()
+        except Exception as e:
+            logger.warning("Stop monitoring failed: %s", e)
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 
