@@ -107,6 +107,8 @@ class MasterAgent:
         persistence_manager: Any = None,
         # Phase W: 外部集成管理器（可选注入；由 AgentRuntime 组装）
         server_manager: Any = None,
+        # Phase X: 安全加固管理器（可选注入；由 AgentRuntime 组装）
+        security_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -159,6 +161,9 @@ class MasterAgent:
 
         # Phase W: External Integration (optional)
         self._server_manager = server_manager
+
+        # Phase X: Security Hardening (optional)
+        self._security_manager = security_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -255,6 +260,11 @@ class MasterAgent:
     def server_manager(self) -> Any:
         """Phase W: 外部集成服务器管理器."""
         return self._server_manager
+
+    @property
+    def security_manager(self) -> Any:
+        """Phase X: 安全加固管理器."""
+        return self._security_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1522,6 +1532,56 @@ class MasterAgent:
         except Exception as e:
             logger.warning("Send webhook failed: %s", e)
             return False
+
+    def check_access(
+        self,
+        source: str,
+        action: str,
+        policy_name: str = "default",
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> tuple[Any, str, dict[str, Any]]:
+        """检查访问权限（Phase X）。"""
+        if self._security_manager is None:
+            return AccessDecision.ALLOW, "security not injected", {}
+        try:
+            from ocos.security.manager import AccessDecision
+            return self._security_manager.check_access(
+                source, action, policy_name=policy_name, metadata=metadata
+            )
+        except Exception as e:
+            logger.warning("Check access failed: %s", e)
+            return AccessDecision.DENY, str(e), {}
+
+    def sanitize_input(self, text: str, source: str = "unknown") -> tuple[str, list[str], Any]:
+        """清洗并检查输入（Phase X）。"""
+        if self._security_manager is None:
+            return text, [], AccessDecision.ALLOW
+        try:
+            from ocos.security.manager import AccessDecision
+            return self._security_manager.sanitize_input(text, source=source)
+        except Exception as e:
+            logger.warning("Sanitize input failed: %s", e)
+            return text, [], AccessDecision.DENY
+
+    def get_security_stats(self) -> dict[str, Any]:
+        """获取安全统计（Phase X）。"""
+        if self._security_manager is None:
+            return {"error": "security_manager not injected"}
+        try:
+            return self._security_manager.get_security_stats()
+        except Exception as e:
+            logger.warning("Security stats failed: %s", e)
+            return {"error": str(e)}
+
+    def get_recent_security_events(self, limit: int = 100) -> list[dict[str, Any]]:
+        """获取最近安全事件（Phase X）。"""
+        if self._security_manager is None:
+            return []
+        try:
+            return self._security_manager.get_recent_events(limit)
+        except Exception as e:
+            logger.warning("Get security events failed: %s", e)
+            return []
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 
