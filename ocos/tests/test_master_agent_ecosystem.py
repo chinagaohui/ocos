@@ -17,15 +17,13 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from ocos.agent.master_agent import MasterAgent
-from ocos.identity.trust_anchor import TrustAnchor
-from ocos.ecosystem.manager import EcosystemManager, TrustLevel
+from ocos.ecosystem.manager import EcosystemManager
 
 
 @pytest.fixture
 def mock_agent():
     """创建 Mock MasterAgent。"""
-    trust_anchor = MagicMock(spec=TrustAnchor)
-    agent = MasterAgent(agent_id="test-agent-ac", trust_anchor=trust_anchor)
+    agent = MasterAgent(agent_id="test-agent-ac", trust_anchor=MagicMock())
     agent._ecosystem_manager = MagicMock(spec=EcosystemManager)
     return agent
 
