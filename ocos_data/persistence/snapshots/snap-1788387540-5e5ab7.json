@@ -1,0 +1,22 @@
+{
+  "snapshot_id": "snap-1788387540-5e5ab7",
+  "type": "FULL",
+  "timestamp": 1788387540.3589792,
+  "datetime": "2026-09-02T22:19:00.358979+00:00",
+  "reason": "test_save",
+  "data": {
+    "agent_id": "test-agent",
+    "beliefs": {
+      "b1": {
+        "content": "test",
+        "confidence": 0.9
+      }
+    },
+    "goals": [
+      {
+        "id": "g1",
+        "status": "active"
+      }
+    ]
+  }
+}

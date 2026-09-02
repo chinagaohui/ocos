@@ -125,6 +125,8 @@ class MasterAgent:
         self_reflection_manager: Any = None,
         # Phase AF: 自我优化管理器（可选注入；由 AgentRuntime 组装）
         self_optimization_manager: Any = None,
+        # Phase AG: 知识综合管理器（可选注入；由 AgentRuntime 组装）
+        knowledge_synthesis_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -204,6 +206,9 @@ class MasterAgent:
 
         # Phase AF: Self-Optimization (optional)
         self._self_optimization_manager = self_optimization_manager
+
+        # Phase AG: Knowledge Synthesis (optional)
+        self._knowledge_synthesis_manager = knowledge_synthesis_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -345,6 +350,11 @@ class MasterAgent:
     def self_optimization_manager(self) -> Any:
         """Phase AF: 自我优化管理器."""
         return self._self_optimization_manager
+
+    @property
+    def knowledge_synthesis_manager(self) -> Any:
+        """Phase AG: 知识综合管理器."""
+        return self._knowledge_synthesis_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1897,8 +1907,8 @@ class MasterAgent:
             return []
 
     def tick(self) -> dict:
-        """主循环 tick（Phase AA/AB/AC/AD/AE/AF 扩展）。"""
-        result = {"tick": 0, "evolutions": [], "distributed": {}, "ecosystem": {}, "human_ai": {}, "reflection": {}, "optimization": {}}
+        """主循环 tick（Phase AA/AB/AC/AD/AE/AF/AG 扩展）。"""
+        result = {"tick": 0, "evolutions": [], "distributed": {}, "ecosystem": {}, "human_ai": {}, "reflection": {}, "optimization": {}, "knowledge": {}}
         if self._self_evolution_manager is not None:
             try:
                 result["evolutions"] = self._self_evolution_manager.tick()
@@ -1929,6 +1939,11 @@ class MasterAgent:
                 result["optimization"] = self._self_optimization_manager.get_stats()
             except Exception as e:
                 logger.warning("Optimization tick failed: %s", e)
+        if self._knowledge_synthesis_manager is not None:
+            try:
+                result["knowledge"] = self._knowledge_synthesis_manager.get_stats()
+            except Exception as e:
+                logger.warning("Knowledge tick failed: %s", e)
         return result
 
     # ── Phase AC: Ecosystem Integration ─────────────────────────────
