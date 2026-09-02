@@ -170,7 +170,7 @@ class TestNoneManager:
         assert mock_agent.get_diagnosis_status() == {}
         assert mock_agent.get_diagnosis_history() == []
         assert mock_agent.get_fault_history() == []
-        assert mock_agent.get_repair_history() == []
+        assert mock_agent.get_repair_history() == {}
         assert mock_agent.get_diagnosis_stats() == {}
         result = mock_agent.tick()
         assert "tick" in result
