@@ -28,6 +28,38 @@ from ocos.evolution.evolution_types import (
 )
 
 
+@pytest.fixture
+def mock_agent():
+    """创建带有模拟依赖的 Agent 实例。"""
+    mock_identity = MagicMock()
+    mock_goal_stack = MagicMock()
+    mock_intent = MagicMock()
+    mock_attention = MagicMock()
+    mock_working_memory = MagicMock()
+    mock_capability_manager = MagicMock()
+    mock_execution_manager = MagicMock()
+
+    agent = MasterAgent(
+        agent_id="test-agent",
+        identity=mock_identity,
+        goal_stack=mock_goal_stack,
+        intent=mock_intent,
+        attention=mock_attention,
+        working_memory=mock_working_memory,
+        capability_manager=mock_capability_manager,
+        execution_manager=mock_execution_manager,
+    )
+    return agent
+
+
+@pytest.fixture
+def agent_with_evolution(mock_agent):
+    """创建带有自我演化管理器的 Agent 实例。"""
+    sem = SelfEvolutionManager()
+    mock_agent._self_evolution_manager = sem
+    return mock_agent
+
+
 # =========================================================================
 # 1. 管理器注入测试
 # =========================================================================
@@ -79,11 +111,9 @@ class TestMasterAgentInjection:
 class TestDetection:
     """提案检测测试。"""
 
-    def test_detect_evolution_opportunity(self):
+    def test_detect_evolution_opportunity(self, agent_with_evolution):
         """检测进化机会。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         result = agent.detect_evolution_opportunity(
             source_module="test.module",
@@ -95,14 +125,13 @@ class TestDetection:
         )
 
         assert "proposal_id" in result
-        assert result["domain"] == EvolutionDomain.CAPABILITY.value
+        # 默认 trigger="experience" 映射到 LEARNING_STRATEGY
+        assert result["domain"] == EvolutionDomain.LEARNING_STRATEGY.value
         assert result["state"] == EvolutionState.DRAFTING.value
 
-    def test_detect_with_trigger(self):
+    def test_detect_with_trigger(self, agent_with_evolution):
         """指定触发器类型。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         result = agent.detect_evolution_opportunity(
             source_module="test",
@@ -114,13 +143,12 @@ class TestDetection:
             trigger="health_alert",
         )
 
+        assert result["domain"] == EvolutionDomain.PARAMETER.value
         assert result["trigger"] == EvolutionTrigger.HEALTH_ALERT.value
 
-    def test_detect_without_manager(self):
+    def test_detect_without_manager(self, mock_agent):
         """未注入管理器时应返回错误。"""
-        agent = self._create_mock_agent()
-
-        result = agent.detect_evolution_opportunity(
+        result = mock_agent.detect_evolution_opportunity(
             source_module="test", metric_name="m", metric_value=0.5,
             threshold=0.6, severity=0.5, description="Test"
         )
@@ -136,11 +164,9 @@ class TestDetection:
 class TestAnalysis:
     """提案分析测试。"""
 
-    def test_analyze_proposal(self):
+    def test_analyze_proposal(self, agent_with_evolution):
         """分析提案影响。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         # 先创建提案
         detect_result = agent.detect_evolution_opportunity(
@@ -155,13 +181,9 @@ class TestAnalysis:
         assert "impact_level" in result
         assert "is_safe" in result
 
-    def test_analyze_nonexistent(self):
+    def test_analyze_nonexistent(self, agent_with_evolution):
         """分析不存在的提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
-
-        result = agent.analyze_evolution_proposal("nonexistent-id")
+        result = agent_with_evolution.analyze_evolution_proposal("nonexistent-id")
 
         assert "error" in result
 
@@ -173,11 +195,9 @@ class TestAnalysis:
 class TestValidation:
     """沙箱验证测试。"""
 
-    def test_validate_proposal(self):
+    def test_validate_proposal(self, agent_with_evolution):
         """验证提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         # 创建提案
         detect_result = agent.detect_evolution_opportunity(
@@ -192,13 +212,9 @@ class TestValidation:
         assert "result" in result
         assert "test_count" in result
 
-    def test_validate_nonexistent(self):
+    def test_validate_nonexistent(self, agent_with_evolution):
         """验证不存在的提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
-
-        result = agent.validate_evolution_proposal("nonexistent-id")
+        result = agent_with_evolution.validate_evolution_proposal("nonexistent-id")
 
         assert "error" in result
 
@@ -210,11 +226,9 @@ class TestValidation:
 class TestApproval:
     """提案批准测试。"""
 
-    def test_approve_proposal(self):
+    def test_approve_proposal(self, agent_with_evolution):
         """批准提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         # 创建并验证提案
         detect_result = agent.detect_evolution_opportunity(
@@ -229,11 +243,9 @@ class TestApproval:
 
         assert result is True
 
-    def test_approve_without_validation(self):
+    def test_approve_without_validation(self, agent_with_evolution):
         """未验证的提案不能被批准。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         # 只创建不验证
         detect_result = agent.detect_evolution_opportunity(
@@ -246,13 +258,9 @@ class TestApproval:
 
         assert result is False
 
-    def test_approve_nonexistent(self):
+    def test_approve_nonexistent(self, agent_with_evolution):
         """批准不存在的提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
-
-        result = agent.approve_evolution_proposal("nonexistent-id")
+        result = agent_with_evolution.approve_evolution_proposal("nonexistent-id")
 
         assert result is False
 
@@ -264,11 +272,9 @@ class TestApproval:
 class TestExecution:
     """提案执行测试。"""
 
-    def test_execute_proposal(self):
+    def test_execute_proposal(self, agent_with_evolution):
         """执行批准的提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         # 完整流程
         detect_result = agent.detect_evolution_opportunity(
@@ -284,11 +290,9 @@ class TestExecution:
 
         assert result["success"] is True
 
-    def test_execute_unapproved(self):
+    def test_execute_unapproved(self, agent_with_evolution):
         """执行未批准的提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         # 只创建不批准
         detect_result = agent.detect_evolution_opportunity(
@@ -302,13 +306,9 @@ class TestExecution:
         # 应该失败或未就绪
         assert "error" in result or not result.get("success", True)
 
-    def test_execute_nonexistent(self):
+    def test_execute_nonexistent(self, agent_with_evolution):
         """执行不存在的提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
-
-        result = agent.execute_evolution_proposal("nonexistent-id")
+        result = agent_with_evolution.execute_evolution_proposal("nonexistent-id")
 
         assert "error" in result
 
@@ -320,11 +320,9 @@ class TestExecution:
 class TestRollback:
     """回滚机制测试。"""
 
-    def test_rollback_after_execution(self):
+    def test_rollback_after_execution(self, agent_with_evolution):
         """执行后应能回滚。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         # 执行进化
         detect_result = agent.detect_evolution_opportunity(
@@ -341,11 +339,9 @@ class TestRollback:
 
         assert result is True
 
-    def test_rollback_no_snapshot(self):
+    def test_rollback_no_snapshot(self, agent_with_evolution):
         """无快照的提案不能回滚。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         # 只创建不执行
         detect_result = agent.detect_evolution_opportunity(
@@ -358,13 +354,9 @@ class TestRollback:
 
         assert result is False
 
-    def test_rollback_nonexistent(self):
+    def test_rollback_nonexistent(self, agent_with_evolution):
         """回滚不存在的提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
-
-        result = agent.rollback_evolution("nonexistent-id")
+        result = agent_with_evolution.rollback_evolution("nonexistent-id")
 
         assert result is False
 
@@ -376,80 +368,62 @@ class TestRollback:
 class TestStatusQuery:
     """状态查询测试。"""
 
-    def test_get_evolution_status(self):
+    def test_get_evolution_status(self, agent_with_evolution):
         """获取进化状态。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
-
-        status = agent.get_evolution_status()
+        status = agent_with_evolution.get_evolution_status()
 
         assert "total_proposals" in status
         assert "successful_migrations" in status
 
-    def test_get_evolution_status_without_manager(self):
+    def test_get_evolution_status_without_manager(self, mock_agent):
         """未注入时返回错误。"""
-        agent = self._create_mock_agent()
-
-        status = agent.get_evolution_status()
+        status = mock_agent.get_evolution_status()
 
         assert "error" in status
 
-    def test_get_evolution_history(self):
+    def test_get_evolution_history(self, agent_with_evolution):
         """获取进化历史。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
-
         # 创建提案
-        agent.detect_evolution_opportunity(
+        agent_with_evolution.detect_evolution_opportunity(
             source_module="test", metric_name="score", metric_value=0.5,
             threshold=0.6, severity=0.5, description="History test"
         )
 
-        history = agent.get_evolution_history()
+        history = agent_with_evolution.get_evolution_history()
 
         assert isinstance(history, list)
         assert len(history) > 0
 
-    def test_get_evolution_proposals(self):
+    def test_get_evolution_proposals(self, agent_with_evolution):
         """列出进化提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
-
         # 创建多个提案
-        agent.detect_evolution_opportunity(
+        agent_with_evolution.detect_evolution_opportunity(
             source_module="test1", metric_name="m1", metric_value=0.5,
             threshold=0.6, severity=0.5, description="Proposal 1"
         )
-        agent.detect_evolution_opportunity(
+        agent_with_evolution.detect_evolution_opportunity(
             source_module="test2", metric_name="m2", metric_value=0.5,
             threshold=0.6, severity=0.5, description="Proposal 2"
         )
 
-        proposals = agent.get_evolution_proposals()
+        proposals = agent_with_evolution.get_evolution_proposals()
 
         assert len(proposals) == 2
 
-    def test_get_evolution_proposals_by_state(self):
+    def test_get_evolution_proposals_by_state(self, agent_with_evolution):
         """按状态过滤提案。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
-
         # 创建并执行一个提案
-        detect_result = agent.detect_evolution_opportunity(
+        detect_result = agent_with_evolution.detect_evolution_opportunity(
             source_module="test", metric_name="score", metric_value=0.5,
             threshold=0.6, severity=0.5, description="Active proposal"
         )
         proposal_id = detect_result["proposal_id"]
-        agent.validate_evolution_proposal(proposal_id)
-        agent.approve_evolution_proposal(proposal_id)
-        agent.execute_evolution_proposal(proposal_id)
+        agent_with_evolution.validate_evolution_proposal(proposal_id)
+        agent_with_evolution.approve_evolution_proposal(proposal_id)
+        agent_with_evolution.execute_evolution_proposal(proposal_id)
 
         # 列出活跃提案
-        active = agent.get_evolution_proposals(state="active")
+        active = agent_with_evolution.get_evolution_proposals(state="active")
 
         assert len(active) == 1
         assert active[0]["state"] == EvolutionState.ACTIVE.value
@@ -462,22 +436,16 @@ class TestStatusQuery:
 class TestTick:
     """主循环 tick 测试。"""
 
-    def test_tick_with_manager(self):
+    def test_tick_with_manager(self, agent_with_evolution):
         """有管理器时的 tick。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
-
-        result = agent.tick()
+        result = agent_with_evolution.tick()
 
         assert "tick" in result
         assert result["tick"] >= 0
 
-    def test_tick_without_manager(self):
+    def test_tick_without_manager(self, mock_agent):
         """无管理器时的 tick。"""
-        agent = self._create_mock_agent()
-
-        result = agent.tick()
+        result = mock_agent.tick()
 
         assert result == {"tick": 0, "evolutions": []}
 
@@ -489,11 +457,9 @@ class TestTick:
 class TestEndToEnd:
     """端到端完整流程测试。"""
 
-    def test_full_evolution_cycle_via_master_agent(self):
+    def test_full_evolution_cycle_via_master_agent(self, agent_with_evolution):
         """通过 MasterAgent 执行完整进化周期。"""
-        agent = self._create_mock_agent()
-        sem = SelfEvolutionManager()
-        agent._self_evolution_manager = sem
+        agent = agent_with_evolution
 
         # 1. 检测
         detect_result = agent.detect_evolution_opportunity(
