@@ -23,7 +23,7 @@ from ocos.ecosystem.manager import EcosystemManager
 @pytest.fixture
 def mock_agent():
     """创建 Mock MasterAgent。"""
-    agent = MasterAgent(agent_id="test-agent-ac", trust_anchor=MagicMock())
+    agent = MasterAgent(agent_id="test-agent-ac")
     agent._ecosystem_manager = MagicMock(spec=EcosystemManager)
     return agent
 
