@@ -133,6 +133,8 @@ class MasterAgent:
         tool_manager: Any = None,
         # Phase AJ: 增强型主动输出管理器（可选注入；由 AgentRuntime 组装）
         proactive_output_enhanced: Any = None,
+        # Phase AK: 外部通信通道管理器（可选注入；由 AgentRuntime 组装）
+        external_communication_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -224,6 +226,9 @@ class MasterAgent:
 
         # Phase AJ: Proactive Output Enhanced (optional)
         self._proactive_output_enhanced = proactive_output_enhanced
+
+        # Phase AK: External Communication Manager (optional)
+        self._external_communication_manager = external_communication_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -385,6 +390,11 @@ class MasterAgent:
     def proactive_output_enhanced(self) -> Any:
         """Phase AJ: 增强型主动输出管理器."""
         return self._proactive_output_enhanced
+
+    @property
+    def external_communication_manager(self) -> Any:
+        """Phase AK: 外部通信通道管理器."""
+        return self._external_communication_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -2091,6 +2101,12 @@ class MasterAgent:
                 result["proactive_output"] = self._proactive_output_enhanced.get_status()
             except Exception as e:
                 logger.warning("Get proactive output stats failed: %s", e)
+
+        if self._external_communication_manager is not None:
+            try:
+                result["external_communication"] = self._external_communication_manager.get_statistics()
+            except Exception as e:
+                logger.warning("Get external communication stats failed: %s", e)
 
         return result
 
