@@ -129,6 +129,8 @@ class MasterAgent:
         knowledge_synthesis_manager: Any = None,
         # Phase AH: 自我诊断管理器（可选注入；由 AgentRuntime 组装）
         self_diagnosis_manager: Any = None,
+        # Phase AI: 工具集成管理器（可选注入；由 AgentRuntime 组装）
+        tool_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -214,6 +216,9 @@ class MasterAgent:
 
         # Phase AH: Self-Diagnosis (optional)
         self._self_diagnosis_manager = self_diagnosis_manager
+
+        # Phase AI: Tool Integration (optional)
+        self._tool_manager = tool_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -365,6 +370,11 @@ class MasterAgent:
     def self_diagnosis_manager(self) -> Any:
         """Phase AH: 自我诊断管理器."""
         return self._self_diagnosis_manager
+
+    @property
+    def tool_manager(self) -> Any:
+        """Phase AI: 工具集成管理器."""
+        return self._tool_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -2059,6 +2069,13 @@ class MasterAgent:
                 result["diagnosis"] = self._self_diagnosis_manager.get_stats()
             except Exception as e:
                 logger.warning("Get diagnosis stats failed: %s", e)
+
+        if self._tool_manager is not None:
+            try:
+                result["tool"] = self._tool_manager.get_status()
+            except Exception as e:
+                logger.warning("Get tool stats failed: %s", e)
+
         return result
 
     # ── Phase AC: Ecosystem Integration ─────────────────────────────

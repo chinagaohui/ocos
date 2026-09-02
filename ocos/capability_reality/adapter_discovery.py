@@ -44,7 +44,7 @@ class AdapterDiscovery:
 
     用法:
         discovery = AdapterDiscovery()
-        registry = discovery.run()
+        registry, report = discovery.run()
         # registry 中已注册所有可用的适配器
     """
 
