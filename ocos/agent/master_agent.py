@@ -115,6 +115,8 @@ class MasterAgent:
         performance_manager: Any = None,
         # Phase AA: 自我演化管理器（可选注入；由 AgentRuntime 组装）
         self_evolution_manager: Any = None,
+        # Phase AB: 分布式认知管理器（可选注入；由 AgentRuntime 组装）
+        distributed_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -179,6 +181,9 @@ class MasterAgent:
 
         # Phase AA: Self-Evolution (optional)
         self._self_evolution_manager = self_evolution_manager
+
+        # Phase AB: Distributed Cognition (optional)
+        self._distributed_manager = distributed_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -295,6 +300,11 @@ class MasterAgent:
     def self_evolution_manager(self) -> Any:
         """Phase AA: 自我演化管理器."""
         return self._self_evolution_manager
+
+    @property
+    def distributed_manager(self) -> Any:
+        """Phase AB: 分布式认知管理器."""
+        return self._distributed_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1847,14 +1857,144 @@ class MasterAgent:
             return []
 
     def tick(self) -> dict:
-        """主循环 tick（Phase AA 扩展）。"""
-        result = {"tick": 0, "evolutions": []}
+        """主循环 tick（Phase AA/AB 扩展）。"""
+        result = {"tick": 0, "evolutions": [], "distributed": {}}
         if self._self_evolution_manager is not None:
             try:
-                result = self._self_evolution_manager.tick()
+                result["evolutions"] = self._self_evolution_manager.tick()
             except Exception as e:
                 logger.warning("Evolution tick failed: %s", e)
+        if self._distributed_manager is not None:
+            try:
+                result["distributed"] = self._distributed_manager.get_stats()
+            except Exception as e:
+                logger.warning("Distributed tick failed: %s", e)
         return result
+
+    # ── Phase AB: Distributed Cognition ──────────────────────────────
+
+    def register_cognition_instance(
+        self, instance_id: str, host: str, port: int,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """注册认知实例（Phase AB）。"""
+        if self._distributed_manager is None:
+            return {"error": "distributed_manager not injected"}
+        try:
+            inst = self._distributed_manager.register_instance(instance_id, host, port, metadata)
+            if inst:
+                return {"instance_id": inst.instance_id, "state": inst.state.value}
+            return {"error": "registration failed (max instances or duplicate)"}
+        except Exception as e:
+            logger.warning("Register instance failed: %s", e)
+            return {"error": str(e)}
+
+    def deregister_cognition_instance(self, instance_id: str) -> bool:
+        """注销认知实例（Phase AB）。"""
+        if self._distributed_manager is None:
+            return False
+        try:
+            return self._distributed_manager.deregister_instance(instance_id)
+        except Exception as e:
+            logger.warning("Deregister instance failed: %s", e)
+            return False
+
+    def heartbeat_instance(self, instance_id: str) -> bool:
+        """更新实例心跳（Phase AB）。"""
+        if self._distributed_manager is None:
+            return False
+        try:
+            return self._distributed_manager.update_heartbeat(instance_id)
+        except Exception as e:
+            logger.warning("Heartbeat failed: %s", e)
+            return False
+
+    def submit_distributed_task(
+        self, task_type: str, payload: dict[str, Any],
+        source_instance: str | None = None,
+    ) -> dict[str, Any]:
+        """提交分布式任务（Phase AB）。"""
+        if self._distributed_manager is None:
+            return {"error": "distributed_manager not injected"}
+        try:
+            task = self._distributed_manager.submit_task(task_type, payload, source_instance)
+            return {"task_id": task.task_id, "status": task.status}
+        except Exception as e:
+            logger.warning("Submit task failed: %s", e)
+            return {"error": str(e)}
+
+    def dispatch_distributed_task(self, task_id: str) -> bool:
+        """分发布局式任务（Phase AB）。"""
+        if self._distributed_manager is None:
+            return False
+        try:
+            task = next((t for t in self._distributed_manager._pending_tasks if t.task_id == task_id), None)
+            if task:
+                return self._distributed_manager.dispatch_task(task)
+            return False
+        except Exception as e:
+            logger.warning("Dispatch task failed: %s", e)
+            return False
+
+    def complete_distributed_task(self, task_id: str, result: dict[str, Any]) -> bool:
+        """完成分布式任务（Phase AB）。"""
+        if self._distributed_manager is None:
+            return False
+        try:
+            return self._distributed_manager.complete_task(task_id, result)
+        except Exception as e:
+            logger.warning("Complete task failed: %s", e)
+            return False
+
+    def fail_distributed_task(self, task_id: str, error: str) -> bool:
+        """标记分布式任务失败（Phase AB）。"""
+        if self._distributed_manager is None:
+            return False
+        try:
+            return self._distributed_manager.fail_task(task_id, error)
+        except Exception as e:
+            logger.warning("Fail task failed: %s", e)
+            return False
+
+    def get_distributed_stats(self) -> dict[str, Any]:
+        """获取分布式统计（Phase AB）。"""
+        if self._distributed_manager is None:
+            return {"error": "distributed_manager not injected"}
+        try:
+            return self._distributed_manager.get_stats()
+        except Exception as e:
+            logger.warning("Get distributed stats failed: %s", e)
+            return {"error": str(e)}
+
+    def get_healthy_instances(self) -> list[dict]:
+        """获取健康实例列表（Phase AB）。"""
+        if self._distributed_manager is None:
+            return []
+        try:
+            instances = self._distributed_manager.get_healthy_instances()
+            return [
+                {
+                    "instance_id": i.instance_id,
+                    "host": i.host,
+                    "port": i.port,
+                    "state": i.state.value,
+                    "task_count": i.task_count,
+                }
+                for i in instances
+            ]
+        except Exception as e:
+            logger.warning("Get healthy instances failed: %s", e)
+            return []
+
+    def check_distributed_health(self) -> list[str]:
+        """检查分布式健康（Phase AB）。"""
+        if self._distributed_manager is None:
+            return []
+        try:
+            return self._distributed_manager.check_health()
+        except Exception as e:
+            logger.warning("Check health failed: %s", e)
+            return []
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 
