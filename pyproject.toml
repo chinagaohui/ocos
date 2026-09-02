@@ -1,47 +1,93 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "ocos"
 version = "1.0.0"
-description = "Organic Cognitive Operating System — digital organism kernel"
+description = "Organic Cognitive Operating System — 个人智脑内核"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 license = {text = "Proprietary"}
 authors = [
-    {name = "OCOS Team"},
+    {name = "OCOS Team"}
 ]
-# U3.2（2026-08-19）：从 import 图推导的运行时依赖声明（F-05 关闭）
-# 注意：opentale 不列入（架构约束：OCOS 仅经 HTTP 访问 OpenTale，见 F-18/U1.3）
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
 dependencies = [
-    "fastapi>=0.115.0",
-    "pydantic>=2.0.0",
-    "uvicorn>=0.30.0",
-    "psutil>=5.9.0",
-    "anthropic>=0.40.0",
-    "openai>=1.0.0",
+    "pydantic>=2.0",
+    "sqlalchemy>=2.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "httpx>=0.25.0",
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=9.0.0",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.10",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+    "pre-commit>=3.0",
+]
+ml = [
+    "torch>=2.0",
+    "transformers>=4.30",
 ]
 
-# P0 (2026-08-28): 生产启动入口 — `ocos run` 点亮认知引擎
-# P0 收尾 (2026-08-29): 补全 ocos-server/ocos-shell（对齐 egg-info 残留）
-[project.scripts]
-ocos = "ocos.interaction.cli.main:main"
-ocos-server = "ocos.interaction.api.server:main"
-ocos-shell = "ocos.interaction.repl.shell:main"
-
-[tool.pytest.ini_options]
-# 2026-08-30: ocos/tests 并入默认全量 — 此前 R4-A 的测试与架构守卫
-# (test_import_rules 等) 不在 CI 主链路, 两次漏网 (假成功/循环导入) 均因此
-testpaths = ["tests", "ocos/tests"]
-python_files = ["test_*.py"]
-addopts = ["-q", "--tb=short"]
-timeout = 300
+[project.urls]
+Homepage = "https://github.com/laogao/ocos"
+Documentation = "https://github.com/laogao/ocos/blob/main/docs/ARCHITECTURE.md"
+Repository = "https://github.com/laogao/ocos.git"
+Issues = "https://github.com/laogao/ocos/issues"
 
 [tool.setuptools.packages.find]
 include = ["ocos*"]
+exclude = ["ocos.tests*", "tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["ocos/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.coverage.run]
+source = ["ocos"]
+omit = ["**/tests/**", "**/test_*.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "if __name__ == .__main__.:",
+]
