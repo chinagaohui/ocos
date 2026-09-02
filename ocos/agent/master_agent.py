@@ -121,6 +121,8 @@ class MasterAgent:
         ecosystem_manager: Any = None,
         # Phase AD: 人机协同管理器（可选注入；由 AgentRuntime 组装）
         human_ai_manager: Any = None,
+        # Phase AE: 自我反思管理器（可选注入；由 AgentRuntime 组装）
+        self_reflection_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -194,6 +196,9 @@ class MasterAgent:
 
         # Phase AD: Human-AI Collaboration (optional)
         self._human_ai_manager = human_ai_manager
+
+        # Phase AE: Self-Reflection (optional)
+        self._self_reflection_manager = self_reflection_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -325,6 +330,11 @@ class MasterAgent:
     def human_ai_manager(self) -> Any:
         """Phase AD: 人机协同管理器."""
         return self._human_ai_manager
+
+    @property
+    def self_reflection_manager(self) -> Any:
+        """Phase AE: 自我反思管理器."""
+        return self._self_reflection_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1877,8 +1887,8 @@ class MasterAgent:
             return []
 
     def tick(self) -> dict:
-        """主循环 tick（Phase AA/AB/AC/AD 扩展）。"""
-        result = {"tick": 0, "evolutions": [], "distributed": {}, "ecosystem": {}, "human_ai": {}}
+        """主循环 tick（Phase AA/AB/AC/AD/AE 扩展）。"""
+        result = {"tick": 0, "evolutions": [], "distributed": {}, "ecosystem": {}, "human_ai": {}, "reflection": {}}
         if self._self_evolution_manager is not None:
             try:
                 result["evolutions"] = self._self_evolution_manager.tick()
@@ -1899,6 +1909,11 @@ class MasterAgent:
                 result["human_ai"] = self._human_ai_manager.get_stats()
             except Exception as e:
                 logger.warning("HumanAI tick failed: %s", e)
+        if self._self_reflection_manager is not None:
+            try:
+                result["reflection"] = self._self_reflection_manager.get_stats()
+            except Exception as e:
+                logger.warning("Reflection tick failed: %s", e)
         return result
 
     # ── Phase AC: Ecosystem Integration ─────────────────────────────
@@ -2041,6 +2056,68 @@ class MasterAgent:
         if self._human_ai_manager is None:
             return {"error": "human_ai_manager not injected"}
         return self._human_ai_manager.get_stats()
+
+    # ── Phase AE: Self-Reflection ───────────────────────────────
+
+    def start_reflection(self, reflection_type: str, subject_id: str, depth: str = "analytical") -> dict[str, Any]:
+        """开始反思（Phase AE）。"""
+        if self._self_reflection_manager is None:
+            return {"error": "self_reflection_manager not injected"}
+        from ocos.reflection.manager import ReflectionType, ReflectionDepth
+        try:
+            rt = ReflectionType[reflection_type.upper()]
+            rd = ReflectionDepth(depth)
+            trace = self._self_reflection_manager.start_reflection(rt, subject_id, rd)
+            if trace:
+                return {"trace_id": trace.trace_id, "type": trace.reflection_type.name}
+            return {"error": "max reflections reached"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def add_reflection_insight(self, trace_id: str, insight_type: str, content: str, confidence: float = 0.5) -> bool:
+        """添加反思洞察（Phase AE）。"""
+        if self._self_reflection_manager is None:
+            return False
+        from ocos.reflection.manager import InsightType
+        try:
+            it = InsightType(insight_type.lower())
+            return self._self_reflection_manager.add_insight(trace_id, it, content, confidence)
+        except Exception as e:
+            logger.warning("Add insight failed: %s", e)
+            return False
+
+    def complete_reflection(self, trace_id: str) -> bool:
+        """完成反思（Phase AE）。"""
+        if self._self_reflection_manager is None:
+            return False
+        return self._self_reflection_manager.complete_reflection(trace_id)
+
+    def propose_wisdom(self, trace_id: str, content: str, confidence: float = 0.5) -> dict[str, Any]:
+        """提出智慧候选（Phase AE）。"""
+        if self._self_reflection_manager is None:
+            return {"error": "self_reflection_manager not injected"}
+        wisdom = self._self_reflection_manager.propose_wisdom(trace_id, content, confidence)
+        if wisdom:
+            return {"wisdom_id": wisdom.wisdom_id, "confidence": wisdom.confidence}
+        return {"error": "max wisdom items reached"}
+
+    def verify_wisdom(self, wisdom_id: str, result: bool) -> bool:
+        """验证智慧（Phase AE）。"""
+        if self._self_reflection_manager is None:
+            return False
+        return self._self_reflection_manager.verify_wisdom(wisdom_id, result)
+
+    def check_identity_continuity(self, current_state: dict[str, Any], window: int = 10) -> dict[str, Any]:
+        """检查身份连续性（Phase AE）。"""
+        if self._self_reflection_manager is None:
+            return {"error": "self_reflection_manager not injected"}
+        return self._self_reflection_manager.check_identity_continuity(current_state, window)
+
+    def get_reflection_stats(self) -> dict[str, Any]:
+        """获取反思统计（Phase AE）。"""
+        if self._self_reflection_manager is None:
+            return {"error": "self_reflection_manager not injected"}
+        return self._self_reflection_manager.get_stats()
 
     def register_cognition_instance(
         self, instance_id: str, host: str, port: int,
