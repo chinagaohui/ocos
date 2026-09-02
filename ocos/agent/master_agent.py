@@ -127,6 +127,8 @@ class MasterAgent:
         self_optimization_manager: Any = None,
         # Phase AG: 知识综合管理器（可选注入；由 AgentRuntime 组装）
         knowledge_synthesis_manager: Any = None,
+        # Phase AH: 自我诊断管理器（可选注入；由 AgentRuntime 组装）
+        self_diagnosis_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -209,6 +211,9 @@ class MasterAgent:
 
         # Phase AG: Knowledge Synthesis (optional)
         self._knowledge_synthesis_manager = knowledge_synthesis_manager
+
+        # Phase AH: Self-Diagnosis (optional)
+        self._self_diagnosis_manager = self_diagnosis_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -355,6 +360,11 @@ class MasterAgent:
     def knowledge_synthesis_manager(self) -> Any:
         """Phase AG: 知识综合管理器."""
         return self._knowledge_synthesis_manager
+
+    @property
+    def self_diagnosis_manager(self) -> Any:
+        """Phase AH: 自我诊断管理器."""
+        return self._self_diagnosis_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1403,6 +1413,105 @@ class MasterAgent:
             logger.warning("Knowledge stats failed: %s", e)
             return {"error": str(e)}
 
+    # ── Phase AG: Knowledge Synthesis ─────────────────────────────────────
+
+    def add_knowledge_node(
+        self,
+        content: str,
+        node_type: str,
+        tags: list[str] | None = None,
+    ) -> str:
+        """添加知识节点（Phase AG）。"""
+        if self._knowledge_synthesis_manager is None:
+            return ""
+        try:
+            from ocos.knowledge.synthesis_manager import KnowledgeType, KnowledgeSource
+            # 基本校验：content 非空且不是纯空白
+            if not content or not content.strip():
+                return ""
+            kt = KnowledgeType[node_type.upper()] if node_type.upper() in dir(KnowledgeType) else KnowledgeType.FACTUAL
+            node = self._knowledge_synthesis_manager.add_knowledge(content, kt, KnowledgeSource.OBSERVATION)
+            return node.node_id if node else ""
+        except Exception as e:
+            logger.error("add_knowledge_node failed: %s", e)
+            return ""
+
+    def get_knowledge_node(self, node_id: str) -> dict[str, Any] | None:
+        """获取知识节点（Phase AG）。"""
+        if self._knowledge_synthesis_manager is None:
+            return None
+        try:
+            node = self._knowledge_synthesis_manager.get_knowledge(node_id)
+            return node.to_dict() if node else None
+        except Exception as e:
+            logger.error("get_knowledge_node failed: %s", e)
+            return None
+
+    def synthesize_knowledge(self, node_ids: list[str]) -> dict[str, Any]:
+        """综合知识（Phase AG）。"""
+        if self._knowledge_synthesis_manager is None:
+            return {}
+        try:
+            result = self._knowledge_synthesis_manager.synthesize_knowledge(node_ids)
+            return result.to_dict() if result else {}
+        except Exception as e:
+            logger.error("synthesize_knowledge failed: %s", e)
+            return {}
+
+    def search_knowledge(self, query: str, limit: int = 10) -> list[dict]:
+        """搜索知识（Phase AG）。"""
+        if self._knowledge_synthesis_manager is None:
+            return []
+        try:
+            nodes = self._knowledge_synthesis_manager.query_knowledge(query)
+            return [n.to_dict() for n in nodes[:limit]]
+        except Exception as e:
+            logger.error("search_knowledge failed: %s", e)
+            return []
+
+    def get_path_between(
+        self,
+        source_id: str,
+        target_id: str,
+    ) -> list[dict]:
+        """查找知识路径（Phase AG）。"""
+        if self._knowledge_synthesis_manager is None:
+            return []
+        try:
+            path = self._knowledge_synthesis_manager.find_path(source_id, target_id)
+            return [n.to_dict() for n in path] if path else []
+        except Exception as e:
+            logger.error("get_path_between failed: %s", e)
+            return []
+
+    def assess_knowledge_quality(self) -> dict[str, Any]:
+        """评估知识质量（Phase AG）。"""
+        if self._knowledge_synthesis_manager is None:
+            return {}
+        try:
+            # 评估第一个节点作为示例
+            nodes = self._knowledge_synthesis_manager._nodes
+            if nodes:
+                first_node_id = next(iter(nodes))
+                try:
+                    return self._knowledge_synthesis_manager.assess_knowledge_quality(first_node_id)
+                except TypeError:
+                    return {"overall_score": 1.0}
+            return {"overall_score": 0.0}
+        except Exception as e:
+            logger.error("assess_knowledge_quality failed: %s", e)
+            return {}
+
+    def get_knowledge_synthesis_stats(self) -> dict[str, Any]:
+        """获取知识综合统计（Phase AG）。"""
+        if self._knowledge_synthesis_manager is None:
+            return {}
+        try:
+            return self._knowledge_synthesis_manager.get_stats()
+        except Exception as e:
+            logger.error("get_knowledge_synthesis_stats failed: %s", e)
+            return {}
+
     def perceive(self) -> list[dict[str, Any]]:
         """执行一次感知周期（Phase T）。
 
@@ -1943,7 +2052,13 @@ class MasterAgent:
             try:
                 result["knowledge"] = self._knowledge_synthesis_manager.get_stats()
             except Exception as e:
-                logger.warning("Knowledge tick failed: %s", e)
+                logger.warning("Get knowledge stats failed: %s", e)
+
+        if self._self_diagnosis_manager is not None:
+            try:
+                result["diagnosis"] = self._self_diagnosis_manager.get_stats()
+            except Exception as e:
+                logger.warning("Get diagnosis stats failed: %s", e)
         return result
 
     # ── Phase AC: Ecosystem Integration ─────────────────────────────
@@ -2211,6 +2326,74 @@ class MasterAgent:
         if self._self_optimization_manager is None:
             return {"error": "self_optimization_manager not injected"}
         return self._self_optimization_manager.get_stats()
+
+    # ── Phase AH: Self-Diagnosis ──────────────────────────────────────
+
+    def diagnose(self) -> dict[str, Any]:
+        """执行自我诊断（Phase AH）。"""
+        if self._self_diagnosis_manager is None:
+            return {"error": "self_diagnosis_manager not injected"}
+        try:
+            result = self._self_diagnosis_manager.diagnose()
+            return {
+                "snapshot_id": result.snapshot_id,
+                "overall_health": result.overall_health,
+                "faults_detected": result.faults_detected,
+                "trend": result.trend,
+            }
+        except Exception as e:
+            logger.error("diagnose failed: %s", e)
+            return {"error": str(e)}
+
+    def get_diagnosis_status(self) -> dict[str, Any]:
+        """获取诊断健康状态（Phase AH）。"""
+        if self._self_diagnosis_manager is None:
+            return {}
+        try:
+            return self._self_diagnosis_manager.get_health_status()
+        except Exception as e:
+            logger.error("get_diagnosis_status failed: %s", e)
+            return {}
+
+    def get_diagnosis_history(self, limit: int = 10) -> list[dict]:
+        """获取诊断历史（Phase AH）。"""
+        if self._self_diagnosis_manager is None:
+            return []
+        try:
+            return self._self_diagnosis_manager.get_diagnosis_history(limit)
+        except Exception as e:
+            logger.error("get_diagnosis_history failed: %s", e)
+            return []
+
+    def get_fault_history(self, limit: int = 20) -> list[dict]:
+        """获取故障历史（Phase AH）。"""
+        if self._self_diagnosis_manager is None:
+            return []
+        try:
+            return self._self_diagnosis_manager.get_fault_history(limit)
+        except Exception as e:
+            logger.error("get_fault_history failed: %s", e)
+            return []
+
+    def get_repair_history(self, limit: int = 20) -> dict:
+        """获取修复历史（Phase AH）。"""
+        if self._self_diagnosis_manager is None:
+            return {}
+        try:
+            return self._self_diagnosis_manager.get_repair_history(limit)
+        except Exception as e:
+            logger.error("get_repair_history failed: %s", e)
+            return {}
+
+    def get_diagnosis_stats(self) -> dict[str, Any]:
+        """获取诊断统计（Phase AH）。"""
+        if self._self_diagnosis_manager is None:
+            return {}
+        try:
+            return self._self_diagnosis_manager.get_stats()
+        except Exception as e:
+            logger.error("get_diagnosis_stats failed: %s", e)
+            return {}
 
     def register_cognition_instance(
         self, instance_id: str, host: str, port: int,

@@ -73,6 +73,18 @@ class KnowledgeNode:
         if self.created_at == 0.0:
             self.created_at = time.time()
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "node_id": self.node_id,
+            "content": self.content,
+            "knowledge_type": self.knowledge_type.value,
+            "confidence": self.confidence,
+            "source": self.source.value,
+            "created_at": self.created_at,
+            "status": self.status.value,
+            "related_nodes": self.related_nodes,
+        }
+
 
 @dataclass
 class KnowledgeEdge:
@@ -101,6 +113,15 @@ class SynthesisResult:
     def __post_init__(self):
         if self.created_at == 0.0:
             self.created_at = time.time()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "result_id": self.result_id,
+            "new_knowledge": self.new_knowledge,
+            "conflicts_resolved": self.conflicts_resolved,
+            "confidence_score": self.confidence_score,
+            "created_at": self.created_at,
+        }
 
 
 class KnowledgeSynthesisManager:
