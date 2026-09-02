@@ -113,6 +113,8 @@ class MasterAgent:
         monitoring_manager: Any = None,
         # Phase Z: 性能优化管理器（可选注入；由 AgentRuntime 组装）
         performance_manager: Any = None,
+        # Phase AA: 自我演化管理器（可选注入；由 AgentRuntime 组装）
+        self_evolution_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -174,6 +176,9 @@ class MasterAgent:
 
         # Phase Z: Performance Optimization (optional)
         self._performance_manager = performance_manager
+
+        # Phase AA: Self-Evolution (optional)
+        self._self_evolution_manager = self_evolution_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -285,6 +290,11 @@ class MasterAgent:
     def performance_manager(self) -> Any:
         """Phase Z: 性能优化管理器."""
         return self._performance_manager
+
+    @property
+    def self_evolution_manager(self) -> Any:
+        """Phase AA: 自我演化管理器."""
+        return self._self_evolution_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1661,6 +1671,190 @@ class MasterAgent:
             self._monitoring_manager.stop_http()
         except Exception as e:
             logger.warning("Stop monitoring failed: %s", e)
+
+    # ── Phase AA: Self-Evolution ────────────────────────────────────
+
+    def detect_evolution_opportunity(
+        self,
+        source_module: str,
+        metric_name: str,
+        metric_value: float,
+        threshold: float,
+        severity: float,
+        description: str,
+        trigger: str = "experience",
+    ) -> dict[str, Any]:
+        """检测进化机会并生成提案（Phase AA）。"""
+        if self._self_evolution_manager is None:
+            return {"error": "self_evolution_manager not injected"}
+        try:
+            from ocos.evolution.evolution_types import EvolutionTrigger
+            trigger_enum = getattr(EvolutionTrigger, trigger.upper(), EvolutionTrigger.EXPERIENCE_PATTERN)
+            proposal = self._self_evolution_manager.detect_and_propose(
+                source_module=source_module,
+                metric_name=metric_name,
+                metric_value=metric_value,
+                threshold=threshold,
+                severity=severity,
+                description=description,
+                trigger=trigger_enum,
+            )
+            if proposal:
+                return {
+                    "proposal_id": proposal.proposal_id,
+                    "domain": proposal.domain.value,
+                    "state": proposal.state.value,
+                    "description": proposal.description,
+                }
+            return {"error": "max proposals reached"}
+        except Exception as e:
+            logger.warning("Detect evolution opportunity failed: %s", e)
+            return {"error": str(e)}
+
+    def analyze_evolution_proposal(self, proposal_id: str) -> dict[str, Any]:
+        """分析进化提案影响（Phase AA）。"""
+        if self._self_evolution_manager is None:
+            return {"error": "self_evolution_manager not injected"}
+        try:
+            impact = self._self_evolution_manager.analyze_proposal(proposal_id)
+            if impact:
+                return {
+                    "proposal_id": proposal_id,
+                    "impact_level": impact.level.value,
+                    "is_safe": impact.is_safe,
+                    "affected_modules": impact.affected_modules,
+                }
+            return {"error": "proposal not found"}
+        except Exception as e:
+            logger.warning("Analyze evolution proposal failed: %s", e)
+            return {"error": str(e)}
+
+    def validate_evolution_proposal(self, proposal_id: str) -> dict[str, Any]:
+        """在沙箱中验证进化提案（Phase AA）。"""
+        if self._self_evolution_manager is None:
+            return {"error": "self_evolution_manager not injected"}
+        try:
+            report = self._self_evolution_manager.validate_proposal(proposal_id)
+            if report:
+                return {
+                    "proposal_id": proposal_id,
+                    "result": report.result.value,
+                    "test_count": report.test_count,
+                    "passed_count": report.passed_count,
+                    "errors": report.errors,
+                }
+            return {"error": "proposal not found"}
+        except Exception as e:
+            logger.warning("Validate evolution proposal failed: %s", e)
+            return {"error": str(e)}
+
+    def approve_evolution_proposal(self, proposal_id: str, approver: str = "human") -> bool:
+        """人工批准进化提案（Phase AA）。"""
+        if self._self_evolution_manager is None:
+            return False
+        try:
+            return self._self_evolution_manager.approve_proposal(proposal_id, approver)
+        except Exception as e:
+            logger.warning("Approve evolution proposal failed: %s", e)
+            return False
+
+    def execute_evolution_proposal(self, proposal_id: str) -> dict[str, Any]:
+        """执行已批准的进化提案（Phase AA）。"""
+        if self._self_evolution_manager is None:
+            return {"error": "self_evolution_manager not injected"}
+        try:
+            result = self._self_evolution_manager.execute_proposal(proposal_id)
+            if result:
+                return {
+                    "proposal_id": proposal_id,
+                    "success": result.success,
+                    "tick": result.tick,
+                    "error": result.error,
+                }
+            return {"error": "proposal not found or not ready"}
+        except Exception as e:
+            logger.warning("Execute evolution proposal failed: %s", e)
+            return {"error": str(e)}
+
+    def rollback_evolution(self, proposal_id: str, reason: str = "test_failure") -> bool:
+        """回滚已执行的进化（Phase AA）。"""
+        if self._self_evolution_manager is None:
+            return False
+        try:
+            from ocos.evolution.evolution_types import RollbackReason
+            reason_enum = getattr(RollbackReason, reason.upper(), RollbackReason.TEST_FAILURE)
+            return self._self_evolution_manager.rollback(proposal_id, reason_enum)
+        except Exception as e:
+            logger.warning("Rollback evolution failed: %s", e)
+            return False
+
+    def get_evolution_status(self) -> dict[str, Any]:
+        """获取进化状态摘要（Phase AA）。"""
+        if self._self_evolution_manager is None:
+            return {"error": "self_evolution_manager not injected"}
+        try:
+            status = self._self_evolution_manager.get_status()
+            return {
+                "total_proposals": status.total_proposals,
+                "pending_proposals": status.pending_proposals,
+                "approved_proposals": status.approved_proposals,
+                "active_proposals": status.active_proposals,
+                "rejected_proposals": status.rejected_proposals,
+                "rolled_back_proposals": status.rolled_back_proposals,
+                "total_migrations": status.total_migrations,
+                "successful_migrations": status.successful_migrations,
+                "failed_migrations": status.failed_migrations,
+                "last_evolution_time": status.last_evolution_time,
+                "last_evolution_domain": status.last_evolution_domain,
+                "last_evolution_result": status.last_evolution_result,
+            }
+        except Exception as e:
+            logger.warning("Get evolution status failed: %s", e)
+            return {"error": str(e)}
+
+    def get_evolution_history(self) -> list[dict]:
+        """获取进化历史（Phase AA）。"""
+        if self._self_evolution_manager is None:
+            return []
+        try:
+            return self._self_evolution_manager.get_history()
+        except Exception as e:
+            logger.warning("Get evolution history failed: %s", e)
+            return []
+
+    def get_evolution_proposals(self, state: str | None = None) -> list[dict]:
+        """列出进化提案（Phase AA）。"""
+        if self._self_evolution_manager is None:
+            return []
+        try:
+            from ocos.evolution.evolution_types import EvolutionState
+            state_enum = None
+            if state:
+                state_enum = getattr(EvolutionState, state.upper(), None)
+            proposals = self._self_evolution_manager.list_proposals(state=state_enum)
+            return [
+                {
+                    "proposal_id": p.proposal_id,
+                    "domain": p.domain.value,
+                    "state": p.state.value,
+                    "description": p.description[:100],
+                    "trigger": p.trigger.value,
+                }
+                for p in proposals
+            ]
+        except Exception as e:
+            logger.warning("Get evolution proposals failed: %s", e)
+            return []
+
+    def tick(self) -> dict:
+        """主循环 tick（Phase AA 扩展）。"""
+        result = {"tick": 0, "evolutions": []}
+        if self._self_evolution_manager is not None:
+            try:
+                result = self._self_evolution_manager.tick()
+            except Exception as e:
+                logger.warning("Evolution tick failed: %s", e)
+        return result
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 
