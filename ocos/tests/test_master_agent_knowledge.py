@@ -19,11 +19,11 @@ from ocos.knowledge.synthesis_manager import KnowledgeSynthesisManager
 
 @pytest.fixture
 def knowledge_mgr():
-    mgr = KnowledgeSynthesisManager(agent_id="test-agent")
+    mgr = KnowledgeSynthesisManager()
     # seed 节点
-    n1 = mgr.add_node("Python是编程语言", "python基础", tags=["编程", "语言"])
-    n2 = mgr.add_node("机器学习是AI子领域", "机器学习", tags=["AI", "ML"])
-    n3 = mgr.add_node("神经网络是ML方法", "神经网络", tags=["AI", "DL"])
+    n1 = mgr.add_knowledge_node("Python是编程语言", "python基础", tags=["编程", "语言"])
+    n2 = mgr.add_knowledge_node("机器学习是AI子领域", "机器学习", tags=["AI", "ML"])
+    n3 = mgr.add_knowledge_node("神经网络是ML方法", "神经网络", tags=["AI", "DL"])
     return mgr, n1.node_id, n2.node_id, n3.node_id
 
 
@@ -151,8 +151,9 @@ class TestNoneManager:
     """None 管理器边界。"""
 
     def test_methods_with_none(self):
-        agent = MagicMock()
-        agent._knowledge_synthesis_manager = None
+        from ocos.agent.master_agent import MasterAgent
+        from ocos.identity import AgentIdentity
+        agent = MasterAgent(AgentIdentity(agent_id="test"))
         assert agent.add_knowledge_node("x", "t") == ""
         assert agent.get_knowledge_node("x") is None
         assert agent.synthesize_knowledge(["x"]) == {}
