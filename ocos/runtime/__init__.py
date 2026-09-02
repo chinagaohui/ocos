@@ -6,6 +6,7 @@ Status: RuntimeKernel + TickPipeline + PermissionGateway.
 
 Exports:
     RuntimeKernel       — 心跳引擎 (start/run/stop/shutdown)
+    RuntimeLoop         — 运行时主循环 (Phase M)
     Tick                — 不可变心跳帧
     TickPipeline        — 8 阶段编排引擎
     RuntimeState        — 生命周期状态
@@ -18,9 +19,10 @@ Exports:
 from .capability_policy import CapabilityPolicyProvider
 from .checkpoint import CheckpointEngine, CheckpointRecord
 from .lifecycle import LifecycleManager, InvalidTransitionError
-from .recovery_engine import RecoveryEngine, RecoveryResult  # 39.4 upgrades recovery.py
-from .recovery.recovery_manager import RecoveryManager  # 39.4 new package
+from .recovery_engine import RecoveryEngine, RecoveryResult
+from .recovery.recovery_manager import RecoveryManager
 from .runtime_kernel import RuntimeKernel
+from .runtime_loop import RuntimeLoop, LoopMetrics, create_runtime_loop
 from .runtime_state import RuntimeState, ALLOWED_TRANSITIONS
 from .tick import Tick, tick_id_generator
 from .pipeline import TickPipeline
@@ -29,6 +31,9 @@ from .tick_context import TickContext
 
 __all__ = [
     "RuntimeKernel",
+    "RuntimeLoop",
+    "LoopMetrics",
+    "create_runtime_loop",
     "Tick",
     "TickPipeline",
     "TickStage",
