@@ -95,6 +95,8 @@ class MasterAgent:
         proactive_output_callback: Any = None,
         # Phase Q: 外部交互通道管理（可选注入；由 AgentRuntime 组装）
         external_interaction: Any = None,
+        # Phase R: 持续学习管理器（可选注入；由 AgentRuntime 组装）
+        continuous_learning: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -129,6 +131,9 @@ class MasterAgent:
 
         # Phase Q: External Interaction (optional)
         self._external_interaction = external_interaction
+
+        # Phase R: Continuous Learning (optional)
+        self._continuous_learning = continuous_learning
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -195,6 +200,11 @@ class MasterAgent:
     def external_interaction(self) -> Any:
         """Phase Q: 外部交互管理器."""
         return self._external_interaction
+
+    @property
+    def continuous_learning(self) -> Any:
+        """Phase R: 持续学习管理器."""
+        return self._continuous_learning
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1167,6 +1177,33 @@ class MasterAgent:
             except Exception as e:
                 logger.warning("ExternalInteraction send failed: %s", e)
         return callback
+
+    def record_user_feedback(
+        self,
+        user_response: str,
+        ai_output: str,
+        interaction_type: str = "chat",
+    ) -> None:
+        """记录用户反馈并学习偏好（Phase R）。
+
+        防御式：continuous_learning 未注入时静默忽略。
+        """
+        if self._continuous_learning is None:
+            return
+        try:
+            result = self._continuous_learning.learn_from_interaction(
+                interaction_type=interaction_type,
+                user_response=user_response,
+                ai_output=ai_output,
+            )
+            if result.success and result.preferences_updated:
+                logger.info(
+                    "Learning updated %s preferences: %s",
+                    len(result.preferences_updated),
+                    result.preferences_updated,
+                )
+        except Exception as e:
+            logger.warning("Continuous learning failed: %s", e)
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 
