@@ -117,6 +117,8 @@ class MasterAgent:
         self_evolution_manager: Any = None,
         # Phase AB: 分布式认知管理器（可选注入；由 AgentRuntime 组装）
         distributed_manager: Any = None,
+        # Phase AC: 生态集成管理器（可选注入；由 AgentRuntime 组装）
+        ecosystem_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -184,6 +186,9 @@ class MasterAgent:
 
         # Phase AB: Distributed Cognition (optional)
         self._distributed_manager = distributed_manager
+
+        # Phase AC: Ecosystem Integration (optional)
+        self._ecosystem_manager = ecosystem_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -305,6 +310,11 @@ class MasterAgent:
     def distributed_manager(self) -> Any:
         """Phase AB: 分布式认知管理器."""
         return self._distributed_manager
+
+    @property
+    def ecosystem_manager(self) -> Any:
+        """Phase AC: 生态集成管理器."""
+        return self._ecosystem_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1857,8 +1867,8 @@ class MasterAgent:
             return []
 
     def tick(self) -> dict:
-        """主循环 tick（Phase AA/AB 扩展）。"""
-        result = {"tick": 0, "evolutions": [], "distributed": {}}
+        """主循环 tick（Phase AA/AB/AC 扩展）。"""
+        result = {"tick": 0, "evolutions": [], "distributed": {}, "ecosystem": {}}
         if self._self_evolution_manager is not None:
             try:
                 result["evolutions"] = self._self_evolution_manager.tick()
@@ -1869,9 +1879,95 @@ class MasterAgent:
                 result["distributed"] = self._distributed_manager.get_stats()
             except Exception as e:
                 logger.warning("Distributed tick failed: %s", e)
+        if self._ecosystem_manager is not None:
+            try:
+                result["ecosystem"] = self._ecosystem_manager.get_stats()
+            except Exception as e:
+                logger.warning("Ecosystem tick failed: %s", e)
         return result
 
-    # ── Phase AB: Distributed Cognition ──────────────────────────────
+    # ── Phase AC: Ecosystem Integration ─────────────────────────────
+
+    def register_extension(
+        self,
+        name: str,
+        ext_type: str,
+        version: str = "1.0.0",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """注册新扩展（Phase AC）。"""
+        if self._ecosystem_manager is None:
+            return {"error": "ecosystem_manager not injected"}
+        try:
+            ext = self._ecosystem_manager.register_extension(name, ext_type, version, metadata)
+            if ext:
+                return {"extension_id": ext.extension_id, "name": ext.name, "state": ext.state.value}
+            return {"error": "max extensions reached or registration failed"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def approve_extension(self, extension_id: str) -> dict[str, Any]:
+        """批准扩展（Phase AC）。"""
+        if self._ecosystem_manager is None:
+            return {"error": "ecosystem_manager not injected"}
+        try:
+            result = self._ecosystem_manager.approve_extension(extension_id)
+            return {"success": result}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def integrate_extension(self, extension_id: str) -> dict[str, Any]:
+        """集成扩展（Phase AC）。"""
+        if self._ecosystem_manager is None:
+            return {"error": "ecosystem_manager not injected"}
+        try:
+            result = self._ecosystem_manager.integrate_extension(extension_id)
+            return {"success": result}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def activate_extension(self, extension_id: str) -> dict[str, Any]:
+        """激活扩展（Phase AC）。"""
+        if self._ecosystem_manager is None:
+            return {"error": "ecosystem_manager not injected"}
+        try:
+            result = self._ecosystem_manager.activate_extension(extension_id)
+            return {"success": result}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def load_plugin(
+        self,
+        name: str,
+        entry_point: str,
+        required_permissions: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """加载插件（Phase AC）。"""
+        if self._ecosystem_manager is None:
+            return {"error": "ecosystem_manager not injected"}
+        try:
+            plugin = self._ecosystem_manager.load_plugin(name, entry_point, required_permissions)
+            if plugin:
+                return {"plugin_id": plugin.plugin_id, "name": plugin.name, "state": plugin.state.value}
+            return {"error": "max plugins reached or load failed"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def start_plugin(self, plugin_id: str) -> dict[str, Any]:
+        """启动插件（Phase AC）。"""
+        if self._ecosystem_manager is None:
+            return {"error": "ecosystem_manager not injected"}
+        try:
+            result = self._ecosystem_manager.start_plugin(plugin_id)
+            return {"success": result}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def get_ecosystem_stats(self) -> dict[str, Any]:
+        """获取生态统计信息（Phase AC）。"""
+        if self._ecosystem_manager is None:
+            return {"error": "ecosystem_manager not injected"}
+        return self._ecosystem_manager.get_stats()
 
     def register_cognition_instance(
         self, instance_id: str, host: str, port: int,
