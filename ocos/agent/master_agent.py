@@ -105,6 +105,8 @@ class MasterAgent:
         sleep_dream_manager: Any = None,
         # Phase V: 持久化与恢复管理器（可选注入；由 AgentRuntime 组装）
         persistence_manager: Any = None,
+        # Phase W: 外部集成管理器（可选注入；由 AgentRuntime 组装）
+        server_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -154,6 +156,9 @@ class MasterAgent:
 
         # Phase V: Persistence & Recovery (optional)
         self._persistence_manager = persistence_manager
+
+        # Phase W: External Integration (optional)
+        self._server_manager = server_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -245,6 +250,11 @@ class MasterAgent:
     def persistence_manager(self) -> Any:
         """Phase V: 持久化与恢复管理器."""
         return self._persistence_manager
+
+    @property
+    def server_manager(self) -> Any:
+        """Phase W: 外部集成服务器管理器."""
+        return self._server_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1408,6 +1418,7 @@ class MasterAgent:
         if self._persistence_manager is None:
             return {"error": "persistence_manager not injected"}
         try:
+            from ocos.persistence.manager import RestoreStrategy
             result = self._persistence_manager.restore(
                 RestoreStrategy.SPECIFIC if snapshot_id else RestoreStrategy.LATEST,
                 snapshot_id,
@@ -1443,6 +1454,74 @@ class MasterAgent:
         except Exception as e:
             logger.warning("Auto-save failed: %s", e)
             return None
+
+    def start_server(self) -> bool:
+        """启动外部集成服务器（Phase W）。"""
+        if self._server_manager is None:
+            return False
+        try:
+            return self._server_manager.start()
+        except Exception as e:
+            logger.warning("Start server failed: %s", e)
+            return False
+
+    def stop_server(self) -> bool:
+        """停止外部集成服务器（Phase W）。"""
+        if self._server_manager is None:
+            return True
+        try:
+            return self._server_manager.stop()
+        except Exception as e:
+            logger.warning("Stop server failed: %s", e)
+            return False
+
+    def wait_for_server(self) -> None:
+        """等待服务器运行（阻塞）（Phase W）。"""
+        if self._server_manager is None:
+            return
+        try:
+            self._server_manager.wait()
+        except Exception as e:
+            logger.warning("Wait for server failed: %s", e)
+
+    def get_server_status(self) -> dict[str, Any]:
+        """获取服务器状态（Phase W）。"""
+        if self._server_manager is None:
+            return {"error": "server_manager not injected"}
+        try:
+            return self._server_manager.get_status()
+        except Exception as e:
+            logger.warning("Get server status failed: %s", e)
+            return {"error": str(e)}
+
+    def health_check_server(self) -> dict[str, Any]:
+        """执行服务器健康检查（Phase W）。"""
+        if self._server_manager is None:
+            return {"error": "server_manager not injected"}
+        try:
+            return self._server_manager.health_check()
+        except Exception as e:
+            logger.warning("Health check failed: %s", e)
+            return {"error": str(e)}
+
+    def register_webhook_handler(self, event_type: str, handler: Callable) -> None:
+        """注册 webhook 处理器（Phase W）。"""
+        if self._server_manager is None:
+            return
+        try:
+            self._server_manager.register_webhook_handler(event_type, handler)
+        except Exception as e:
+            logger.warning("Register webhook handler failed: %s", e)
+
+    def send_webhook(self, source: str, event_type: str, data: dict[str, Any]) -> bool:
+        """发送 webhook（出站）（Phase W）。"""
+        if self._server_manager is None:
+            return False
+        try:
+            return self._server_manager.send_webhook(source, event_type, data)
+        except Exception as e:
+            logger.warning("Send webhook failed: %s", e)
+            return False
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 
