@@ -97,6 +97,8 @@ class MasterAgent:
         external_interaction: Any = None,
         # Phase R: 持续学习管理器（可选注入；由 AgentRuntime 组装）
         continuous_learning: Any = None,
+        # Phase S: 知识图谱管理器（可选注入；由 AgentRuntime 组装）
+        knowledge_graph: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -134,6 +136,9 @@ class MasterAgent:
 
         # Phase R: Continuous Learning (optional)
         self._continuous_learning = continuous_learning
+
+        # Phase S: Knowledge Graph (optional)
+        self._knowledge_graph = knowledge_graph
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -205,6 +210,11 @@ class MasterAgent:
     def continuous_learning(self) -> Any:
         """Phase R: 持续学习管理器."""
         return self._continuous_learning
+
+    @property
+    def knowledge_graph(self) -> Any:
+        """Phase S: 知识图谱管理器."""
+        return self._knowledge_graph
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1204,6 +1214,54 @@ class MasterAgent:
                 )
         except Exception as e:
             logger.warning("Continuous learning failed: %s", e)
+
+    def extract_knowledge(self, text: str) -> dict[str, Any]:
+        """从文本提取实体关系知识（Phase S）。
+
+        防御式：knowledge_graph 未注入时返回空结果。
+        """
+        if self._knowledge_graph is None:
+            return {"entities": [], "relations": [], "count": 0}
+        try:
+            result = self._knowledge_graph.learn_from_text(text)
+            return {
+                "entities": len(result.entities),
+                "relations": len(result.relations),
+                "facts": len(result.facts),
+                "confidence": result.confidence,
+            }
+        except Exception as e:
+            logger.warning("Knowledge extraction failed: %s", e)
+            return {"entities": 0, "relations": 0, "facts": 0, "confidence": 0.0}
+
+    def search_knowledge(self, query: str) -> list[dict[str, Any]]:
+        """搜索知识图谱。"""
+        if self._knowledge_graph is None:
+            return []
+        try:
+            entities = self._knowledge_graph.search_entities(query)
+            return [
+                {
+                    "id": e.entity_id,
+                    "name": e.name,
+                    "type": e.entity_type.name,
+                    "confidence": e.confidence,
+                }
+                for e in entities
+            ]
+        except Exception as e:
+            logger.warning("Knowledge search failed: %s", e)
+            return []
+
+    def get_knowledge_stats(self) -> dict[str, Any]:
+        """获取知识图谱统计。"""
+        if self._knowledge_graph is None:
+            return {"error": "knowledge_graph not injected"}
+        try:
+            return self._knowledge_graph.get_stats()
+        except Exception as e:
+            logger.warning("Knowledge stats failed: %s", e)
+            return {"error": str(e)}
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 

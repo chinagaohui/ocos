@@ -1,15 +1,25 @@
-"""Knowledge module — 统一的知识管理接口."""
+"""Phase S: KnowledgeGraph — 用户知识图谱。"""
 
-from ocos.knowledge.manager import (
-    KnowledgeManager,
-    KnowledgeResult,
-    ExternalSource,
-    create_knowledge_manager,
+from .graph import (
+    KnowledgeGraph,
+    Entity,
+    Relation,
+    Fact,
+    EntityType,
+    RelationType,
+)
+from .manager import (
+    KnowledgeGraphManager,
+    ExtractionResult,
 )
 
 __all__ = [
-    "KnowledgeManager",
-    "KnowledgeResult",
-    "ExternalSource",
-    "create_knowledge_manager",
+    "KnowledgeGraph",
+    "Entity",
+    "Relation",
+    "Fact",
+    "EntityType",
+    "RelationType",
+    "KnowledgeGraphManager",
+    "ExtractionResult",
 ]
