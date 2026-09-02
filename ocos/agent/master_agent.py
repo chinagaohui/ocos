@@ -111,6 +111,8 @@ class MasterAgent:
         security_manager: Any = None,
         # Phase Y: 监控与可观测性管理器（可选注入；由 AgentRuntime 组装）
         monitoring_manager: Any = None,
+        # Phase Z: 性能优化管理器（可选注入；由 AgentRuntime 组装）
+        performance_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -169,6 +171,9 @@ class MasterAgent:
 
         # Phase Y: Monitoring & Observability (optional)
         self._monitoring_manager = monitoring_manager
+
+        # Phase Z: Performance Optimization (optional)
+        self._performance_manager = performance_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -275,6 +280,11 @@ class MasterAgent:
     def monitoring_manager(self) -> Any:
         """Phase Y: 监控与可观测性管理器."""
         return self._monitoring_manager
+
+    @property
+    def performance_manager(self) -> Any:
+        """Phase Z: 性能优化管理器."""
+        return self._performance_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
