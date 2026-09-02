@@ -103,6 +103,8 @@ class MasterAgent:
         multimodal_perception: Any = None,
         # Phase U: 自主睡眠与梦境管理器（可选注入；由 AgentRuntime 组装）
         sleep_dream_manager: Any = None,
+        # Phase V: 持久化与恢复管理器（可选注入；由 AgentRuntime 组装）
+        persistence_manager: Any = None,
         # Phase D: Agent 编排（可选注入；默认降级为 simulated）
         orchestration_supervisor: Any = None,
         # Phase L: 自主目标管理（可选注入；由 AgentRuntime 组装）
@@ -149,6 +151,9 @@ class MasterAgent:
 
         # Phase U: Sleep & Dream (optional)
         self._sleep_dream_manager = sleep_dream_manager
+
+        # Phase V: Persistence & Recovery (optional)
+        self._persistence_manager = persistence_manager
 
         # P2-D: 主动输出（可选注入输出通道，默认本地日志）
         self._proactive_output_callback = proactive_output_callback
@@ -235,6 +240,11 @@ class MasterAgent:
     def sleep_dream_manager(self) -> Any:
         """Phase U: 自主睡眠与梦境管理器."""
         return self._sleep_dream_manager
+
+    @property
+    def persistence_manager(self) -> Any:
+        """Phase V: 持久化与恢复管理器."""
+        return self._persistence_manager
 
     # ── EngineBridge accessor (Phase 22-A) ─────────────────────────────
 
@@ -1381,6 +1391,58 @@ class MasterAgent:
         except Exception as e:
             logger.warning("Sleep report failed: %s", e)
             return f"睡眠报告生成失败: {e}"
+
+    def save_state(self, data: dict[str, Any], reason: str = "") -> dict[str, Any]:
+        """保存系统状态（Phase V）。"""
+        if self._persistence_manager is None:
+            return {"error": "persistence_manager not injected"}
+        try:
+            result = self._persistence_manager.save(data, reason=reason)
+            return {"success": result.success, "snapshot_id": result.snapshot_id}
+        except Exception as e:
+            logger.warning("State save failed: %s", e)
+            return {"error": str(e)}
+
+    def restore_state(self, snapshot_id: str = "") -> dict[str, Any]:
+        """恢复系统状态（Phase V）。"""
+        if self._persistence_manager is None:
+            return {"error": "persistence_manager not injected"}
+        try:
+            result = self._persistence_manager.restore(
+                RestoreStrategy.SPECIFIC if snapshot_id else RestoreStrategy.LATEST,
+                snapshot_id,
+            )
+            return {
+                "success": result.success,
+                "snapshot_id": result.snapshot_id,
+                "domains": result.domains_restored,
+            }
+        except Exception as e:
+            logger.warning("State restore failed: %s", e)
+            return {"error": str(e)}
+
+    def get_persistence_stats(self) -> dict[str, Any]:
+        """获取持久化统计。"""
+        if self._persistence_manager is None:
+            return {"error": "persistence_manager not injected"}
+        try:
+            return self._persistence_manager.get_stats()
+        except Exception as e:
+            logger.warning("Persistence stats failed: %s", e)
+            return {"error": str(e)}
+
+    def auto_save_if_needed(self, data: dict[str, Any], tick: int = 0) -> Optional[dict[str, Any]]:
+        """自动保存（基于时间间隔）。"""
+        if self._persistence_manager is None:
+            return None
+        try:
+            result = self._persistence_manager.auto_save_if_needed(data, tick)
+            if result is None:
+                return {"saved": False, "reason": "interval_not_reached"}
+            return {"saved": True, "snapshot_id": result.snapshot_id}
+        except Exception as e:
+            logger.warning("Auto-save failed: %s", e)
+            return None
 
     # ── 辅助 ──────────────────────────────────────────────────────────
 
