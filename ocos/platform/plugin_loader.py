@@ -206,9 +206,9 @@ class PluginLoader:
         # 2. 重复加载检测
         existing_pid = self._entry_point_index.get(manifest.entry_point)
         if existing_pid is not None:
-            warnings.warn(
-                f"重复加载检测: entry_point '{manifest.entry_point}' "
-                f"已被加载为 plugin_id='{existing_pid}'，返回已有 ID"
+            logger.info(
+                "重复加载检测: entry_point '%s' 已被加载为 plugin_id='%s'，返回已有 ID",
+                manifest.entry_point, existing_pid,
             )
             return LoadResult(
                 success=True,

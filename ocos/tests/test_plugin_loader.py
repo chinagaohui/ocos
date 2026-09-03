@@ -16,6 +16,7 @@ D3 Plugin Loader — 测试套件。
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import tempfile
 from pathlib import Path
@@ -521,13 +522,14 @@ class TestLoad:
         # 确认 Sandbox 中也回滚了
         assert loader.loaded_count == 0
 
-    def test_load_duplicate_entry_point(self, loader: PluginLoader, valid_manifest: PluginManifest) -> None:
+    def test_load_duplicate_entry_point(self, loader: PluginLoader, valid_manifest: PluginManifest, caplog) -> None:
         """相同 entry_point 重复加载返回已有 plugin_id。"""
         result1 = loader.load(valid_manifest)
         assert result1.success
 
-        with pytest.warns(UserWarning, match="重复加载"):
+        with caplog.at_level(logging.INFO, logger="ocos.platform.plugin_loader"):
             result2 = loader.load(valid_manifest)
+        assert "重复加载" in caplog.text
         assert result2.success  # 返回成功（已有）
         assert result2.code == LoaderErrorCode.LOAD_DUPLICATE
         assert result2.plugin_id == result1.plugin_id  # 相同 ID

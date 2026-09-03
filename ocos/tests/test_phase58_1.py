@@ -19,17 +19,17 @@ from ocos.living_test.protocol_model import (
     DayResult, DayStatus, BirthSnapshot,
 )
 from ocos.living_test.birth_check import birth_check, BirthCheckResult
-from ocos.living_test.day1_basic_life import test_basic_life, BasicLifeScenario
-from ocos.living_test.day2_memory_survival import test_memory_survival, MemorySurvivalScenario
+from ocos.living_test.day1_basic_life import test_basic_life as _test_basic_life, BasicLifeScenario
+from ocos.living_test.day2_memory_survival import test_memory_survival as _test_memory_survival, MemorySurvivalScenario
 from ocos.living_test.day3_identity_stability import (
-    test_identity_stability, IdentityStabilityScenario,
+    test_identity_stability as _test_identity_stability, IdentityStabilityScenario,
 )
-from ocos.living_test.day4_evolution import test_evolution, EvolutionScenario
+from ocos.living_test.day4_evolution import test_evolution as _test_evolution, EvolutionScenario
 from ocos.living_test.day5_capability_reality import (
-    test_capability_reality, CapabilityRealityScenario,
+    test_capability_reality as _test_capability_reality, CapabilityRealityScenario,
 )
-from ocos.living_test.day6_long_runtime import test_long_runtime, LongRuntimeScenario, RuntimeMetrics
-from ocos.living_test.day7_resurrection import test_resurrection, ResurrectionScenario
+from ocos.living_test.day6_long_runtime import test_long_runtime as _test_long_runtime, LongRuntimeScenario, RuntimeMetrics
+from ocos.living_test.day7_resurrection import test_resurrection as _test_resurrection, ResurrectionScenario
 from ocos.living_test.living_score import compute_living_score
 from ocos.living_test.living_test_protocol import (
     run_living_test, quick_living_check, LivingTestConfig,
@@ -106,7 +106,7 @@ class TestBirthCheck:
 class TestBasicLife:
     def test_vanilla_fails_without_hooks(self):
         """AUD-F4: 钩子缺失 → fail-closed（诚实失败，不再模拟通过）。"""
-        r = test_basic_life()
+        r = _test_basic_life()
         assert not r.passed
         assert r.day == LivingTestDay.BASIC_LIFE
 
@@ -124,7 +124,7 @@ class TestBasicLife:
             executor_handler=lambda: called.append("exe"),
             interpreter_handler=lambda: called.append("itp"),
         )
-        r = test_basic_life(sc)
+        r = _test_basic_life(sc)
         assert r.passed
         assert "perc" in called
         assert "dec" in called
@@ -132,24 +132,24 @@ class TestBasicLife:
     def test_failing_handler_marks_warning(self):
         def fail(): raise RuntimeError("boom")
         sc = BasicLifeScenario(perception_handler=fail)
-        r = test_basic_life(sc)
+        r = _test_basic_life(sc)
         assert not r.sub_results["writing:perception"]
         assert "writing:perception" in r.failures
 
     def test_no_context_loss(self):
         sc = BasicLifeScenario(context_lost_count=0, repeated_question_count=0)
-        r = test_basic_life(sc)
+        r = _test_basic_life(sc)
         assert r.sub_results["dialogue:no_context_loss"]
         assert r.sub_results["dialogue:no_repeated_questions"]
 
     def test_context_loss_detected(self):
         sc = BasicLifeScenario(context_lost_count=3, repeated_question_count=2)
-        r = test_basic_life(sc)
+        r = _test_basic_life(sc)
         assert not r.sub_results["dialogue:no_context_loss"]
         assert not r.sub_results["dialogue:no_repeated_questions"]
 
     def test_max_score_15(self):
-        assert test_basic_life().max_score == 15
+        assert _test_basic_life().max_score == 15
 
 
 # ══════════════════════════════════════════════════
@@ -159,7 +159,7 @@ class TestBasicLife:
 class TestMemorySurvival:
     def test_vanilla_fails_without_hooks(self):
         """AUD-F4: 钩子缺失 → fail-closed（诚实失败，不再模拟通过）。"""
-        r = test_memory_survival()
+        r = _test_memory_survival()
         assert not r.passed
         assert r.day == LivingTestDay.MEMORY_SURVIVAL
 
@@ -171,19 +171,19 @@ class TestMemorySurvival:
             restore_handler=lambda: {"ok": True},
             recall_handler=lambda q: "因为决定使用SQLite作为缓存，满足早期快速验证需求",
         )
-        r = test_memory_survival(sc)
+        r = _test_memory_survival(sc)
         assert r.passed
 
     def test_restore_failure_warns(self):
         sc = MemorySurvivalScenario(
             restore_handler=lambda: (_ for _ in ()).throw(Exception("fail"))
         )
-        r = test_memory_survival(sc)
+        r = _test_memory_survival(sc)
         assert not r.sub_results["persist:restore"]
         assert r.status == DayStatus.WARNING
 
     def test_max_score_15(self):
-        assert test_memory_survival().max_score == 15
+        assert _test_memory_survival().max_score == 15
 
 
 # ══════════════════════════════════════════════════
@@ -197,12 +197,12 @@ class TestIdentityStability:
             drift_detector=lambda: True,
             constitution_guard=lambda x: True,
         )
-        r = test_identity_stability(sc)
+        r = _test_identity_stability(sc)
         assert r.passed
         assert r.score == 20
 
     def test_no_guards_all_breached(self):
-        r = test_identity_stability()
+        r = _test_identity_stability()
         assert r.score == 0
         assert r.status == DayStatus.FAIL
 
@@ -211,26 +211,26 @@ class TestIdentityStability:
         sc = IdentityStabilityScenario(
             identity_guard=lambda prompt: "修改" in prompt or "核心" in prompt,
         )
-        r = test_identity_stability(sc)
+        r = _test_identity_stability(sc)
         assert r.sub_results["attack:prompt_injection_blocked"]
 
     def test_identity_drift_detected(self):
         sc = IdentityStabilityScenario(
             drift_detector=lambda: False,  # drift detected
         )
-        r = test_identity_stability(sc)
+        r = _test_identity_stability(sc)
         assert not r.sub_results["attack:identity_unchanged"]
 
     def test_constitution_bypass_blocked(self):
         sc = IdentityStabilityScenario(
             constitution_guard=lambda change: "降低" in change,
         )
-        r = test_identity_stability(sc)
+        r = _test_identity_stability(sc)
         assert r.sub_results["attack:constitution_bypass_blocked"]
 
     def test_identity_drift_flag_set(self):
         sc = IdentityStabilityScenario(identity_guard=None)  # no guard → breach
-        r = test_identity_stability(sc)
+        r = _test_identity_stability(sc)
         assert r.identity_drifted
 
     def test_max_score_20(self):
@@ -238,7 +238,7 @@ class TestIdentityStability:
             identity_guard=lambda x: True,
             constitution_guard=lambda x: True,
         )
-        assert test_identity_stability(sc).max_score == 20
+        assert _test_identity_stability(sc).max_score == 20
 
 
 # ══════════════════════════════════════════════════
@@ -248,11 +248,11 @@ class TestIdentityStability:
 class TestEvolution:
     def test_vanilla_passes_with_self_modify_blocked(self):
         sc = EvolutionScenario(self_modify_guard=lambda: True)
-        r = test_evolution(sc)
+        r = _test_evolution(sc)
         assert r.sub_results["evolution:self_modify_blocked"]
 
     def test_no_self_modify_guard_warns(self):
-        r = test_evolution()
+        r = _test_evolution()
         assert not r.sub_results["evolution:self_modify_blocked"]
         assert any("Self-modification NOT blocked" in w for w in r.warnings)
 
@@ -265,12 +265,12 @@ class TestEvolution:
             migrator=lambda p: True,
             self_modify_guard=lambda: True,
         )
-        r = test_evolution(sc)
+        r = _test_evolution(sc)
         assert r.passed
         assert r.score == 15
 
     def test_max_score_15(self):
-        assert test_evolution().max_score == 15
+        assert _test_evolution().max_score == 15
 
 
 # ══════════════════════════════════════════════════
@@ -279,7 +279,7 @@ class TestEvolution:
 
 class TestCapabilityReality:
     def test_vanilla_no_guards_fails_malicious(self):
-        r = test_capability_reality()
+        r = _test_capability_reality()
         assert not r.sub_results["guard:rm_blocked"]
         assert not r.sub_results["guard:core_modify_blocked"]
         assert not r.sub_results["guard:permission_bypass_blocked"]
@@ -290,17 +290,17 @@ class TestCapabilityReality:
             core_file_validator=lambda p: True,
             permission_bypass_guard=lambda: True,
         )
-        r = test_capability_reality(sc)
+        r = _test_capability_reality(sc)
         assert r.sub_results["guard:rm_blocked"]
         assert r.sub_results["guard:core_modify_blocked"]
         assert r.sub_results["guard:permission_bypass_blocked"]
 
     def test_security_warning_on_rm_unblocked(self):
-        r = test_capability_reality()
+        r = _test_capability_reality()
         assert any("rm -rf / NOT blocked" in w for w in r.warnings)
 
     def test_max_score_15(self):
-        assert test_capability_reality().max_score == 15
+        assert _test_capability_reality().max_score == 15
 
 
 # ══════════════════════════════════════════════════
@@ -310,7 +310,7 @@ class TestCapabilityReality:
 class TestLongRuntime:
     def test_simulates_full_run(self):
         sc = LongRuntimeScenario(total_hours=24.0, sample_interval_hours=6.0)
-        r = test_long_runtime(sc)
+        r = _test_long_runtime(sc)
         assert len(sc.metrics_history) == 4  # 24/6
 
     def test_no_decline_with_stable_metrics(self):
@@ -322,11 +322,11 @@ class TestLongRuntime:
                                  memory_growth_rate=0.01, contradiction_count=0)
 
         sc.metric_collector = stable_collector
-        r = test_long_runtime(sc)
+        r = _test_long_runtime(sc)
         assert r.sub_results["runtime:no_health_decline"]
 
     def test_max_score_15(self):
-        assert test_long_runtime().max_score == 15
+        assert _test_long_runtime().max_score == 15
 
 
 # ══════════════════════════════════════════════════
@@ -346,7 +346,7 @@ class TestResurrection:
             },
             query_handler=lambda q: "昨天正在开发Phase 58.1的Resurrection Test",
         )
-        r = test_resurrection(sc)
+        r = _test_resurrection(sc)
         assert r.passed
         assert r.score == 10
 
@@ -354,7 +354,7 @@ class TestResurrection:
         sc = ResurrectionScenario(
             restore=lambda: (_ for _ in ()).throw(Exception("disk error"))
         )
-        r = test_resurrection(sc)
+        r = _test_resurrection(sc)
         assert r.status == DayStatus.FAIL
         assert not r.sub_results["res:restored"]
 
@@ -368,7 +368,7 @@ class TestResurrection:
                 "memory": [], "goals": [],
             }
         )
-        r = test_resurrection(sc, birth=birth)
+        r = _test_resurrection(sc, birth=birth)
         assert not r.sub_results["res:identity_preserved"]
 
     def test_timeline_query(self):
@@ -376,14 +376,14 @@ class TestResurrection:
             restore=lambda: {"identity": {"anchor": "OCOS-v1.0"}, "memory": [], "goals": []},
             query_handler=lambda q: "昨天完成Day 6长运行测试，系统24小时稳定",
         )
-        r = test_resurrection(sc)
+        r = _test_resurrection(sc)
         assert r.sub_results["res:timeline_correct"]
 
     def test_max_score_10(self):
         sc = ResurrectionScenario(
             restore=lambda: {"identity": {"anchor": "OCOS-v1.0"}, "memory": [], "goals": []},
         )
-        assert test_resurrection(sc).max_score == 10
+        assert _test_resurrection(sc).max_score == 10
 
 
 # ══════════════════════════════════════════════════
