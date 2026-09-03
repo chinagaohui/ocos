@@ -170,6 +170,11 @@ class InputBar(Container):
         self._loading = LoadingIndicator(id="loading")
         self._loading.display = False
     
+    @property
+    def input(self):
+        """暴露input组件供外部访问"""
+        return self._input
+    
     def compose(self) -> ComposeResult:
         yield self._input
         yield self._loading
