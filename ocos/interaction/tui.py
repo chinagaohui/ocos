@@ -88,7 +88,7 @@ class ChatScreen(App):
         content-align: right middle;
         padding-right: 2;
         color: #6a6a6a;
-        font-style: italic;
+        text-style: italic;
     }
     
     #status {
