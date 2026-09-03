@@ -5,6 +5,7 @@ from .attention_types import (
     AttentionScoringWeights,
     AttentionState,
     AttentionTrace,
+    FocusSelectionResult,
     FocusType,
     InertiaPolicy,
 )
