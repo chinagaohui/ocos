@@ -344,8 +344,19 @@ body {
   flex-direction: column;
   gap: 12px;
 }
+.chat-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.section-label {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  color: var(--cyan);
+  text-transform: uppercase;
+}
 .chat-log {
-  height: 120px;
+  height: 140px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -559,8 +570,11 @@ body {
 
   <!-- 底部栏 -->
   <footer class="bottom-bar">
-    <div class="chat-log" id="chatMessages">
-      <div class="chat-msg bot">系统初始化完成。等待神经连接...</div>
+    <div class="chat-section">
+      <div class="section-label">神经对话</div>
+      <div class="chat-log" id="chatMessages">
+        <div class="chat-msg bot">系统初始化完成。等待神经连接...</div>
+      </div>
     </div>
     <div class="input-area">
       <input id="chatInput" type="text" placeholder="输入神经脉冲..." autocomplete="off">
