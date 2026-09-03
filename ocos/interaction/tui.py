@@ -1,9 +1,10 @@
 """OCOS TUI - 复刻 Hermes Agent 对话界面
 
 设计参考: ~/.hermes/hermes-agent/apps/desktop/src/components/assistant-ui/
-- 用户消息: 右对齐气泡
-- 助手消息: 左对齐文本
-- 底部输入框 + 状态栏
+- 用户消息: 右对齐，无标签
+- 助手消息: 左对齐，无标签
+- 输入框: > 提示符
+- 状态栏: 橙色高亮
 """
 
 from __future__ import annotations
@@ -59,13 +60,13 @@ class ChatScreen(App):
     
     .user-msg {
         text-align: right;
-        margin-bottom: 1;
-        color: #e0e0e0;
+        margin-bottom: 0.5;
+        color: #d4d4d4;
     }
     
     .bot-msg {
         text-align: left;
-        margin-bottom: 1;
+        margin-bottom: 0.5;
         color: #b5cea8;
     }
     
@@ -75,12 +76,24 @@ class ChatScreen(App):
         background: #252525;
     }
     
+    #input-container {
+        height: 2;
+        content-align: left middle;
+        padding-left: 2;
+    }
+    
+    #input-prompt {
+        color: #ce9178;
+        text-style: bold;
+    }
+    
     #input {
         height: 2;
-        background: #252525;
+        background: transparent;
         color: #d4d4d4;
         border: none;
-        padding-left: 2;
+        padding: 0;
+        margin: 0;
     }
     
     #input-hint {
@@ -93,10 +106,11 @@ class ChatScreen(App):
     
     #status {
         height: 3;
-        background: #007acc;
-        color: #ffffff;
+        background: #ce9178;
+        color: #1a1a1a;
         content-align: left middle;
         padding-left: 2;
+        text-style: bold;
     }
     """
     
@@ -119,8 +133,10 @@ class ChatScreen(App):
             yield Static("ocos chat", id="title")
         yield Log(id="chat")
         with Vertical(id="input-area"):
-            yield Input(placeholder="", id="input")
-            yield Static("输入消息... (Enter 发送)", id="input-hint")
+            with Container(id="input-container"):
+                yield Static(">", id="input-prompt")
+                yield Input(placeholder="", id="input")
+            yield Static("Enter 发送 · Ctrl+L 清空 · Ctrl+S 保存", id="input-hint")
         yield Static("", id="status")
     
     def on_mount(self) -> None:
@@ -151,10 +167,11 @@ class ChatScreen(App):
     def _add_message(self, text: str, is_user: bool) -> None:
         msg = {"text": text, "is_user": is_user, "timestamp": datetime.now()}
         self.messages.append(msg)
-        role = "你" if is_user else "OCOS"
         time = msg["timestamp"].strftime("%H:%M:%S")
         cls = "user-msg" if is_user else "bot-msg"
-        self.query_one("#chat", Log).write_line(f"[{cls}]{role}[/]{cls}] {time}\n{text}")
+        # 不显示角色标签，直接显示消息内容
+        self.query_one("#chat", Log).write_line(f"[{cls}]{time} ", style=f"{cls} ")
+        self.query_one("#chat", Log).write_line(f"[{cls}]{text}[/{cls}]")
     
     async def _send_message(self) -> None:
         inp = self.query_one("#input", Input)
