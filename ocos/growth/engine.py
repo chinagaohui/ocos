@@ -60,6 +60,35 @@ REQUIRED_PROPOSAL_FIELDS = ("rationale", "file_path", "new_content")
 # LLM 响应中试图输出 patch (而非明确放弃) 的信号 — 触发精确性重试
 _WANTED_PATCH_RE = re.compile(r'"old_snippet"\s*:\s*"[^"]+"', re.DOTALL)
 
+# 自动执行规模护栏 (防 LLM 大段删除/重写 — 语义破坏语法门拦不住):
+#   - 净删除 > MAX_NET_DELETION_LINES 行 → 拒绝自动执行 (需人工)
+#   - 改动后行数 < 原文 50% → 拒绝 (疑似大段删改)
+MAX_NET_DELETION_LINES = 30
+MIN_KEEP_RATIO = 0.5
+
+
+def _deletion_scale(original: str, proposed: str) -> tuple[int, float]:
+    """返回 (净删除行数, 保留比例)。original 为空(新文件) → (0, 1.0)。"""
+    if not original.strip():
+        return 0, 1.0
+    orig_lines = len(original.splitlines())
+    prop_lines = len(proposed.splitlines())
+    net_deleted = max(0, orig_lines - prop_lines)
+    keep_ratio = prop_lines / orig_lines if orig_lines else 1.0
+    return net_deleted, keep_ratio
+
+
+def _exceeds_scale_guard(original: str, proposed: str) -> tuple[bool, str]:
+    """规模护栏: 超限返回 (True, 原因)。"""
+    net_deleted, keep_ratio = _deletion_scale(original, proposed)
+    if net_deleted > MAX_NET_DELETION_LINES:
+        return True, (f"net deletion {net_deleted} > {MAX_NET_DELETION_LINES} lines "
+                      "(需人工审批)")
+    if keep_ratio < MIN_KEEP_RATIO:
+        return True, (f"proposed size {keep_ratio:.0%} < {MIN_KEEP_RATIO:.0%} of original "
+                      "(疑似大段删改, 需人工审批)")
+    return False, ""
+
 
 # ── 模型 ──────────────────────────────────────────────────────────
 
@@ -102,7 +131,7 @@ class GrowthResult:
     """一次优化的完整结果 (记录 + 汇报)。"""
 
     proposal_id: str = ""
-    status: str = "unknown"         # proposed / skipped / applied / rolled_back / rejected
+    status: str = "unknown"         # proposed / skipped / applied / rolled_back / rejected / guarded
     reason: str = ""
     file_path: str = ""
     tests_passed: int = 0
@@ -446,6 +475,19 @@ class GrowthAnalyzer:
                     original.count(old_snippet))
                 return None
 
+        # 规模护栏 (第一道防线): 大段删除/重写的 patch 在解析层即拒绝,
+        # 不让危险提案进入 preview/执行
+        if patch_mode:
+            original = real_path.read_text(encoding="utf-8", errors="replace")
+            proposed_full = original.replace(old_snippet, new_snippet, 1)
+        else:
+            original = real_path.read_text(encoding="utf-8", errors="replace")
+            proposed_full = new_content
+        violates, why = _exceeds_scale_guard(original, proposed_full)
+        if violates:
+            logger.warning("GrowthAnalyzer: scale guard rejected %s: %s", file_path, why)
+            return None
+
         # 不允许动治理/宪法/权限模块
         for forbidden in ("constitution", "governance", "permission", "identity"):
             if forbidden in file_path.lower():
@@ -606,11 +648,25 @@ class GrowthOptimizer:
             result.duration_ms = int((time.monotonic() - start) * 1000)
             return result
 
+        # 2.5 规模护栏 — 防 LLM 大段删除/重写 (语义破坏语法门拦不住)
+        target = self._root / proposal.file_path
+        orig_text = target.read_text(encoding="utf-8") if target.exists() else ""
+        if proposal.old_snippet:  # patch 式: 合成新全文再评估
+            proposed_text = orig_text.replace(proposal.old_snippet,
+                                              proposal.new_snippet, 1)
+        else:  # 整文件式
+            proposed_text = proposal.new_content
+        guard_violation, guard_reason = _exceeds_scale_guard(orig_text, proposed_text)
+        if guard_violation:
+            result.status = "guarded"
+            result.reason = guard_reason
+            result.duration_ms = int((time.monotonic() - start) * 1000)
+            return result
+
         # 3. 快照
         original = self._snapshot(proposal.file_path)
 
         # 4. 变异 (经 modifier 或内置) — patch 式先做精确替换
-        target = self._root / proposal.file_path
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             if modifier is not None:

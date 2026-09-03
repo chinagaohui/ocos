@@ -125,7 +125,7 @@ class TestAnalyzer:
             "worthwhile": True,
             "rationale": "TaskGroup 替代 gather 提升取消传播",
             "file_path": _TARGET_FILE,
-            "new_content": "# placeholder new content",
+            "new_content": _REAL_CONTENT,  # 真实大小 → 过规模护栏
             "applicability": 0.8,
         }
         a = GrowthAnalyzer(llm_fn=_fake_llm(payload))
@@ -164,6 +164,38 @@ class TestAnalyzer:
         a = GrowthAnalyzer(llm_fn=_fake_llm(payload))
         assert a.analyze(_sig()) is None
 
+    def test_scale_guard_rejects_mass_deletion_patch(self):
+        """规模护栏 (解析层): 大段删除 patch → 拒绝, 危险提案不出 preview。"""
+        original = (PROJECT_ROOT / _TARGET_FILE).read_text(encoding="utf-8")
+        # old_snippet = 文件前 100 行, new_snippet 只有 1 行 → 净删 > 30
+        lines = original.splitlines()
+        old_block = "\n".join(lines[:120])
+        payload = {
+            "worthwhile": True, "rationale": "删除冗余",
+            "file_path": _TARGET_FILE,
+            "old_snippet": old_block,
+            "new_snippet": "def replaced(): pass",
+            "applicability": 0.95,
+        }
+        a = GrowthAnalyzer(llm_fn=_fake_llm(payload))
+        assert a.analyze(_sig()) is None
+
+    def test_scale_guard_allows_small_patch(self):
+        """规模护栏: 小范围精确 patch 正常通过。"""
+        original = (PROJECT_ROOT / _TARGET_FILE).read_text(encoding="utf-8")
+        marker = "def _run_tests(self, file_path: str)"
+        assert original.count(marker) == 1
+        payload = {
+            "worthwhile": True, "rationale": "重命名",
+            "file_path": _TARGET_FILE,
+            "old_snippet": marker,
+            "new_snippet": "def _verify_change(self, file_path: str)",
+            "applicability": 0.8,
+        }
+        a = GrowthAnalyzer(llm_fn=_fake_llm(payload))
+        p = a.analyze(_sig())
+        assert p is not None and p.old_snippet == marker
+
     def test_not_worthwhile_returns_none(self):
         a = GrowthAnalyzer(llm_fn=_fake_llm(
             {"worthwhile": False, "rationale": "与 OCOS 无关"}))
@@ -196,7 +228,8 @@ class TestAnalyzer:
             return "```json\n" + json.dumps({
                 "worthwhile": True, "rationale": "r",
                 "file_path": _TARGET_FILE,
-                "new_content": "y", "applicability": 0.7}) + "\n```"
+                "new_content": _REAL_CONTENT,  # 真实大小 → 过护栏
+                "applicability": 0.7}) + "\n```"
         a = GrowthAnalyzer(llm_fn=_fenced)
         p = a.analyze(_sig())
         assert p is not None and p.applicability == 0.7
@@ -287,6 +320,53 @@ class TestOptimizer:
         r = o.apply(p, modifier=_Refuser())
         assert r.status == "skipped"
         assert "refused" in r.reason
+
+    def test_executor_guard_mass_deletion(self, tmp_path):
+        """执行层护栏: 直接注入的大段删除提案 → guarded, 文件不动。"""
+        target = tmp_path / "ocos" / "demo" / "big.py"
+        target.parent.mkdir(parents=True)
+        original = "\n".join(f"def f{i}():\n    return {i}\n" for i in range(60))
+        target.write_text(original)
+        # 整文件式: 只保留 5 行 → 净删 55 > 30
+        p = GrowthProposal(signal_topic="t", rationale="r",
+                           file_path="ocos/demo/big.py",
+                           new_content="def kept():\n    pass\n", applicability=0.9)
+        r = GrowthOptimizer(tmp_path).apply(p)
+        assert r.status == "guarded"
+        assert "net deletion" in r.reason
+        assert target.read_text() == original  # 零写入
+
+    def test_executor_guard_low_keep_ratio(self, tmp_path):
+        """执行层护栏: 保留比例 <50% → guarded。"""
+        target = tmp_path / "ocos" / "demo" / "big.py"
+        target.parent.mkdir(parents=True)
+        original = "\n".join(f"def f{i}():\n    return {i}\n" for i in range(40))
+        target.write_text(original)
+        # 40 行原文 → 22 行保留 (55%)? 低于阈值需 <50% → 用 15 行 (37.5%)
+        kept = "\n".join(f"def g{i}():\n    pass\n" for i in range(5))  # 10 行
+        p = GrowthProposal(signal_topic="t", rationale="r",
+                           file_path="ocos/demo/big.py",
+                           new_content=kept, applicability=0.9)
+        r = GrowthOptimizer(tmp_path).apply(p)
+        assert r.status == "guarded"
+        assert target.read_text() == original
+
+    def test_executor_guard_small_patch_passes(self, tmp_path):
+        """执行层: 小范围 patch 不触发护栏, 正常 applied。"""
+        target = tmp_path / "ocos" / "demo" / "mod.py"
+        target.parent.mkdir(parents=True)
+        original = "VALUE = 'original'\n"
+        target.write_text(original)
+        p = GrowthProposal(signal_topic="t", rationale="r",
+                           file_path="ocos/demo/mod.py",
+                           old_snippet="VALUE = 'original'",
+                           new_snippet="VALUE = 'changed'",
+                           applicability=0.9)
+        r = GrowthOptimizer(tmp_path).apply(p)
+        # 迷你仓库无对应 test 文件 → import 门 (ocos.demo.mod 不可导入
+        # 因 tmp 树无 __init__ 链) → 可能 rolled_back。检查非 guarded 即护栏通过
+        assert r.status != "guarded", f"护栏误伤小 patch: {r.reason}"
+        assert r.status in ("applied", "rolled_back", "rejected")
 
 
 # ── G4: 端到端编排 ────────────────────────────────────────────────
