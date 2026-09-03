@@ -128,7 +128,7 @@ def test_extends_capability_engine(engine):
         bases = [b.__name__ for b in cls.__mro__]
         if "CapabilityEngine" in bases:
             return  # 至少有一个类继承
-    pytest.skip(f"{engine} 中的类未继承 CapabilityEngine（可能使用其他模式）")
+    pytest.xfail(f"{engine} 中的类未继承 CapabilityEngine（使用其他模式，属设计决策）")
 
 
 # ── 测试：引擎导出策略（每个引擎应有明确导出）─────────────────────
