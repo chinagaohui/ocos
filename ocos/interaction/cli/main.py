@@ -46,7 +46,7 @@ from ocos.interaction.cli.commands.organ import (
 )
 from ocos.interaction.cli.commands.plan import cmd_plan
 from ocos.interaction.cli.commands.run import cmd_run
-from ocos.interaction.cli.commands.self import cmd_self_identity, cmd_self_status
+from ocos.interaction.cli.commands.self import cmd_self
 from ocos.interaction.cli.commands.trace import cmd_trace_show
 from ocos.interaction.cli.parser import build_parser
 
@@ -127,13 +127,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
 
         elif args.command == "self":
-            if args.self_action == "status":
-                return cmd_self_status(args, session, ctx)
-            elif args.self_action == "identity":
-                return cmd_self_identity(args, session, ctx)
-            else:
-                parser.print_help()
-                return 1
+            return cmd_self(args, session)
 
         elif args.command == "trace":
             if args.trace_action == "show":

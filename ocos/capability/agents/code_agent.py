@@ -1,6 +1,7 @@
 """code_agent — 代码代理（本地执行沙箱）。
 
 Freeze Phase 46: 使用 subprocess 执行 Python 代码，不 import OCOS 内部模块。
+Phase 47 Self-Modification Test: 添加了 get_version() 方法。
 """
 
 from __future__ import annotations
@@ -17,10 +18,16 @@ class CodeAgent:
     ABI: execute(code, action="execute", language="python") -> dict
     """
 
+    _version = "1.1.0"  # Phase 47: 自我修改测试版本
+
     def __init__(self, prefix: str = "Code") -> None:
         self._prefix = prefix
         self._timeout = 10  # seconds
         self._max_output = 4000
+
+    def get_version(self) -> str:
+        """返回代码代理版本。"""
+        return self._version
 
     def _lint_syntax(self, code: str) -> tuple[bool, str]:
         """检查 Python 语法合法性（静态，不执行）."""

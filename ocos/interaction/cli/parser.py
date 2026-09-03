@@ -164,11 +164,27 @@ def _add_belief_parser(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_self_parser(subparsers: argparse._SubParsersAction) -> None:
-    self_p = subparsers.add_parser("self", help="Self inspection")
+    self_p = subparsers.add_parser("self", help="Self inspection and modification")
     self_sub = self_p.add_subparsers(dest="self_action", title="self subcommands")
 
+    # ocos self status
     self_sub.add_parser("status", help="Show self status")
+
+    # ocos self identity
     self_sub.add_parser("identity", help="Show identity boundary")
+
+    # ocos self mod --file "path" --content "..." --task "description"
+    mod = self_sub.add_parser("mod", help="Modify OCOS code (dry-run mode)")
+    mod.add_argument("--file", type=str, required=True, help="Target file path (relative to project root)")
+    mod.add_argument("--content", type=str, default="", help="New content")
+    mod.add_argument("--delete", action="store_true", help="Delete the file instead")
+    mod.add_argument("--task", type=str, required=True, help="Task description")
+    mod.add_argument("--dry-run", action="store_true", default=True, help="Preview only (default)")
+    mod.add_argument("--live", action="store_true", help="Execute live (requires approval)")
+
+    # ocos self validate --file "path"
+    validate = self_sub.add_parser("validate", help="Validate file path for modification")
+    validate.add_argument("--file", type=str, required=True, help="File path to validate")
 
 
 def _add_trace_parser(subparsers: argparse._SubParsersAction) -> None:
