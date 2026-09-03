@@ -1,10 +1,11 @@
-"""OCOS TUI - 终端交互界面
+"""OCOS TUI - 简洁聊天界面
 
-基于Textual构建的终端用户界面，复刻openclaw的TUI风格。
-连接OCOS API (localhost:8900) 提供对话和状态监控。
+复刻 openclaw TUI 风格：极简对话界面，无多余面板。
+顶部状态栏 + 中间对话区 + 底部输入框。
 
 Usage:
     python -m ocos.interaction.tui
+    ocos chat
 """
 
 from __future__ import annotations
@@ -12,195 +13,46 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import httpx
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import (
-    Header,
-    Footer,
-    Static,
-    DataTable,
-    TextArea,
-    Button,
-    Input,
-    LoadingIndicator,
-    ListView,
-    ListItem,
-    SelectionList,
-    TabbedContent,
-    TabPane,
-)
+from textual.containers import Container, Vertical
+from textual.widgets import Header, Footer, Static, Input, Button, Markdown
 from textual.reactive import reactive
-from textual.message import Message
 
 
-# ── 配置 ──────────────────────────────────────────────────────
 API_BASE = "http://localhost:8900"
-DEFAULT_SESSION = "ocos-tui"
 
 
-# ── 消息数据类 ────────────────────────────────────────────────
-class ChatMessage:
-    """对话消息"""
+class MessageBubble(Static):
+    """单条消息气泡"""
+    
     def __init__(self, text: str, is_user: bool, timestamp: datetime | None = None):
+        super().__init__()
         self.text = text
         self.is_user = is_user
         self.timestamp = timestamp or datetime.now()
     
-    @property
-    def display_time(self) -> str:
-        return self.timestamp.strftime("%H:%M:%S")
-
-
-class OCOSStatus:
-    """OCOS系统状态"""
-    def __init__(self):
-        self.episodes: int = 0
-        self.beliefs: int = 0
-        self.patterns: int = 0
-        self.engines: dict[str, str] = {}
-        self.goals: list[dict] = []
-        self.is_online: bool = False
-
-
-# ── TUI组件 ───────────────────────────────────────────────────
-
-class MessageBubble(Static):
-    """消息气泡组件"""
-    
-    def __init__(self, message: ChatMessage):
-        super().__init__()
-        self.message = message
-    
     def compose(self) -> ComposeResult:
-        content = self.message.text
-        if not self.message.is_user:
-            # 解析JSON内容（如果是结构化数据）
-            try:
-                data = json.loads(content)
-                if isinstance(data, dict):
-                    content = data.get("reply", content)
-            except (json.JSONDecodeError, KeyError):
-                pass
+        role = "你" if self.is_user else "OCOS"
+        time = self.timestamp.strftime("%H:%M")
+        content = self.text[:3000]  # 限制长度
         
-        yield Static(
-            f"[bold cyan]{self.message.display_time}[/bold cyan] "
-            f"{'[bold green]YOU[/bold green]' if self.message.is_user else '[bold blue]OCOS[/bold blue]'}:\n"
-            f"[dim]{content}[/dim]",
-            classes="message" if self.message.is_user else "response",
-        )
-
-
-class StatusPanel(Static):
-    """左侧状态面板"""
-    
-    def __init__(self, status: OCOSStatus):
-        super().__init__()
-        self.status = status
-    
-    def compose(self) -> ComposeResult:
-        yield Static("[bold]系统状态[/bold]", classes="panel-title")
-        yield Static(
-            f"[bold]记忆容量:[/bold] {self.status.episodes} episodes\n"
-            f"[bold]Beliefs:[/bold] {self.status.beliefs}\n"
-            f"[bold]Patterns:[/bold] {self.status.patterns}\n"
-            f"[bold]状态:[/bold] {'[green]在线[/green]' if self.status.is_online else '[red]离线[/red]'}",
-            classes="status-info",
-        )
-
-
-class ChatPanel(Static):
-    """对话面板"""
-    
-    def __init__(self):
-        super().__init__()
-        self.messages: list[ChatMessage] = []
-    
-    def compose(self) -> ComposeResult:
-        yield Static("[bold]神经对话[/bold]", classes="panel-title")
-        # 消息列表
-        for msg in self.messages[-50:]:  # 最多显示50条
-            yield MessageBubble(msg)
-    
-    def add_message(self, text: str, is_user: bool):
-        """添加消息"""
-        msg = ChatMessage(text, is_user)
-        self.messages.append(msg)
-        self.refresh()
-    
-    def clear_messages(self):
-        """清空消息"""
-        self.messages.clear()
-        self.refresh()
-
-
-class TaskList(Static):
-    """任务列表面板"""
-    
-    def __init__(self):
-        super().__init__()
-        self.tasks: list[dict] = []
-    
-    def compose(self) -> ComposeResult:
-        yield Static("[bold]活跃目标[/bold]", classes="panel-title")
-        if not self.tasks:
-            yield Static("[dim]无活跃目标[/dim]")
+        if self.is_user:
+            yield Static(
+                f"[bold cyan]{role}[/bold cyan] [{time}]\n{content}",
+                classes="user-msg",
+            )
         else:
-            for task in self.tasks[-10:]:
-                status = task.get("status", "unknown")
-                title = task.get("title", "Untitled")
-                color = "green" if status == "completed" else "yellow" if status == "pending" else "red"
-                yield Static(f"[{color}]●[/{color}] {title} [{status}]")
-
-
-class InputBar(Container):
-    """底部输入栏"""
-    
-    def __init__(self):
-        super().__init__()
-        self._input = Input(
-            placeholder="输入神经脉冲... (Enter发送, /clear清空)",
-            id="chat-input",
-        )
-        self._send_btn = Button("发送", id="send-btn", variant="primary")
-        self._clear_btn = Button("清空", id="clear-btn")
-        self._loading = LoadingIndicator(id="loading")
-        self._loading.display = False
-    
-    @property
-    def input(self):
-        """暴露input组件供外部访问"""
-        return self._input
-    
-    def compose(self) -> ComposeResult:
-        yield self._input
-        yield self._loading
-        yield self._send_btn
-        yield self._clear_btn
-    
-    @property
-    def input_value(self) -> str:
-        return self._input.value
-    
-    @input_value.setter
-    def input_value(self, value: str):
-        self._input.value = value
-    
-    @property
-    def is_loading(self) -> bool:
-        return self._loading.display
-    
-    @is_loading.setter
-    def is_loading(self, value: bool):
-        self._loading.display = value
-        self._send_btn.disabled = value
+            yield Static(
+                f"[bold green]{role}[/bold green] [{time}]\n{content}",
+                classes="bot-msg",
+            )
 
 
 class OCOSTUI(App):
-    """OCOS TUI主应用"""
+    """OCOS 终端聊天界面"""
     
     CSS = """
     Screen {
@@ -217,58 +69,30 @@ class OCOSTUI(App):
         border: solid $primary-lighten-1;
     }
     
-    .main-container {
-        height: 100%;
-        layout: grid;
-        grid-size: 3;
-    }
-    
-    .left-panel {
-        width: 25;
-        height: 100%;
-        border-right: solid $primary;
-        padding: 1;
-    }
-    
-    .center-panel {
-        width: 1fr;
-        height: 100%;
+    #chat-area {
+        height: 1fr;
         overflow-y: auto;
-        padding: 1;
+        padding: 1 2;
+        border: solid $primary;
+        margin: 0 1;
     }
     
-    .right-panel {
-        width: 25;
-        height: 100%;
+    .message-row {
+        margin-bottom: 1;
+        padding: 1;
         border-left: solid $primary;
-        padding: 1;
     }
     
-    .panel-title {
-        text-align: center;
-        background: $primary-darken-1;
+    .user-msg {
+        background: $accent;
         color: $text;
-        padding: 1 2;
-        margin-bottom: 1;
+        border-left-color: $success;
     }
     
-    .status-info {
-        padding: 1;
-        margin-bottom: 1;
-    }
-    
-    .message {
-        padding: 1 2;
-        margin-bottom: 1;
-        border-left: solid $primary;
+    .bot-msg {
         background: $surface-darken-1;
-    }
-    
-    .response {
-        padding: 1 2;
-        margin-bottom: 1;
-        border-left: solid $success;
-        background: $success-darken-2;
+        color: $text;
+        border-left-color: $warning;
     }
     
     #input-bar {
@@ -278,9 +102,10 @@ class OCOSTUI(App):
         padding: 1;
         border-top: solid $primary;
         background: $surface-darken-2;
+        margin: 0 1;
     }
     
-    #chat-input {
+    #message-input {
         width: 1fr;
         margin-right: 1;
     }
@@ -294,8 +119,12 @@ class OCOSTUI(App):
         min-width: 8;
     }
     
-    #loading {
-        margin: 0 1;
+    .status-online {
+        color: $success;
+    }
+    
+    .status-offline {
+        color: $error;
     }
     """
     
@@ -303,38 +132,42 @@ class OCOSTUI(App):
         ("ctrl+c", "quit", "退出"),
         ("ctrl+l", "clear", "清空"),
         ("ctrl+s", "save", "保存"),
-        ("escape", "cancel", "取消"),
     ]
     
     def __init__(self):
         super().__init__()
-        self.status = OCOSStatus()
-        self.chat_panel = ChatPanel()
-        self.task_list = TaskList()
-        # 清除代理环境变量，避免socks代理导致连接失败
-        import os
-        proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
-        _saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
-        try:
-            self.client = httpx.AsyncClient(base_url=API_BASE, timeout=30.0)
-        except Exception:
-            # 如果创建失败，恢复代理并创建一个不通过代理的client
-            os.environ.update(_saved_proxies)
-            self.client = httpx.AsyncClient(
-                base_url=API_BASE,
-                timeout=30.0,
-                proxies=None,
-                verify=False,
-            )
-        self._input_bar = InputBar()
-        self._poll_task: asyncio.Task | None = None
-        self._send_task: asyncio.Task | None = None
+        self.messages: list[dict] = []
+        self.client = httpx.AsyncClient(base_url=API_BASE, timeout=60.0)
+        self._input = Input(placeholder="输入消息... (Enter发送)", id="message-input")
+        self._send_btn = Button("发送", id="send-btn", variant="primary")
+        self._clear_btn = Button("清空", id="clear-btn")
+        self._status = "离线"
+        self._episode_count = 0
     
-    def on_mount(self) -> None:
-        """应用启动时初始化"""
-        self.set_interval(5.0, self._poll_status)
-        self._input_bar.input.focus()
-        self.notify("OCOS TUI 已启动，连接到 localhost:8900", title="就绪")
+    def compose(self) -> ComposeResult:
+        yield Header()
+        
+        # 头部状态栏
+        yield Static(
+            f" OCOS · 数字生命体 [{self._status}] · Episodes: {self._episode_count} ",
+            id="header",
+        )
+        
+        # 对话区域
+        with Vertical(id="chat-area"):
+            # 初始消息
+            yield MessageBubble("系统初始化完成。等待神经连接...", is_user=False, 
+                              timestamp=datetime.now().replace(hour=0, minute=0, second=0))
+            for msg in self.messages:
+                yield MessageBubble(msg["text"], msg["is_user"], msg["timestamp"])
+        
+        # 底部输入栏
+        with Container(id="input-bar"):
+            yield self._input
+            yield self._send_btn
+            yield self._clear_btn
+        
+        yield Footer()
     
     async def _poll_status(self) -> None:
         """轮询系统状态"""
@@ -344,43 +177,28 @@ class OCOSTUI(App):
                 if resp.status_code == 200:
                     data = resp.json().get("data", {})
                     ms = data.get("memory_stats", {})
-                    self.status.episodes = ms.get("episode_count", 0)
-                    self.status.beliefs = ms.get("belief_count", 0)
-                    self.status.patterns = ms.get("pattern_count", 0)
-                    self.status.is_online = True
-                    # 更新UI
-                    self.query_one("#status-episodes", Static).update(
-                        f"[bold]记忆容量:[/bold] {self.status.episodes} episodes"
-                    )
-                    self.query_one("#status-beliefs", Static).update(
-                        f"[bold]Beliefs:[/bold] {self.status.beliefs}"
-                    )
-                    self.query_one("#status-patterns", Static).update(
-                        f"[bold]Patterns:[/bold] {self.status.patterns}"
-                    )
-                    self.query_one("#status-online", Static).update(
-                        f"[bold]状态:[/bold] [green]在线[/green]"
-                    )
-        except Exception as e:
-            self.status.is_online = False
-            self.query_one("#status-online", Static).update(
-                f"[bold]状态:[/bold] [red]离线 ({e})[/red]"
-            )
+                    self._episode_count = ms.get("episode_count", 0)
+                    self._status = "在线"
+        except Exception:
+            self._status = "离线"
     
     async def _send_message(self) -> None:
-        """发送消息"""
-        text = self._input_bar.input_value.strip()
+        """发送消息到 API"""
+        text = self._input.value.strip()
         if not text:
             return
         
-        # 清除输入
-        self._input_bar.input_value = ""
+        # 添加用户消息
+        user_msg = {"text": text, "is_user": True, "timestamp": datetime.now()}
+        self.messages.append(user_msg)
+        self._input.value = ""
+        self.refresh()
         
-        # 显示用户消息
-        self.chat_panel.add_message(text, is_user=True)
-        self._input_bar.is_loading = True
+        # 显示加载中
+        loading_msg = MessageBubble("思考中...", is_user=False, timestamp=datetime.now())
+        self.query_one("#chat-area", Vertical).mount(loading_msg)
+        self.query_one("#chat-area", Vertical).scroll_end()
         
-        # 发送请求
         try:
             async with self.client as client:
                 resp = await client.post(
@@ -391,95 +209,67 @@ class OCOSTUI(App):
             if resp.status_code == 200:
                 data = resp.json().get("data", {})
                 reply = data.get("reply", "无回复")
-                self.chat_panel.add_message(reply, is_user=False)
+                bot_msg = {"text": reply, "is_user": False, "timestamp": datetime.now()}
+                self.messages.append(bot_msg)
+                self.query_one("#chat-area", Vertical).remove_children()
+                for msg in self.messages[-50:]:  # 显示最近50条
+                    self.query_one("#chat-area", Vertical).mount(
+                        MessageBubble(msg["text"], msg["is_user"], msg["timestamp"])
+                    )
             else:
-                self.chat_panel.add_message(f"错误: HTTP {resp.status_code}", is_user=False)
-                
-        except httpx.HTTPError as e:
-            self.chat_panel.add_message(f"连接失败: {e}", is_user=False)
+                error_msg = {"text": f"错误: HTTP {resp.status_code}", "is_user": False, 
+                           "timestamp": datetime.now()}
+                self.messages.append(error_msg)
+                self.refresh()
         except Exception as e:
-            self.chat_panel.add_message(f"未知错误: {e}", is_user=False)
-        finally:
-            self._input_bar.is_loading = False
-            self._input_bar.input.focus()
+            error_msg = {"text": f"连接失败: {e}", "is_user": False, "timestamp": datetime.now()}
+            self.messages.append(error_msg)
+            self.refresh()
+        
+        self.query_one("#chat-area", Vertical).scroll_end()
+        self._input.focus()
     
     def action_clear(self) -> None:
         """清空对话"""
-        self.chat_panel.clear_messages()
+        self.messages.clear()
+        self.query_one("#chat-area", Vertical).remove_children()
+        self.query_one("#chat-area", Vertical).mount(
+            MessageBubble("对话已清空", is_user=False, timestamp=datetime.now())
+        )
         self.notify("对话已清空", title="操作完成")
     
     def action_save(self) -> None:
         """保存对话历史"""
+        from pathlib import Path
         filename = f"ocos_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         path = Path.home() / ".ocos" / filename
         path.parent.mkdir(exist_ok=True)
         
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(
-                [{"text": m.text, "is_user": m.is_user, "time": m.display_time} 
-                 for m in self.chat_panel.messages],
-                f,
-                ensure_ascii=False,
-                indent=2,
-            )
+            json.dump([
+                {"text": m["text"], "is_user": m["is_user"], 
+                 "time": m["timestamp"].strftime("%H:%M:%S")}
+                for m in self.messages
+            ], f, ensure_ascii=False, indent=2)
         self.notify(f"已保存到 {path}", title="保存成功")
     
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """回车发送"""
-        self._send_task = asyncio.create_task(self._send_message())
+        asyncio.create_task(self._send_message())
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """按钮点击"""
         if event.button.id == "send-btn":
-            self._send_task = asyncio.create_task(self._send_message())
+            asyncio.create_task(self._send_message())
         elif event.button.id == "clear-btn":
             self.action_clear()
     
-    def compose(self) -> ComposeResult:
-        """构建UI"""
-        yield Header()
-        
-        # 主容器
-        with Container(id="main-container"):
-            # 左侧面板 - 状态
-            with Vertical(classes="left-panel"):
-                yield Static("[bold]系统状态[/bold]", classes="panel-title")
-                yield Static(f"[bold]记忆容量:[/bold] {self.status.episodes} episodes", id="status-episodes")
-                yield Static(f"[bold]Beliefs:[/bold] {self.status.beliefs}", id="status-beliefs")
-                yield Static(f"[bold]Patterns:[/bold] {self.status.patterns}", id="status-patterns")
-                yield Static(f"[bold]状态:[/bold] {'[green]在线[/green]' if self.status.is_online else '[red]离线[/red]'}", id="status-online")
-                
-                yield Static("\n[bold]最近活动[/bold]", classes="panel-title")
-                yield Static("[dim]等待数据...\n", id="recent-activity")
-            
-            # 中间面板 - 对话
-            with Vertical(classes="center-panel"):
-                yield Static("[bold]神经对话[/bold]", classes="panel-title")
-                yield from self.chat_panel.compose()
-            
-            # 右侧面板 - 任务
-            with Vertical(classes="right-panel"):
-                yield Static("[bold]活跃目标[/bold]", classes="panel-title")
-                yield from self.task_list.compose()
-        
-        # 底部输入栏
-        yield self._input_bar
-        yield Footer()
-    
     def on_mount(self) -> None:
-        """应用启动时初始化"""
-        self.set_interval(5.0, self._poll_status)
-        self._input_bar.input.focus()
-        self.notify("OCOS TUI 已启动，连接到 localhost:8900", title="就绪")
-        
-        # 立即获取一次状态
+        """启动时初始化"""
+        self.set_interval(10.0, self._poll_status)
         asyncio.create_task(self._poll_status())
-    
-    async def on_unmount(self) -> None:
-        """退出时清理"""
-        if self._send_task and not self._send_task.done():
-            self._send_task.cancel()
-        await self.client.aclose()
+        self._input.focus()
+        self.notify("OCOS TUI 已启动", title="就绪")
 
 
 if __name__ == "__main__":
