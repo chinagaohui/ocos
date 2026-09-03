@@ -1,7 +1,4 @@
-"""OCOS TUI - 复刻 Hermes Agent 对话界面
-
-设计参考: /home/laogao/下载/5566.png
-"""
+"""OCOS TUI - 简洁对话界面"""
 
 from __future__ import annotations
 
@@ -13,7 +10,6 @@ from pathlib import Path
 
 import httpx
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
 from textual.widgets import Static, Input, Log
 from textual.binding import Binding
 
@@ -22,19 +18,10 @@ API_BASE = "http://localhost:8900"
 
 
 class ChatScreen(App):
-    """复刻 Hermes Agent 风格的对话界面"""
-    
     CSS = """
     Screen {
         layout: vertical;
-        background: #1a1a1a;
-    }
-    
-    #menu-bar {
-        height: 3;
-        background: #2d2d2d;
-        color: #cccccc;
-        content-align: center middle;
+        background: #1e1e1e;
     }
     
     #title {
@@ -43,43 +30,34 @@ class ChatScreen(App):
         padding-left: 2;
         color: #d4c99a;
         text-style: bold;
+        border-bottom: solid #d4c99a;
     }
     
     #messages {
         height: 1fr;
         padding: 1 2;
         overflow-y: auto;
-        border-top: solid #d4c99a;
-        border-bottom: solid #d4c99a;
     }
     
-    .user-msg {
-        text-align: right;
-        margin-bottom: 1;
-        color: #00e5ff;
-    }
-    
-    .bot-msg {
-        text-align: left;
-        margin-bottom: 1;
-        color: #4caf50;
-    }
-    
-    #input {
+    #input-bar {
         height: 3;
         border-top: solid #d4c99a;
         background: #2d2d2d;
+    }
+    
+    #input {
+        background: #2d2d2d;
         color: white;
+        border: none;
     }
     
     #status-bar {
         height: 3;
         background: #000000;
         color: #cccccc;
-        text-align: left;
         content-align: left middle;
         padding-left: 2;
-        border-top: solid #d4c99a;
+        border-top: solid #555;
     }
     """
     
@@ -92,14 +70,11 @@ class ChatScreen(App):
     def __init__(self):
         super().__init__()
         self.messages: list[dict] = []
-        
         proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
         self._saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
-        
         self._send_task = None
     
     def compose(self) -> ComposeResult:
-        yield Static("文件(F)  编辑(E)  查看(V)  搜索(S)  终端(T)  帮助(H)", id="menu-bar")
         yield Static("ocos chat", id="title")
         yield Log(id="messages")
         yield Input(placeholder="输入消息... (Enter 发送)", id="input")
@@ -122,7 +97,9 @@ class ChatScreen(App):
                     episodes = ms.get("episode_count", 0)
                     beliefs = ms.get("belief_count", 0)
                     patterns = ms.get("pattern_count", 0)
-                    status_el.update(f" agnes-2.5-flash │ {episodes}e/{beliefs}b/{patterns}p │ ████░░░░░░░░░░░░ 15% │ 在线 ─ 读取上个会话")
+                    pct = min(100, int(episodes / 50))
+                    bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+                    status_el.update(f" agnes-2.5-flash │ {episodes}e/{beliefs}b/{patterns}p │ [{bar}] {pct}% │ 在线 ─ 读取上个会话")
                     return
         except Exception:
             pass
@@ -133,8 +110,8 @@ class ChatScreen(App):
         self.messages.append(msg)
         role = "你" if is_user else "OCOS"
         time = msg["timestamp"].strftime("%H:%M:%S")
-        cls = "cyan" if is_user else "bold green"
-        self.query_one("#messages", Log).write_line(f"[{cls}]{role}[/] {time}\n{text}")
+        cls = "[cyan]" if is_user else "[bold green]"
+        self.query_one("#messages", Log).write_line(f"{cls}{role}[/{cls.replace('[', '').replace(']', '')}] {time}\n{text}")
     
     async def _send_message(self) -> None:
         inp = self.query_one("#input", Input)
