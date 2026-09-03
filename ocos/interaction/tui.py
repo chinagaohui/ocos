@@ -1,6 +1,6 @@
 """OCOS TUI - 简洁对话界面
 
-纯对话布局：消息区域 + 底部输入框
+纯对话布局：消息列表 + 底部输入框
 
 Usage:
     python -m ocos.interaction.tui
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import httpx
 from textual.app import App, ComposeResult
-from textual.containers import Container, Vertical
+from textual.containers import Container, ScrollableContainer
 from textual.widgets import Static, Input, Button, Footer
 from textual.binding import Binding
 
@@ -26,7 +26,7 @@ API_BASE = "http://localhost:8900"
 
 
 class MessageBlock(Static):
-    """消息气泡"""
+    """消息块"""
     
     def __init__(self, text: str, is_user: bool):
         super().__init__()
@@ -36,7 +36,7 @@ class MessageBlock(Static):
     
     def compose(self) -> ComposeResult:
         role = "你" if self.is_user else "OCOS"
-        time = self.timestamp.strftime("%H:%M:%S")
+        time = self.timestamp.strftime("%H:%M")
         content = self.text[:5000]
         
         if self.is_user:
@@ -99,7 +99,7 @@ class ChatScreen(App):
     def __init__(self):
         super().__init__()
         self.messages: list[dict] = []
-        self.chat_area = Vertical(id="chat-area")
+        self.chat_area = ScrollableContainer(id="chat-area")
         self._input = Input(placeholder="输入消息... (Enter 发送)", id="message-input")
         self._send_btn = Button("发送", id="send-btn", variant="primary")
         self._clear_btn = Button("清空", id="clear-btn")
@@ -123,7 +123,13 @@ class ChatScreen(App):
     
     def on_mount(self) -> None:
         """挂载后添加初始消息"""
-        self.chat_area.mount(MessageBlock("OCOS 已就绪。开始对话...", False))
+        self._add_message("OCOS 已就绪。开始对话...", False)
+    
+    def _add_message(self, text: str, is_user: bool) -> None:
+        """添加消息到界面"""
+        self.messages.append({"text": text, "is_user": is_user, "timestamp": datetime.now()})
+        self.chat_area.mount(MessageBlock(text, is_user))
+        self.chat_area.scroll_end()
     
     async def _send_message(self) -> None:
         """发送消息"""
@@ -132,10 +138,8 @@ class ChatScreen(App):
             return
         
         # 添加用户消息
-        self.messages.append({"text": text, "is_user": True, "timestamp": datetime.now()})
-        self.chat_area.mount(MessageBlock(text, True))
+        self._add_message(text, True)
         self._input.value = ""
-        self.chat_area.scroll_end()
         
         # 显示加载中
         loading = MessageBlock("思考中...", False)
@@ -143,7 +147,7 @@ class ChatScreen(App):
         self.chat_area.scroll_end()
         
         try:
-            async with self.client as client:
+            async with httpx.AsyncClient(base_url=API_BASE, timeout=60.0) as client:
                 resp = await client.post("/ocos/converse", json={"message": text})
             
             # 移除加载提示
@@ -152,21 +156,19 @@ class ChatScreen(App):
             if resp.status_code == 200:
                 data = resp.json().get("data", {})
                 reply = data.get("reply", "无回复")
-                self.messages.append({"text": reply, "is_user": False, "timestamp": datetime.now()})
-                self.chat_area.mount(MessageBlock(reply, False))
+                self._add_message(reply, False)
             else:
-                self.chat_area.mount(MessageBlock(f"错误: HTTP {resp.status_code}", False))
+                self._add_message(f"错误: HTTP {resp.status_code}", False)
         except Exception as e:
-            self.chat_area.mount(MessageBlock(f"连接失败: {e}", False))
+            self._add_message(f"连接失败: {e}", False)
         
-        self.chat_area.scroll_end()
         self._input.focus()
     
     def action_clear(self) -> None:
         """清空对话"""
         self.messages.clear()
         self.chat_area.remove_children()
-        self.chat_area.mount(MessageBlock("对话已清空", False))
+        self._add_message("对话已清空", False)
         self.notify("对话已清空", title="操作完成")
     
     def action_save(self) -> None:
