@@ -922,7 +922,7 @@ async function pollOutbox() {
     for (const m of j.data.messages) {
       // 过滤错误日志，只添加成功或用户友好的消息
       const content = m.content || '';
-      if (content && !content.includes('LLM 规划失败') && !content.includes('proxy') && !content.includes('status': 'failed')) {
+      if (content && !content.includes('LLM 规划失败') && !content.includes('proxy') && !content.includes("'status': 'failed'") && !content.includes('"status": "failed"')) {
         const recentEl = document.getElementById('recentEpisodes');
         if (recentEl) {
           const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
