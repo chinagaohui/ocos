@@ -1,4 +1,10 @@
-"""OCOS TUI - 简洁对话界面"""
+"""OCOS TUI - 复刻 Hermes Agent 对话界面
+
+设计参考: ~/.hermes/hermes-agent/apps/desktop/src/components/assistant-ui/
+- 用户消息: 右对齐气泡
+- 助手消息: 左对齐文本
+- 底部输入框 + 状态栏
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,7 @@ from pathlib import Path
 
 import httpx
 from textual.app import App, ComposeResult
-from textual.containers import Container
+from textual.containers import Container, Vertical
 from textual.widgets import Static, Input, Log
 from textual.binding import Binding
 
@@ -22,26 +28,26 @@ class ChatScreen(App):
     CSS = """
     Screen {
         layout: vertical;
-        background: #1e1e1e;
+        background: #1a1a1a;
     }
     
     #header {
         height: 5;
-        background: #2d2d2d;
-        border-bottom: solid #d4c99a;
+        background: #252525;
+        border-bottom: solid #3e3e42;
     }
     
-    #menu-bar {
+    #menu {
         height: 3;
         content-align: center middle;
-        color: #cccccc;
+        color: #858585;
     }
     
     #title {
         height: 2;
         content-align: left middle;
-        padding-left: 2;
-        color: #d4c99a;
+        padding-left: 3;
+        color: #d4d4d4;
         text-style: bold;
     }
     
@@ -51,25 +57,46 @@ class ChatScreen(App):
         overflow-y: auto;
     }
     
+    .user-msg {
+        text-align: right;
+        margin-bottom: 1;
+        color: #e0e0e0;
+    }
+    
+    .bot-msg {
+        text-align: left;
+        margin-bottom: 1;
+        color: #b5cea8;
+    }
+    
     #input-area {
         height: 4;
-        border-top: solid #d4c99a;
-        background: #2d2d2d;
+        border-top: solid #3e3e42;
+        background: #252525;
     }
     
     #input {
-        background: #2d2d2d;
-        color: white;
+        height: 2;
+        background: #252525;
+        color: #d4d4d4;
         border: none;
+        padding-left: 2;
+    }
+    
+    #input-hint {
+        height: 2;
+        content-align: right middle;
+        padding-right: 2;
+        color: #6a6a6a;
+        font-style: italic;
     }
     
     #status {
         height: 3;
-        background: #000000;
-        color: #cccccc;
+        background: #007acc;
+        color: #ffffff;
         content-align: left middle;
         padding-left: 2;
-        border-top: solid #555;
     }
     """
     
@@ -88,11 +115,12 @@ class ChatScreen(App):
     
     def compose(self) -> ComposeResult:
         with Container(id="header"):
-            yield Static("文件(F)  编辑(E)  查看(V)  搜索(S)  终端(T)  帮助(H)", id="menu-bar")
+            yield Static("文件(F)  编辑(E)  查看(V)  搜索(S)  终端(T)  帮助(H)", id="menu")
             yield Static("ocos chat", id="title")
         yield Log(id="chat")
-        with Container(id="input-area"):
-            yield Input(placeholder="输入消息... (Enter 发送)", id="input")
+        with Vertical(id="input-area"):
+            yield Input(placeholder="", id="input")
+            yield Static("输入消息... (Enter 发送)", id="input-hint")
         yield Static("", id="status")
     
     def on_mount(self) -> None:
@@ -125,18 +153,19 @@ class ChatScreen(App):
         self.messages.append(msg)
         role = "你" if is_user else "OCOS"
         time = msg["timestamp"].strftime("%H:%M:%S")
-        cls = "[cyan]" if is_user else "[bold green]"
-        close = "[/cyan]" if is_user else "[/bold green]"
-        self.query_one("#chat", Log).write_line(f"{cls}{role}{close} {time}\n{text}")
+        cls = "user-msg" if is_user else "bot-msg"
+        self.query_one("#chat", Log).write_line(f"[{cls}]{role}[/]{cls}] {time}\n{text}")
     
     async def _send_message(self) -> None:
         inp = self.query_one("#input", Input)
+        hint = self.query_one("#input-hint", Static)
         text = inp.value.strip()
         if not text:
             return
         
         self._add_message(text, True)
         inp.value = ""
+        hint.display = False
         
         try:
             async with httpx.AsyncClient(base_url=API_BASE, timeout=60.0) as client:
@@ -152,6 +181,7 @@ class ChatScreen(App):
             self._add_message(f"连接失败: {e}", False)
         
         inp.focus()
+        hint.display = True
     
     def action_clear(self) -> None:
         self.messages.clear()
