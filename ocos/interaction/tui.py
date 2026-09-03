@@ -95,7 +95,6 @@ class SessionList(DataTable):
     def __init__(self):
         super().__init__(id="session-list")
         self.cursor_type = "row"
-        self.fixed_rows = 1
         self.show_cursor = True
     
     def on_mount(self) -> None:
