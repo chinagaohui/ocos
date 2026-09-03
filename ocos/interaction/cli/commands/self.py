@@ -117,9 +117,13 @@ def cmd_self_mod(args, session: InteractionSession) -> int:
 
     agent = SelfModificationAgent(project_root)
 
+    # dry_run 优先级: --live 覆盖 --dry-run
+    use_live = getattr(args, "live", False)
+    use_dry_run = not use_live and getattr(args, "dry_run", True)
+
     print(f"[SelfMod] Task: {task}")
     print(f"[SelfMod] File: {file_path}")
-    print(f"[SelfMod] Mode: {'DRY RUN' if getattr(args, 'dry_run', True) else 'LIVE'}")
+    print(f"[SelfMod] Mode: {'LIVE' if use_live else 'DRY RUN'}")
     print("-" * 60)
 
     result = agent.execute(
@@ -127,7 +131,7 @@ def cmd_self_mod(args, session: InteractionSession) -> int:
         file=file_path,
         content=content,
         delete=bool(getattr(args, "delete", False)),
-        dry_run=bool(getattr(args, "dry_run", True)),
+        dry_run=use_dry_run,
         test=False,  # 安全模式，不自动运行测试
         commit=False,
     )
