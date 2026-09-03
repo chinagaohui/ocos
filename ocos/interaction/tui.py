@@ -112,9 +112,6 @@ class ChatScreen(App):
         self._send_task = None
     
     def compose(self) -> ComposeResult:
-        # 初始欢迎消息
-        self.chat_area.mount(MessageBlock("OCOS 已就绪。开始对话...", False))
-        
         yield self.chat_area
         
         with Container(id="input-bar"):
@@ -123,6 +120,10 @@ class ChatScreen(App):
             yield self._clear_btn
         
         yield Footer()
+    
+    def on_mount(self) -> None:
+        """挂载后添加初始消息"""
+        self.chat_area.mount(MessageBlock("OCOS 已就绪。开始对话...", False))
     
     async def _send_message(self) -> None:
         """发送消息"""
