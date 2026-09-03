@@ -17,7 +17,7 @@ from pathlib import Path
 
 import httpx
 from textual.app import App, ComposeResult
-from textual.containers import Container, ScrollableContainer
+from textual.containers import Container, Vertical
 from textual.widgets import Static, Input, Button, Footer
 from textual.binding import Binding
 
@@ -40,9 +40,9 @@ class MessageBlock(Static):
         content = self.text[:5000]
         
         if self.is_user:
-            yield Static(f"[bold cyan]{role}[/bold cyan] {time}\n{content}", classes="user-msg")
+            yield Static(f"[bold cyan]{role}[/bold cyan] {time}\n{content}")
         else:
-            yield Static(f"[bold green]{role}[/bold green] {time}\n{content}", classes="bot-msg")
+            yield Static(f"[bold green]{role}[/bold green] {time}\n{content}")
 
 
 class ChatScreen(App):
@@ -58,21 +58,6 @@ class ChatScreen(App):
         height: 1fr;
         overflow-y: auto;
         padding: 1 2;
-    }
-    
-    .message {
-        margin-bottom: 1;
-        padding: 1 2;
-    }
-    
-    .user-msg {
-        text-align: right;
-        border-right: thick $success;
-    }
-    
-    .bot-msg {
-        text-align: left;
-        border-left: thick $warning;
     }
     
     #input-bar {
@@ -99,7 +84,7 @@ class ChatScreen(App):
     def __init__(self):
         super().__init__()
         self.messages: list[dict] = []
-        self.chat_area = ScrollableContainer(id="chat-area")
+        self.chat_area = Vertical(id="chat-area")
         self._input = Input(placeholder="输入消息... (Enter 发送)", id="message-input")
         self._send_btn = Button("发送", id="send-btn", variant="primary")
         self._clear_btn = Button("清空", id="clear-btn")
@@ -107,7 +92,6 @@ class ChatScreen(App):
         # 清除代理环境变量
         proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
         self._saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
-        self.client = httpx.AsyncClient(base_url=API_BASE, timeout=60.0)
         
         self._send_task = None
     
@@ -124,10 +108,12 @@ class ChatScreen(App):
     def on_mount(self) -> None:
         """挂载后添加初始消息"""
         self._add_message("OCOS 已就绪。开始对话...", False)
+        self._input.focus()
     
     def _add_message(self, text: str, is_user: bool) -> None:
         """添加消息到界面"""
-        self.messages.append({"text": text, "is_user": is_user, "timestamp": datetime.now()})
+        msg = {"text": text, "is_user": is_user, "timestamp": datetime.now()}
+        self.messages.append(msg)
         self.chat_area.mount(MessageBlock(text, is_user))
         self.chat_area.scroll_end()
     
@@ -196,18 +182,6 @@ class ChatScreen(App):
                 self._send_task = asyncio.create_task(self._send_message())
         elif event.button.id == "clear-btn":
             self.action_clear()
-    
-    async def on_mount(self) -> None:
-        """启动时初始化"""
-        self._input.focus()
-        self.notify("OCOS TUI 已启动", title="就绪")
-    
-    async def on_unmount(self) -> None:
-        """退出时清理"""
-        if self._send_task and not self._send_task.done():
-            self._send_task.cancel()
-        await self.client.aclose()
-        os.environ.update(self._saved_proxies)
 
 
 if __name__ == "__main__":
