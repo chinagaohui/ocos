@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -31,14 +32,13 @@ from textual.widgets import (
     Label,
 )
 from textual.binding import Binding
-from textual.screen import Screen
 
 
 API_BASE = "http://localhost:8900"
 
 
 class MessageBlock(Static):
-    """单条消息块 - 用户消息靠右，助手消息靠左"""
+    """单条消息块"""
     
     def __init__(self, text: str, is_user: bool, timestamp: datetime | None = None):
         super().__init__()
@@ -49,22 +49,13 @@ class MessageBlock(Static):
     def compose(self) -> ComposeResult:
         role = "你" if self.is_user else "OCOS"
         time = self.timestamp.strftime("%H:%M:%S")
-        content = self.text[:5000]  # 限制长度
+        content = self.text[:5000]
         
-        # 用户消息靠右，助手消息靠左
-        if self.is_user:
-            yield Static(
-                f"[bold cyan]{role}[/bold cyan] {time}\n{content}",
-                classes="message user-message",
-            )
-        else:
-            yield Static(
-                f"[bold green]{role}[/bold green] {time}\n{content}",
-                classes="message assistant-message",
-            )
+        prefix = "[bold cyan]" if self.is_user else "[bold green]"
+        yield Static(f"{prefix}{role}[/bold] {time}\n{content}")
 
 
-class ChatArea(Vertical):
+class ChatArea(Container):
     """对话区域"""
     
     def __init__(self):
@@ -84,7 +75,7 @@ class ChatArea(Vertical):
         self.remove_children()
         self.mount(MessageBlock("对话已清空", False, datetime.now()))
     
-    def save(self, path: Path | None = None) -> None:
+    def save(self, path: Path | None = None) -> Path:
         """保存对话历史"""
         if not path:
             path = Path.home() / ".ocos" / f"ocos_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -113,38 +104,35 @@ class SessionList(DataTable):
         self.add_row(session_id[:8], title[:30], time)
 
 
-class Composer(Vertical):
-    """底部输入框 - 复刻 Hermes Agent composer"""
+class Composer(Container):
+    """底部输入框"""
     
     def __init__(self):
         super().__init__(id="composer")
         self._input = Input(
-            placeholder="输入消息... (Shift+Enter 换行, Enter 发送)",
+            placeholder="输入消息... (Enter 发送)",
             id="message-input",
         )
         self._send_btn = Button("发送", id="send-btn", variant="primary")
         self._clear_btn = Button("清空", id="clear-btn")
     
     def compose(self) -> ComposeResult:
-        yield Label("[bold]输入[/bold]", id="composer-label")
+        yield Label("[bold]输入[/bold]")
         with Horizontal():
             yield self._input
             yield self._send_btn
             yield self._clear_btn
 
 
-class OcosChatScreen(Screen):
-    """OCOS 聊天界面 - 复刻 Hermes Agent 布局"""
+class OcosChatScreen(App):
+    """OCOS 聊天界面"""
     
     CSS = """
     Screen {
-        layout: grid;
-        grid-size: 3;
-        grid-gutter: 1;
+        layout: vertical;
     }
     
     #left-panel {
-        grid-column: 1;
         width: 25%;
         height: 1fr;
         border: solid $primary;
@@ -152,7 +140,6 @@ class OcosChatScreen(Screen):
     }
     
     #center-panel {
-        grid-column: 2;
         width: 50%;
         height: 1fr;
         border: solid $primary;
@@ -161,7 +148,6 @@ class OcosChatScreen(Screen):
     }
     
     #right-panel {
-        grid-column: 3;
         width: 25%;
         height: 1fr;
         border: solid $primary;
@@ -170,8 +156,7 @@ class OcosChatScreen(Screen):
     }
     
     #composer {
-        grid-column: 1/4;
-        height: 12;
+        height: 8;
         border: solid $primary;
         background: $surface-darken-2;
         padding: 1;
@@ -184,19 +169,13 @@ class OcosChatScreen(Screen):
     
     .user-message {
         text-align: right;
-        border-right: 3 $success;
     }
     
     .assistant-message {
         text-align: left;
-        border-left: 3 $warning;
     }
     
     DataTable {
-        height: 1fr;
-    }
-    
-    #session-list {
         width: 100%;
         height: 1fr;
     }
@@ -206,10 +185,21 @@ class OcosChatScreen(Screen):
         margin-right: 1;
     }
     
-    #composer-label {
+    Label {
         text-align: center;
         height: 3;
         content-align: center middle;
+    }
+    
+    #system-status {
+        padding: 1 2;
+    }
+    
+    .panel-title {
+        text-align: center;
+        height: 3;
+        content-align: center middle;
+        border-bottom: solid $primary;
     }
     """
     
@@ -217,7 +207,6 @@ class OcosChatScreen(Screen):
         Binding("ctrl+c", "quit", "退出"),
         Binding("ctrl+l", "clear", "清空"),
         Binding("ctrl+s", "save", "保存"),
-        Binding("escape", "cancel", "取消"),
     ]
     
     def __init__(self):
@@ -227,7 +216,6 @@ class OcosChatScreen(Screen):
         self.composer = Composer()
         
         # 清除代理环境变量，避免socks代理导致连接失败
-        import os
         proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
         self._saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
         self.client = httpx.AsyncClient(base_url=API_BASE, timeout=60.0)
@@ -240,26 +228,28 @@ class OcosChatScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         
-        # 左侧：会话列表
-        with Container(id="left-panel"):
-            yield Label("[bold]会话列表[/bold]", classes="panel-title")
-            yield self.session_list
-        
-        # 中间：对话区域
-        with Container(id="center-panel"):
-            yield self.chat_area
-        
-        # 右侧：系统状态
-        with Container(id="right-panel"):
-            yield Label("[bold]系统状态[/bold]", classes="panel-title")
-            yield Static(
-                "[bold]连接状态[/bold]\n"
-                f"状态: {self._status}\n"
-                f"Episodes: {self._episode_count}\n"
-                f"模型: agnes-2.5-flash\n"
-                f"端口: 8900\n",
-                id="system-status",
-            )
+        # 中间区域：左中右三栏
+        with Horizontal():
+            # 左侧：会话列表
+            with Container(id="left-panel"):
+                yield Label("[bold]会话列表[/bold]", classes="panel-title")
+                yield self.session_list
+            
+            # 中间：对话区域
+            with Container(id="center-panel"):
+                yield self.chat_area
+            
+            # 右侧：系统状态
+            with Container(id="right-panel"):
+                yield Label("[bold]系统状态[/bold]", classes="panel-title")
+                yield Static(
+                    "[bold]连接状态[/bold]\n"
+                    f"状态: {self._status}\n"
+                    f"Episodes: {self._episode_count}\n"
+                    f"模型: agnes-2.5-flash\n"
+                    f"端口: 8900\n",
+                    id="system-status",
+                )
         
         # 底部：输入框
         yield self.composer
@@ -317,8 +307,8 @@ class OcosChatScreen(Screen):
                 reply = data.get("reply", "无回复")
                 self.chat_area.add_message(reply, False)
                 
-                # 添加到会话列表（如果有新会话）
-                if len(self.chat_area.messages) == 2:  # 第一条用户消息
+                # 添加到会话列表（第一条消息时）
+                if len(self.chat_area.messages) == 2:
                     self.session_list.add_row(
                         self._current_session,
                         text[:30] + "..." if len(text) > 30 else text,
@@ -368,17 +358,9 @@ class OcosChatScreen(Screen):
             self._send_task.cancel()
         await self.client.aclose()
         # 恢复代理环境变量
-        import os
         os.environ.update(self._saved_proxies)
 
 
-class OCOSTUI(App):
-    """OCOS TUI 主应用"""
-    
-    def on_mount(self) -> None:
-        self.push_screen(OcosChatScreen())
-
-
 if __name__ == "__main__":
-    app = OCOSTUI()
+    app = OcosChatScreen()
     app.run()
