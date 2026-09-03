@@ -216,7 +216,6 @@ class OCOSTUI(App):
         height: 100%;
         layout: grid;
         grid-size: 3;
-        grid-gaps: 1;
     }
     
     .left-panel {
@@ -307,7 +306,21 @@ class OCOSTUI(App):
         self.status = OCOSStatus()
         self.chat_panel = ChatPanel()
         self.task_list = TaskList()
-        self.client = httpx.AsyncClient(base_url=API_BASE, timeout=30.0)
+        # 清除代理环境变量，避免socks代理导致连接失败
+        import os
+        proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
+        _saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
+        try:
+            self.client = httpx.AsyncClient(base_url=API_BASE, timeout=30.0)
+        except Exception:
+            # 如果创建失败，恢复代理并创建一个不通过代理的client
+            os.environ.update(_saved_proxies)
+            self.client = httpx.AsyncClient(
+                base_url=API_BASE,
+                timeout=30.0,
+                proxies=None,
+                verify=False,
+            )
         self._input_bar = InputBar()
         self._poll_task: asyncio.Task | None = None
         self._send_task: asyncio.Task | None = None
