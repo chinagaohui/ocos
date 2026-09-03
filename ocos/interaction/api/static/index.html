@@ -6,17 +6,20 @@
 <title>OCOS · 数字生命体</title>
 <style>
 :root {
-  --bg: #020810;
-  --panel: rgba(4, 12, 28, 0.85);
-  --border: rgba(0, 212, 255, 0.25);
-  --cyan: #00d4ff;
-  --blue: #1e6bff;
-  --purple: #a855f7;
-  --green: #22c55e;
-  --amber: #f59e0b;
-  --red: #ef4444;
-  --fg: #e2e8f0;
-  --muted: #64748b;
+  --bg: #010308;
+  --panel: rgba(2, 8, 20, 0.9);
+  --panel-border: rgba(0, 180, 255, 0.2);
+  --cyan: #00e5ff;
+  --cyan-dim: rgba(0, 229, 255, 0.3);
+  --blue: #2979ff;
+  --purple: #aa00ff;
+  --green: #00e676;
+  --amber: #ffab00;
+  --red: #ff1744;
+  --fg: #e0f7fa;
+  --muted: #546e7a;
+  --glow-cyan: 0 0 20px rgba(0, 229, 255, 0.5);
+  --glow-purple: 0 0 20px rgba(170, 0, 255, 0.5);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -24,695 +27,637 @@ html, body { height: 100%; overflow: hidden; }
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: 'JetBrains Mono', 'SF Mono', 'PingFang SC', monospace;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-/* ── 粒子背景 ── */
-#particles { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
-
-/* ── 主容器 ── */
-.app {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: 280px 1fr 300px;
-  grid-template-rows: 60px 1fr 80px;
-  height: 100vh;
-  gap: 1px;
-  background: var(--border);
-}
-
-/* ── 顶部状态栏 ── */
-.topbar {
-  grid-column: 1 / -1;
-  background: var(--panel);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
-  backdrop-filter: blur(12px);
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.brand-icon {
-  width: 32px; height: 32px;
-  background: conic-gradient(from 180deg, var(--cyan), var(--purple), var(--cyan));
-  border-radius: 50%;
-  animation: spin 4s linear infinite;
-  box-shadow: 0 0 20px var(--cyan);
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-.brand h1 {
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0.3em;
-  background: linear-gradient(90deg, var(--cyan), var(--purple));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-.brand .sub {
-  font-size: 10px;
-  color: var(--muted);
-  letter-spacing: 0.2em;
-}
-.clock {
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
+  font-family: 'Courier New', 'JetBrains Mono', monospace;
   font-size: 12px;
 }
-.status-pills {
-  display: flex;
-  gap: 8px;
+
+/* ── 网格背景 ── */
+#grid-bg {
+  position: fixed; inset: 0; z-index: 0;
+  background-image: 
+    linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
 }
-.pill {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: rgba(0, 212, 255, 0.08);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  font-size: 11px;
-  color: var(--cyan);
+
+/* ── 扫描线 ── */
+#scanline {
+  position: fixed; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  opacity: 0.3; z-index: 100; pointer-events: none;
+  animation: scan 4s linear infinite;
 }
-.pill .dot {
+@keyframes scan { from { top: 0; } to { top: 100vh; } }
+
+/* ── 主布局 ── */
+.app {
+  position: relative; z-index: 1;
+  display: grid;
+  grid-template-columns: 260px 1fr 280px;
+  grid-template-rows: 50px 1fr 70px;
+  height: 100vh;
+  gap: 1px;
+  background: var(--panel-border);
+}
+
+/* ── 顶部HUD ── */
+.hud-top {
+  grid-column: 1 / -1;
+  background: linear-gradient(180deg, rgba(0,20,40,0.95) 0%, rgba(0,10,20,0.8) 100%);
+  border-bottom: 1px solid var(--panel-border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 20px;
+  position: relative;
+}
+.hud-top::after {
+  content: '';
+  position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+}
+.hud-brand {
+  display: flex; align-items: center; gap: 16px;
+}
+.hud-logo {
+  width: 36px; height: 36px;
+  position: relative;
+}
+.hud-logo::before {
+  content: '';
+  position: absolute; inset: 0;
+  border: 2px solid var(--cyan);
+  border-radius: 50%;
+  animation: logo-spin 8s linear infinite;
+  box-shadow: var(--glow-cyan);
+}
+.hud-logo::after {
+  content: '';
+  position: absolute; inset: 6px;
+  background: radial-gradient(circle, var(--purple) 0%, transparent 70%);
+  border-radius: 50%;
+  animation: logo-pulse 2s ease-in-out infinite;
+}
+@keyframes logo-spin { to { transform: rotate(360deg); } }
+@keyframes logo-pulse { 0%,100% { opacity: 0.6; transform: scale(0.9); } 50% { opacity: 1; transform: scale(1.1); } }
+.hud-title {
+  font-size: 18px; font-weight: 700; letter-spacing: 0.4em;
+  background: linear-gradient(90deg, var(--cyan), var(--purple));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 30px var(--cyan-dim);
+}
+.hud-subtitle {
+  font-size: 9px; color: var(--muted); letter-spacing: 0.3em;
+}
+.hud-status {
+  display: flex; gap: 12px; align-items: center;
+}
+.hud-pill {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 12px;
+  background: rgba(0,229,255,0.08);
+  border: 1px solid var(--panel-border);
+  border-radius: 2px;
+  font-size: 10px; color: var(--cyan);
+  position: relative;
+}
+.hud-pill::before {
+  content: '';
   width: 6px; height: 6px;
   background: var(--green);
   border-radius: 50%;
-  box-shadow: 0 0 8px var(--green);
-  animation: pulse 2s ease-in-out infinite;
+  box-shadow: 0 0 10px var(--green);
+  animation: blink 2s ease-in-out infinite;
 }
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(0.85); }
+.hud-pill.warn::before { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+.hud-pill.error::before { background: var(--red); box-shadow: 0 0 10px var(--red); }
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.hud-time {
+  font-size: 11px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
-.pill.warn .dot { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
-.pill.error .dot { background: var(--red); box-shadow: 0 0 8px var(--red); }
 
-/* ── 左侧面板 - 核心状态 ── */
+/* ── 左侧面板 - 系统指标 ── */
 .left-panel {
   background: var(--panel);
-  padding: 20px;
+  padding: 16px;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  border-right: 1px solid var(--panel-border);
 }
-.panel-title {
-  font-size: 10px;
-  letter-spacing: 0.25em;
-  color: var(--muted);
-  text-transform: uppercase;
+.section-title {
+  font-size: 9px; letter-spacing: 0.3em; color: var(--cyan);
+  text-transform: uppercase; margin: 16px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--panel-border);
+  display: flex; align-items: center; gap: 6px;
+}
+.section-title::before {
+  content: '▸'; color: var(--purple);
+}
+.metric-card {
+  background: rgba(0,229,255,0.04);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 10px;
   margin-bottom: 8px;
-}
-.card {
-  background: rgba(0, 212, 255, 0.04);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 14px;
-}
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-.card-title {
-  font-size: 11px;
-  color: var(--cyan);
-  letter-spacing: 0.15em;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.card-title::before {
-  content: '';
-  width: 4px; height: 4px;
-  background: var(--cyan);
-  border-radius: 50%;
-  box-shadow: 0 0 6px var(--cyan);
-}
-.value-lg {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--fg);
-  line-height: 1;
-  margin-bottom: 4px;
-}
-.value-label {
-  font-size: 11px;
-  color: var(--muted);
-}
-.metric-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-}
-.metric-row:last-child { border-bottom: none; }
-.metric-label { color: var(--muted); font-size: 11px; }
-.metric-value { color: var(--fg); font-size: 12px; font-weight: 500; }
-.progress-bar {
-  height: 3px;
-  background: rgba(255,255,255,0.08);
-  border-radius: 2px;
-  margin-top: 8px;
+  position: relative;
   overflow: hidden;
 }
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--cyan), var(--purple));
-  border-radius: 2px;
+.metric-card::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, var(--cyan), transparent);
+}
+.metric-value {
+  font-size: 24px; font-weight: 700; color: var(--fg);
+  line-height: 1; margin-bottom: 4px;
+}
+.metric-label {
+  font-size: 9px; color: var(--muted); letter-spacing: 0.2em;
+}
+.metric-bar {
+  height: 2px; background: rgba(255,255,255,0.05);
+  border-radius: 1px; margin-top: 8px; overflow: hidden;
+}
+.metric-bar-fill {
+  height: 100%; background: linear-gradient(90deg, var(--cyan), var(--purple));
   transition: width 0.5s ease;
 }
+.metric-row {
+  display: flex; justify-content: space-between;
+  padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 11px;
+}
+.metric-row:last-child { border-bottom: none; }
+.metric-row .label { color: var(--muted); }
+.metric-row .value { color: var(--cyan); }
+.metric-row .value.ok { color: var(--green); }
+.metric-row .value.warn { color: var(--amber); }
 
-/* ── 中央 - 核心可视化 ── */
+/* ── 中央 - 大脑可视化 ── */
 .center-panel {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(ellipse at center, rgba(0,212,255,0.03) 0%, transparent 70%);
+  background: radial-gradient(ellipse at center, rgba(0,30,60,0.4) 0%, transparent 70%);
+  overflow: hidden;
 }
-#coreCanvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+#brainCanvas {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
 }
-.core-status {
-  position: absolute;
-  bottom: 100px;
+.brain-hud {
+  position: absolute; inset: 0;
+  pointer-events: none;
+}
+.brain-state {
+  position: absolute; bottom: 80px;
   text-align: center;
 }
-.core-status .state {
-  font-size: 12px;
-  letter-spacing: 0.3em;
+.brain-state .state-text {
+  font-size: 14px; letter-spacing: 0.5em;
   color: var(--cyan);
-  text-shadow: 0 0 20px var(--cyan);
+  text-shadow: 0 0 30px var(--cyan), 0 0 60px var(--cyan-dim);
+  animation: state-glow 3s ease-in-out infinite;
 }
-.core-status .sub-state {
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 4px;
+@keyframes state-glow {
+  0%,100% { text-shadow: 0 0 30px var(--cyan), 0 0 60px var(--cyan-dim); }
+  50% { text-shadow: 0 0 50px var(--cyan), 0 0 100px var(--cyan-dim); }
 }
+.brain-state .state-sub {
+  font-size: 10px; color: var(--muted); margin-top: 8px;
+  letter-spacing: 0.2em;
+}
+.brain-coords {
+  position: absolute; top: 20px; left: 20px;
+  font-size: 9px; color: var(--muted);
+}
+.brain-coords span { color: var(--cyan); }
 
 /* ── 右侧面板 - 目标与记忆 ── */
 .right-panel {
   background: var(--panel);
-  padding: 20px;
+  padding: 16px;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  border-left: 1px solid var(--panel-border);
 }
-.goal-item {
-  background: rgba(168, 85, 247, 0.08);
-  border: 1px solid rgba(168, 85, 247, 0.25);
-  border-radius: 8px;
-  padding: 10px 12px;
+.goal-card {
+  background: rgba(170,0,255,0.06);
+  border: 1px solid rgba(170,0,255,0.2);
+  border-radius: 4px;
+  padding: 10px;
   margin-bottom: 8px;
+  position: relative;
+}
+.goal-card::before {
+  content: '';
+  position: absolute; top: 0; left: 0; bottom: 0; width: 2px;
+  background: linear-gradient(180deg, var(--purple), transparent);
 }
 .goal-id {
-  font-size: 10px;
-  color: var(--purple);
-  letter-spacing: 0.1em;
+  font-size: 9px; color: var(--purple); letter-spacing: 0.2em;
   margin-bottom: 4px;
 }
-.goal-desc {
-  font-size: 12px;
-  color: var(--fg);
-  line-height: 1.4;
+.goal-text {
+  font-size: 11px; color: var(--fg); line-height: 1.4;
 }
 .goal-meta {
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 6px;
-  display: flex;
-  gap: 12px;
+  font-size: 9px; color: var(--muted); margin-top: 6px;
+  display: flex; gap: 12px;
 }
 .episode-item {
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-  font-size: 11px;
-  color: var(--muted);
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 10px; color: var(--muted);
+  display: flex; gap: 8px;
 }
-.episode-item .time {
-  color: var(--cyan);
-  margin-right: 8px;
+.episode-item .time { color: var(--cyan); min-width: 40px; }
+.episode-item .status { min-width: 16px; }
+.episode-item .status.ok { color: var(--green); }
+.episode-item .status.fail { color: var(--red); }
+.pending-card {
+  background: rgba(255,171,0,0.06);
+  border: 1px solid rgba(255,171,0,0.2);
+  border-radius: 4px;
+  padding: 10px;
+  margin-bottom: 8px;
 }
-.episode-item .status-ok { color: var(--green); }
-.episode-item .status-fail { color: var(--red); }
+.pending-id {
+  font-size: 9px; color: var(--amber); letter-spacing: 0.15em;
+  margin-bottom: 4px;
+}
+.pending-text {
+  font-size: 11px; color: var(--fg); line-height: 1.4;
+  margin-bottom: 8px;
+}
+.pending-actions {
+  display: flex; gap: 8px;
+}
+.btn-approve {
+  flex: 1; padding: 4px;
+  background: rgba(0,230,118,0.1);
+  border: 1px solid rgba(0,230,118,0.3);
+  color: var(--green);
+  font-size: 10px; cursor: pointer;
+  border-radius: 2px;
+}
+.btn-deny {
+  flex: 1; padding: 4px;
+  background: rgba(255,23,68,0.1);
+  border: 1px solid rgba(255,23,68,0.3);
+  color: var(--red);
+  font-size: 10px; cursor: pointer;
+  border-radius: 2px;
+}
 
-/* ── 底部 - 对话输入 ── */
+/* ── 底部栏 - 对话 ── */
 .bottom-bar {
   grid-column: 1 / -1;
-  background: var(--panel);
-  padding: 16px 24px;
-  display: flex;
+  background: linear-gradient(0deg, rgba(0,10,20,0.95) 0%, rgba(0,15,30,0.9) 100%);
+  border-top: 1px solid var(--panel-border);
+  padding: 12px 20px;
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 16px;
   align-items: center;
-  gap: 12px;
 }
-.chat-messages {
-  flex: 1;
-  max-height: 60px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.chat-log {
+  max-height: 50px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px;
 }
-.msg {
-  padding: 6px 12px;
-  border-radius: 8px;
-  max-width: 80%;
-  font-size: 12px;
-  line-height: 1.4;
+.chat-msg {
+  padding: 4px 10px;
+  border-radius: 2px;
+  font-size: 11px;
+  max-width: 90%;
 }
-.msg.user {
+.chat-msg.user {
   align-self: flex-end;
-  background: rgba(30, 107, 255, 0.2);
-  border: 1px solid rgba(30, 107, 255, 0.4);
+  background: rgba(41,121,255,0.15);
+  border: 1px solid rgba(41,121,255,0.3);
   color: var(--fg);
 }
-.msg.bot {
+.chat-msg.bot {
   align-self: flex-start;
-  background: rgba(0, 212, 255, 0.08);
-  border: 1px solid var(--border);
+  background: rgba(0,229,255,0.08);
+  border: 1px solid var(--panel-border);
   color: var(--fg);
 }
-.msg.bot.mock {
+.chat-msg.bot.mock {
   border-style: dashed;
-  border-color: rgba(245, 158, 11, 0.4);
+  border-color: rgba(255,171,0,0.3);
   color: var(--amber);
 }
-.input-row {
-  display: flex;
-  gap: 10px;
-  flex: 1;
+.input-area {
+  display: flex; gap: 10px; align-items: center;
 }
 #chatInput {
   flex: 1;
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  padding: 10px 20px;
+  background: rgba(0,10,20,0.8);
+  border: 1px solid var(--panel-border);
+  border-radius: 2px;
+  padding: 8px 14px;
   color: var(--fg);
-  font-size: 13px;
-  outline: none;
+  font-size: 12px;
   font-family: inherit;
+  outline: none;
+  transition: all 0.2s;
 }
 #chatInput:focus {
   border-color: var(--cyan);
-  box-shadow: 0 0 20px rgba(0, 212, 255, 0.2);
+  box-shadow: 0 0 15px rgba(0,229,255,0.2);
 }
 #chatInput::placeholder { color: var(--muted); }
 .send-btn {
   background: linear-gradient(135deg, var(--cyan), var(--blue));
   border: none;
-  border-radius: 24px;
-  padding: 10px 24px;
+  border-radius: 2px;
+  padding: 8px 20px;
   color: #000;
-  font-weight: 600;
-  font-size: 13px;
+  font-weight: 700;
+  font-size: 11px;
   cursor: pointer;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.2em;
   transition: all 0.2s;
 }
 .send-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 20px rgba(0, 212, 255, 0.4);
+  box-shadow: 0 4px 20px rgba(0,229,255,0.4);
 }
-.send-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  transform: none;
-}
-
-/* ── 待批请求 ── */
-.pending-card {
-  background: rgba(245, 158, 11, 0.08);
-  border: 1px solid rgba(245, 158, 11, 0.25);
-  border-radius: 10px;
-  padding: 12px;
-}
-.pending-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-.pending-id {
-  font-size: 10px;
-  color: var(--amber);
-}
-.pending-actions {
-  display: flex;
-  gap: 8px;
-}
-.btn-approve {
-  background: rgba(34, 197, 94, 0.15);
-  border: 1px solid rgba(34, 197, 94, 0.4);
-  color: var(--green);
-  padding: 4px 12px;
-  border-radius: 6px;
-  font-size: 11px;
-  cursor: pointer;
-}
-.btn-deny {
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  color: var(--red);
-  padding: 4px 12px;
-  border-radius: 6px;
-  font-size: 11px;
-  cursor: pointer;
-}
+.send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
 /* ── 滚动条 ── */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb { background: var(--panel-border); }
 
-/* ── 响应式 ── */
-@media (max-width: 1024px) {
-  .app { grid-template-columns: 1fr; grid-template-rows: 50px 1fr 80px; }
-  .left-panel, .right-panel { display: none; }
+/* ── 闪烁效果 ── */
+@keyframes flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.95; }
 }
+.flicker { animation: flicker 0.1s ease-in-out; }
 </style>
 </head>
 <body>
 
-<canvas id="particles"></canvas>
+<div id="grid-bg"></div>
+<div id="scanline"></div>
 
 <div class="app">
-  <!-- 顶部栏 -->
-  <header class="topbar">
-    <div class="brand">
-      <div class="brand-icon"></div>
+  <!-- 顶部HUD -->
+  <header class="hud-top">
+    <div class="hud-brand">
+      <div class="hud-logo"></div>
       <div>
-        <h1>OCOS</h1>
-        <div class="sub">DIGITAL ORGANISM · v1.1</div>
+        <div class="hud-title">OCOS</div>
+        <div class="hud-subtitle">DIGITAL ORGANISM · NEURAL INTERFACE v2.0</div>
       </div>
     </div>
-    <div class="status-pills">
-      <div class="pill" id="daemonPill">
-        <span class="dot"></span>
-        <span id="daemonText">连接中...</span>
+    <div class="hud-status">
+      <div class="hud-pill" id="daemonPill">
+        <span id="daemonText">初始化...</span>
       </div>
-      <div class="pill" id="llmPill">
-        <span class="dot" style="background:var(--muted)"></span>
-        <span id="llmText">等待配置</span>
+      <div class="hud-pill" id="llmPill">
+        <span id="llmText">等待连接</span>
       </div>
+      <div class="hud-time" id="clock">--:--:--</div>
     </div>
-    <div class="clock" id="clock">--:--:--</div>
   </header>
 
   <!-- 左侧面板 -->
   <aside class="left-panel">
-    <div>
-      <div class="panel-title">核心状态</div>
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">认知引擎</span>
-        </div>
-        <div id="engineStatus">
-          <div class="metric-row">
-            <span class="metric-label">planner</span>
-            <span class="metric-value" style="color:var(--green)">● 运行中</span>
-          </div>
-          <div class="metric-row">
-            <span class="metric-label">reasoner</span>
-            <span class="metric-value" style="color:var(--green)">● 运行中</span>
-          </div>
-        </div>
+    <div class="section-title">神经引擎状态</div>
+    <div class="metric-card">
+      <div class="metric-row">
+        <span class="label">planner</span>
+        <span class="value ok">● 运行中</span>
+      </div>
+      <div class="metric-row">
+        <span class="label">reasoner</span>
+        <span class="value ok">● 运行中</span>
+      </div>
+      <div class="metric-row">
+        <span class="label">decision</span>
+        <span class="value">● 待机</span>
       </div>
     </div>
 
-    <div>
-      <div class="panel-title">记忆容量</div>
-      <div class="card">
-        <div class="value-lg" id="episodeCount">0</div>
-        <div class="value-label">已沉淀 episode</div>
-        <div class="progress-bar">
-          <div class="progress-fill" id="episodeBar" style="width:0%"></div>
-        </div>
-        <div class="metric-row" style="margin-top:10px">
-          <span class="metric-label">beliefs</span>
-          <span class="metric-value" id="beliefCount">0</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">patterns</span>
-          <span class="metric-value" id="patternCount">0</span>
-        </div>
+    <div class="section-title">记忆容量</div>
+    <div class="metric-card">
+      <div class="metric-value" id="episodeCount">0</div>
+      <div class="metric-label">已沉淀 episode</div>
+      <div class="metric-bar"><div class="metric-bar-fill" id="episodeBar" style="width:0%"></div></div>
+      <div class="metric-row" style="margin-top:8px">
+        <span class="label">beliefs</span>
+        <span class="value" id="beliefCount">0</span>
+      </div>
+      <div class="metric-row">
+        <span class="label">patterns</span>
+        <span class="value" id="patternCount">0</span>
       </div>
     </div>
 
-    <div>
-      <div class="panel-title">能力矩阵</div>
-      <div class="card">
-        <div class="metric-row">
-          <span class="metric-label">filesystem</span>
-          <span class="metric-value" style="color:var(--green)">✓</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">shell·HTTP</span>
-          <span class="metric-value" style="color:var(--amber)">◑ 需审批</span>
-        </div>
+    <div class="section-title">能力矩阵</div>
+    <div class="metric-card">
+      <div class="metric-row">
+        <span class="label">filesystem</span>
+        <span class="value ok">✓ 读写</span>
+      </div>
+      <div class="metric-row">
+        <span class="label">shell·HTTP</span>
+        <span class="value warn">◑ 需审批</span>
       </div>
     </div>
 
-    <div>
-      <div class="panel-title">自我认知</div>
-      <div class="card">
-        <div id="selfKnowledge" style="font-size:11px;color:var(--muted);line-height:1.6">
-          加载中...
-        </div>
-      </div>
+    <div class="section-title">自我认知</div>
+    <div class="metric-card" id="selfKnowledge" style="font-size:10px;color:var(--muted);line-height:1.8">
+      加载中...
     </div>
   </aside>
 
-  <!-- 中央可视化 -->
+  <!-- 中央大脑 -->
   <main class="center-panel">
-    <canvas id="coreCanvas"></canvas>
-    <div class="core-status">
-      <div class="state" id="coreState">待命中</div>
-      <div class="sub-state" id="coreSub">等待输入...</div>
+    <canvas id="brainCanvas"></canvas>
+    <div class="brain-hud">
+      <div class="brain-coords">
+        <span>COORD:</span> <span id="brainCoord">000.000 : 000.000</span><br>
+        <span>THETA:</span> <span id="brainTheta">--</span>
+      </div>
+      <div class="brain-state">
+        <div class="state-text" id="brainState">待命中</div>
+        <div class="state-sub" id="brainSub">等待神经输入...</div>
+      </div>
     </div>
   </main>
 
   <!-- 右侧面板 -->
   <aside class="right-panel">
-    <div>
-      <div class="panel-title">活跃目标</div>
-      <div id="goalsContainer">
-        <div style="color:var(--muted);font-size:11px;text-align:center;padding:20px">
-          暂无活跃目标
-        </div>
-      </div>
+    <div class="section-title">活跃目标</div>
+    <div id="goalsContainer">
+      <div style="color:var(--muted);font-size:10px;text-align:center;padding:16px">无活跃目标</div>
     </div>
 
-    <div>
-      <div class="panel-title">待批请求</div>
-      <div id="pendingContainer">
-        <div style="color:var(--muted);font-size:11px;text-align:center;padding:20px">
-          无待批项
-        </div>
-      </div>
+    <div class="section-title">待批请求</div>
+    <div id="pendingContainer">
+      <div style="color:var(--muted);font-size:10px;text-align:center;padding:16px">无待批项</div>
     </div>
 
-    <div>
-      <div class="panel-title">最近记忆</div>
-      <div id="recentEpisodes">
-        <div style="color:var(--muted);font-size:11px;text-align:center;padding:20px">
-          加载中...
-        </div>
-      </div>
+    <div class="section-title">最近突触</div>
+    <div id="recentEpisodes">
+      <div style="color:var(--muted);font-size:10px;text-align:center;padding:16px">加载中...</div>
     </div>
 
-    <div>
-      <div class="panel-title">操作</div>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <button class="send-btn" onclick="runSelfImprove()" style="background:rgba(168,85,247,0.2);border:1px solid rgba(168,85,247,0.4);color:var(--purple)">
-          ↻ 自省升级
-        </button>
-        <button class="send-btn" onclick="refreshAll()" style="background:rgba(0,212,255,0.1);border:1px solid var(--border);color:var(--cyan)">
-          ⟳ 刷新状态
-        </button>
-      </div>
+    <div class="section-title">操作</div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button class="send-btn" onclick="runSelfImprove()" style="background:rgba(170,0,255,0.15);border:1px solid rgba(170,0,255,0.3);color:var(--purple)">
+        ⟳ 自省升级
+      </button>
+      <button class="send-btn" onclick="refreshAll()" style="background:rgba(0,229,255,0.1);border:1px solid var(--panel-border);color:var(--cyan)">
+        ⟳ 刷新状态
+      </button>
     </div>
   </aside>
 
-  <!-- 底部对话栏 -->
+  <!-- 底部栏 -->
   <footer class="bottom-bar">
-    <div class="chat-messages" id="chatMessages">
-      <div class="msg bot">你好，我是 OCOS。有什么可以帮你的？</div>
+    <div class="chat-log" id="chatMessages">
+      <div class="chat-msg bot">系统初始化完成。等待神经连接...</div>
     </div>
-    <div class="input-row">
-      <input id="chatInput" type="text" placeholder="对它说点什么... (Enter发送)" autocomplete="off">
-      <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
+    <div class="input-area">
+      <input id="chatInput" type="text" placeholder="输入神经脉冲..." autocomplete="off">
+      <button class="send-btn" id="sendBtn" onclick="sendMessage()">发射</button>
     </div>
   </footer>
 </div>
 
 <script>
 // ═══════════════════════════════════════════════════════
-// 粒子背景
+// 大脑可视化
 // ═══════════════════════════════════════════════════════
-const pCanvas = document.getElementById('particles');
-const pCtx = pCanvas.getContext('2d');
-let pW, pH;
-function resizeParticles() {
-  pW = pCanvas.width = window.innerWidth * devicePixelRatio;
-  pH = pCanvas.height = window.innerHeight * devicePixelRatio;
-  pCanvas.style.width = window.innerWidth + 'px';
-  pCanvas.style.height = window.innerHeight + 'px';
-}
-resizeParticles();
-window.addEventListener('resize', resizeParticles);
+const canvas = document.getElementById('brainCanvas');
+const ctx = canvas.getContext('2d');
+let W, H, cx, cy;
 
-const particles = Array.from({length: 80}, () => ({
-  x: Math.random(), y: Math.random(),
-  vx: (Math.random() - 0.5) * 0.0003,
-  vy: (Math.random() - 0.5) * 0.0003,
-  r: Math.random() * 1.5 + 0.5,
-  a: Math.random() * 0.4 + 0.1
+function resize() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  W = canvas.width = rect.width * devicePixelRatio;
+  H = canvas.height = rect.height * devicePixelRatio;
+  cx = W / 2; cy = H / 2;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+// 大脑节点
+const brainNodes = Array.from({length: 40}, (_, i) => ({
+  x: (Math.random() - 0.5) * 0.6,
+  y: (Math.random() - 0.5) * 0.7,
+  z: Math.random(),
+  phase: Math.random() * Math.PI * 2,
+  size: 1.5 + Math.random() * 2,
+  connections: []
 }));
 
-function drawParticles(t) {
-  pCtx.clearRect(0, 0, pW, pH);
-  for (const p of particles) {
-    p.x += p.vx; p.y += p.vy;
-    if (p.x < 0 || p.x > 1) p.vx *= -1;
-    if (p.y < 0 || p.y > 1) p.vy *= -1;
-    const alpha = p.a * (0.7 + 0.3 * Math.sin(t + p.x * 10));
-    pCtx.fillStyle = `rgba(0, 212, 255, ${alpha})`;
-    pCtx.beginPath();
-    pCtx.arc(p.x * pW, p.y * pH, p.r * devicePixelRatio, 0, Math.PI * 2);
-    pCtx.fill();
+// 建立连接
+for (let i = 0; i < brainNodes.length; i++) {
+  const dists = brainNodes.map((n, j) => ({
+    j, dist: Math.sqrt((n.x - brainNodes[j].x)**2 + (n.y - brainNodes[j].y)**2)
+  })).sort((a, b) => a.dist - b.dist).slice(1, 4);
+  brainNodes[i].connections = dists.map(d => d.j);
+}
+
+let time = 0;
+function drawBrain() {
+  ctx.clearRect(0, 0, W, H);
+  time += 0.016;
+  
+  // 更新坐标
+  for (const node of brainNodes) {
+    node.currentX = cx + node.x * cx * 0.8 + Math.sin(time * 0.5 + node.phase) * 10;
+    node.currentY = cy + node.y * cy * 0.7 + Math.cos(time * 0.3 + node.phase) * 8;
   }
-  // 连线
-  for (let i = 0; i < particles.length; i++) {
-    for (let j = i + 1; j < particles.length; j++) {
-      const dx = particles[i].x - particles[j].x;
-      const dy = particles[i].y - particles[j].y;
-      const dist = Math.sqrt(dx*dx + dy*dy);
-      if (dist < 0.15) {
-        pCtx.strokeStyle = `rgba(0, 212, 255, ${0.08 * (1 - dist/0.15)})`;
-        pCtx.lineWidth = 0.5 * devicePixelRatio;
-        pCtx.beginPath();
-        pCtx.moveTo(particles[i].x * pW, particles[i].y * pH);
-        pCtx.lineTo(particles[j].x * pW, particles[j].y * pH);
-        pCtx.stroke();
+  
+  // 绘制连接
+  for (let i = 0; i < brainNodes.length; i++) {
+    const node = brainNodes[i];
+    for (const j of node.connections) {
+      const other = brainNodes[j];
+      const pulse = Math.sin(time * 2 + node.phase + other.phase) * 0.5 + 0.5;
+      ctx.strokeStyle = `rgba(0, 229, 255, ${0.1 + pulse * 0.15})`;
+      ctx.lineWidth = 0.5 * devicePixelRatio;
+      ctx.beginPath();
+      ctx.moveTo(node.currentX, node.currentY);
+      ctx.lineTo(other.currentX, other.currentY);
+      ctx.stroke();
+      
+      // 脉冲沿连接线传播
+      if (pulse > 0.8) {
+        const px = node.currentX + (other.currentX - node.currentX) * ((time * 0.5) % 1);
+        const py = node.currentY + (other.currentY - node.currentY) * ((time * 0.5) % 1);
+        ctx.fillStyle = `rgba(0, 229, 255, ${pulse * 0.5})`;
+        ctx.beginPath();
+        ctx.arc(px, py, 2 * devicePixelRatio, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
   }
-  requestAnimationFrame((t) => drawParticles(t + 1));
-}
-requestAnimationFrame((t) => drawParticles(t));
-
-// ═══════════════════════════════════════════════════════
-// 核心可视化
-// ═══════════════════════════════════════════════════════
-const coreCanvas = document.getElementById('coreCanvas');
-const coreCtx = coreCanvas.getContext('2d');
-let cW, cH, cx, cy;
-
-function resizeCore() {
-  const rect = coreCanvas.parentElement.getBoundingClientRect();
-  cW = coreCanvas.width = rect.width * devicePixelRatio;
-  cH = coreCanvas.height = rect.height * devicePixelRatio;
-  cx = cW / 2; cy = cH / 2;
-  coreCanvas.style.width = rect.width + 'px';
-  coreCanvas.style.height = rect.height + 'px';
-}
-resizeCore();
-window.addEventListener('resize', resizeCore);
-
-// 脉冲环
-const rings = Array.from({length: 5}, (_, i) => ({
-  r: 40 + i * 35, phase: i * 0.8, speed: 0.02 + i * 0.005
-}));
-
-// 数据流节点
-const nodes = Array.from({length: 12}, (_, i) => ({
-  angle: (i / 12) * Math.PI * 2,
-  dist: 120 + Math.random() * 60,
-  size: 2 + Math.random() * 3,
-  pulse: Math.random() * Math.PI * 2
-}));
-
-function drawCore(t) {
-  coreCtx.clearRect(0, 0, cW, cH);
   
-  // 背景光晕
-  const grad = coreCtx.createRadialGradient(cx, cy, 0, cx, cy, 200);
-  grad.addColorStop(0, 'rgba(0, 212, 255, 0.06)');
-  grad.addColorStop(0.5, 'rgba(168, 85, 247, 0.03)');
-  grad.addColorStop(1, 'transparent');
-  coreCtx.fillStyle = grad;
-  coreCtx.fillRect(0, 0, cW, cH);
-  
-  // 脉冲环
-  for (const ring of rings) {
-    const pulse = Math.sin(t * ring.speed + ring.phase) * 0.5 + 0.5;
-    const alpha = 0.15 + pulse * 0.15;
-    coreCtx.strokeStyle = `rgba(0, 212, 255, ${alpha})`;
-    coreCtx.lineWidth = 1 * devicePixelRatio;
-    coreCtx.beginPath();
-    coreCtx.arc(cx, cy, ring.r * devicePixelRatio, 0, Math.PI * 2);
-    coreCtx.stroke();
+  // 绘制节点
+  for (const node of brainNodes) {
+    const pulse = Math.sin(time * 3 + node.phase) * 0.5 + 0.5;
+    const alpha = 0.4 + pulse * 0.4;
+    
+    // 光晕
+    const grad = ctx.createRadialGradient(node.currentX, node.currentY, 0, node.currentX, node.currentY, node.size * 3 * devicePixelRatio);
+    grad.addColorStop(0, `rgba(0, 229, 255, ${alpha * 0.3})`);
+    grad.addColorStop(1, 'transparent');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(node.currentX, node.currentY, node.size * 3 * devicePixelRatio, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // 核心
+    ctx.fillStyle = `rgba(0, 229, 255, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(node.currentX, node.currentY, node.size * devicePixelRatio, 0, Math.PI * 2);
+    ctx.fill();
   }
   
   // 中心核心
-  const coreR = 25 * devicePixelRatio;
-  const coreGrad = coreCtx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
-  coreGrad.addColorStop(0, 'rgba(0, 212, 255, 0.8)');
-  coreGrad.addColorStop(0.5, 'rgba(168, 85, 247, 0.4)');
+  const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 60 * devicePixelRatio);
+  coreGrad.addColorStop(0, 'rgba(170, 0, 255, 0.3)');
+  coreGrad.addColorStop(0.5, 'rgba(0, 229, 255, 0.1)');
   coreGrad.addColorStop(1, 'transparent');
-  coreCtx.fillStyle = coreGrad;
-  coreCtx.beginPath();
-  coreCtx.arc(cx, cy, coreR, 0, Math.PI * 2);
-  coreCtx.fill();
+  ctx.fillStyle = coreGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 60 * devicePixelRatio, 0, Math.PI * 2);
+  ctx.fill();
   
-  // 节点连接
-  for (const node of nodes) {
-    const nx = cx + Math.cos(node.angle + t * 0.0003) * node.dist * devicePixelRatio;
-    const ny = cy + Math.sin(node.angle + t * 0.0003) * node.dist * devicePixelRatio;
-    const pulse = Math.sin(t * 0.03 + node.pulse) * 0.5 + 0.5;
-    
-    // 连线
-    coreCtx.strokeStyle = `rgba(0, 212, 255, ${0.1 + pulse * 0.1})`;
-    coreCtx.lineWidth = 0.5 * devicePixelRatio;
-    coreCtx.beginPath();
-    coreCtx.moveTo(cx, cy);
-    coreCtx.lineTo(nx, ny);
-    coreCtx.stroke();
-    
-    // 节点
-    coreCtx.fillStyle = `rgba(0, 212, 255, ${0.4 + pulse * 0.4})`;
-    coreCtx.beginPath();
-    coreCtx.arc(nx, ny, node.size * devicePixelRatio, 0, Math.PI * 2);
-    coreCtx.fill();
-  }
+  // 中心点
+  ctx.fillStyle = 'rgba(170, 0, 255, 0.8)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4 * devicePixelRatio, 0, Math.PI * 2);
+  ctx.fill();
   
-  requestAnimationFrame(drawCore);
+  // 坐标更新
+  document.getElementById('brainCoord').textContent = 
+    `${cx.toFixed(3)} : ${cy.toFixed(3)}`;
+  document.getElementById('brainTheta').textContent = 
+    (time * 57.3 % 360).toFixed(1) + '°';
+  
+  requestAnimationFrame(drawBrain);
 }
-requestAnimationFrame(drawCore);
+drawBrain();
 
 // ═══════════════════════════════════════════════════════
 // 时钟
 // ═══════════════════════════════════════════════════════
 setInterval(() => {
-  const now = new Date();
   document.getElementById('clock').textContent =
-    now.toLocaleTimeString('zh-CN', { hour12: false });
+    new Date().toLocaleTimeString('zh-CN', { hour12: false });
 }, 1000);
 
 // ═══════════════════════════════════════════════════════
@@ -724,14 +669,11 @@ const sendBtn = document.getElementById('sendBtn');
 
 function addMessage(text, isUser, isMock) {
   const div = document.createElement('div');
-  div.className = 'msg ' + (isUser ? 'user' : 'bot' + (isMock ? ' mock' : ''));
+  div.className = 'chat-msg ' + (isUser ? 'user' : 'bot' + (isMock ? ' mock' : ''));
   div.textContent = text;
   chatMessages.appendChild(div);
   chatMessages.scrollTop = chatMessages.scrollHeight;
-  // 保留最近5条
-  while (chatMessages.children.length > 5) {
-    chatMessages.firstChild.remove();
-  }
+  while (chatMessages.children.length > 4) chatMessages.firstChild.remove();
 }
 
 async function sendMessage() {
@@ -742,8 +684,8 @@ async function sendMessage() {
   chatInput.value = '';
   sendBtn.disabled = true;
   
-  document.getElementById('coreState').textContent = '处理中';
-  document.getElementById('coreSub').textContent = 'LLM 思考中...';
+  document.getElementById('brainState').textContent = '处理中';
+  document.getElementById('brainSub').textContent = '神经脉冲分析中...';
   
   try {
     const resp = await fetch('/ocos/converse', {
@@ -753,14 +695,14 @@ async function sendMessage() {
     });
     const j = await resp.json();
     
-    document.getElementById('coreState').textContent = '回应中';
-    document.getElementById('coreSub').textContent = '生成回复...';
+    document.getElementById('brainState').textContent = '回应中';
+    document.getElementById('brainSub').textContent = '生成神经响应...';
     
     if (j.success) {
       addMessage(j.data.reply, false, j.data.mock);
       updateLLMStatus(j.data.provider, j.data.mock);
     } else {
-      addMessage('出错: ' + j.message, false, false);
+      addMessage('错误: ' + j.message, false, false);
     }
   } catch (e) {
     addMessage('连接失败（ocos-server 在跑吗？）', false, false);
@@ -768,8 +710,8 @@ async function sendMessage() {
   
   sendBtn.disabled = false;
   chatInput.focus();
-  document.getElementById('coreState').textContent = '待命中';
-  document.getElementById('coreSub').textContent = '等待输入...';
+  document.getElementById('brainState').textContent = '待命中';
+  document.getElementById('brainSub').textContent = '等待神经输入...';
 }
 
 sendBtn.onclick = sendMessage;
@@ -777,16 +719,12 @@ chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(
 
 function updateLLMStatus(provider, mock) {
   const pill = document.getElementById('llmPill');
-  const dot = pill.querySelector('.dot');
   const text = document.getElementById('llmText');
-  
   if (mock) {
-    dot.style.background = 'var(--amber)';
-    dot.style.boxShadow = '0 0 8px var(--amber)';
+    pill.classList.add('warn');
     text.textContent = '状态模式';
   } else {
-    dot.style.background = 'var(--green)';
-    dot.style.boxShadow = '0 0 8px var(--green)';
+    pill.classList.remove('warn');
     text.textContent = provider === 'openai' ? 'Agnes AI' : provider;
   }
 }
@@ -796,45 +734,37 @@ function updateLLMStatus(provider, mock) {
 // ═══════════════════════════════════════════════════════
 async function refreshAll() {
   try {
-    // 获取核心状态
     const introResp = await fetch('/ocos/introspect');
     const intro = await introResp.json();
     const d = intro.data;
     
-    // 更新记忆计数
     const mem = d.memory_stats || {};
     document.getElementById('episodeCount').textContent = mem.episode_count || 0;
     document.getElementById('beliefCount').textContent = mem.belief_count || 0;
     document.getElementById('patternCount').textContent = mem.pattern_count || 0;
+    document.getElementById('episodeBar').style.width = Math.min(100, (mem.episode_count || 0) / 5) + '%';
     
-    // 更新进度条
-    const epCount = mem.episode_count || 0;
-    document.getElementById('episodeBar').style.width = Math.min(100, epCount / 10) + '%';
-    
-    // 更新自我认知
     const sk = d.self_knowledge || '';
     const lines = sk.split('\n').filter(l => l.trim()).slice(0, 3);
     document.getElementById('selfKnowledge').innerHTML =
-      lines.length ? lines.map(l => `<div style="margin-bottom:4px">${l.replace(/^- /, '•')}</div>`).join('')
+      lines.length ? lines.map(l => `<div style="margin-bottom:4px">${l.replace(/^- /, '▸')}</div>`).join('')
                   : '<div style="color:var(--muted)">暂无</div>';
     
-    // 更新最近记忆
     const recent = d.recent_episodes || [];
-    const recentHtml = recent.slice(0, 5).map(e => {
+    const recentHtml = recent.slice(0, 6).map(e => {
       const time = e.created_at?.slice(11, 16) || '--:--';
       const ok = e.decision?.includes('completed') || e.decision?.includes('success');
-      const icon = ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
-      const text = (e.decision || e.context || '').slice(0, 50);
-      return `<div class="episode-item">${icon}<span class="time">${time}</span>${text}...</div>`;
+      const icon = ok ? '✓' : '✗';
+      const statusClass = ok ? 'ok' : 'fail';
+      const text = (e.decision || e.context || '').slice(0, 40);
+      return `<div class="episode-item"><span class="time">${time}</span><span class="status ${statusClass}">${icon}</span><span>${text}...</span></div>`;
     }).join('');
-    document.getElementById('recentEpisodes').innerHTML = recentHtml || '<div style="color:var(--muted);font-size:11px">暂无</div>';
+    document.getElementById('recentEpisodes').innerHTML = recentHtml || '<div style="color:var(--muted);font-size:10px">暂无</div>';
     
-    // 更新LLM状态
     if (d.llm) {
       updateLLMStatus('openai', !String(d.llm).includes('configured'));
     }
     
-    // 获取目标和待批
     const [goalsResp, pendingResp] = await Promise.all([
       fetch('/ocos/summary'),
       fetch('/ocos/approvals')
@@ -842,27 +772,23 @@ async function refreshAll() {
     const goals = await goalsResp.json();
     const pending = await pendingResp.json();
     
-    // 渲染目标
     const goalList = goals.data?.goals || {};
     if (goalList.ACTIVE || goalList.PENDING) {
       document.getElementById('goalsContainer').innerHTML = `
-        <div class="goal-item">
-          <div class="goal-id">GOAL-ACTIVE</div>
-          <div class="goal-desc">${goalList.ACTIVE || 0} 活跃目标</div>
+        <div class="goal-card">
+          <div class="goal-id">ACTIVE-GOAL</div>
+          <div class="goal-text">${goalList.ACTIVE || 0} 活跃目标</div>
           <div class="goal-meta"><span>${goalList.PENDING || 0} 待执行</span></div>
         </div>
       `;
     }
     
-    // 渲染待批
     const pendList = pending.data?.pending || [];
     if (pendList.length > 0) {
       document.getElementById('pendingContainer').innerHTML = pendList.map(p => `
         <div class="pending-card">
-          <div class="pending-header">
-            <span class="pending-id">${p.id}</span>
-          </div>
-          <div style="font-size:11px;color:var(--fg);margin-bottom:8px">${(p.text || '').slice(0, 60)}</div>
+          <div class="pending-id">${p.id}</div>
+          <div class="pending-text">${(p.text || '').slice(0, 50)}</div>
           <div class="pending-actions">
             <button class="btn-approve" onclick="decide('${p.id}','approve')">批准</button>
             <button class="btn-deny" onclick="decide('${p.id}','deny')">拒绝</button>
@@ -871,7 +797,6 @@ async function refreshAll() {
       `).join('');
     }
     
-    // 更新daemon状态
     const daemon = goals.data?.daemon || {};
     const daemonPill = document.getElementById('daemonPill');
     const daemonText = document.getElementById('daemonText');
@@ -912,7 +837,7 @@ async function runSelfImprove() {
   }
   
   btn.disabled = false;
-  btn.textContent = '↻ 自省升级';
+  btn.textContent = '⟳ 自省升级';
 }
 
 // 出站消息轮询
@@ -929,7 +854,6 @@ async function pollOutbox() {
 setInterval(pollOutbox, 3000);
 pollOutbox();
 
-// 初始刷新
 refreshAll();
 setInterval(refreshAll, 5000);
 
