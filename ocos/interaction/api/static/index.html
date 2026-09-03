@@ -914,21 +914,31 @@ async function runSelfImprove() {
   btn.textContent = '⟳ 自省升级';
 }
 
-// 出站消息轮询
+// 出站消息轮询 - 发送到右侧"最近交互"而不是聊天窗口
 let outboxCursor = 0;
 async function pollOutbox() {
   try {
     const j = await (await fetch(`/ocos/outbox?after=${outboxCursor}`)).json();
     for (const m of j.data.messages) {
-      // 只添加实际的用户消息，过滤掉系统错误日志
-      if (m.content && !m.content.includes('LLM 规划失败') && !m.content.includes('proxy')) {
-        addMessage('📋 ' + m.content.slice(0, 100), false, false);
+      // 过滤错误日志，只添加成功或用户友好的消息
+      const content = m.content || '';
+      if (content && !content.includes('LLM 规划失败') && !content.includes('proxy') && !content.includes('status': 'failed')) {
+        const recentEl = document.getElementById('recentEpisodes');
+        if (recentEl) {
+          const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+          const div = document.createElement('div');
+          div.className = 'episode-item';
+          div.innerHTML = `<span class="time">${time}</span><span class="status ok">✓</span><span>${content.slice(0, 40)}...</span>`;
+          recentEl.prepend(div);
+          // 限制显示数量
+          while (recentEl.children.length > 10) recentEl.lastChild.remove();
+        }
       }
       outboxCursor = Math.max(outboxCursor, m.rid);
     }
   } catch (e) {}
 }
-setInterval(pollOutbox, 3000);
+setInterval(pollOutbox, 5000);
 pollOutbox();
 
 refreshAll();
