@@ -279,7 +279,7 @@ class SelfModificationAgent:
 
     # ── 辅助方法 ──
 
-    def _run_tests(self) -> dict[str, int]:
+    def _run_tests(self) -> dict[str, Any]:
         """运行相关测试。"""
         try:
             result = subprocess.run(
@@ -289,8 +289,8 @@ class SelfModificationAgent:
                 text=True,
                 timeout=120,
             )
-            passed = result.count("passed")
-            failed = result.count("failed")
+            passed = result.stdout.count("passed")
+            failed = result.stdout.count("failed")
             return {"passed": passed, "failed": failed, "output": result.stdout[-500:]}
         except subprocess.TimeoutExpired:
             return {"passed": 0, "failed": 999, "output": "timeout"}
