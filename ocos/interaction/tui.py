@@ -24,6 +24,24 @@ class ChatScreen(App):
         background: #1a1a1a;
     }
     
+    #status {
+        height: 3;
+        background: #1a1a1a;
+        color: #cccccc;
+        content-align: left middle;
+        padding-left: 2;
+        border-bottom: solid #ce9178;
+    }
+    
+    #status-model {
+        color: #4ec9b0;
+        text-style: bold;
+    }
+    
+    #status-token {
+        color: #858585;
+    }
+    
     #chat {
         height: 1fr;
         padding: 1 2;
@@ -59,13 +77,11 @@ class ChatScreen(App):
         margin: 0;
     }
     
-    #status {
+    #input-hint {
         height: 3;
-        background: #ce9178;
-        color: #1a1a1a;
         content-align: left middle;
         padding-left: 2;
-        text-style: bold;
+        color: #858585;
     }
     """
     
@@ -83,11 +99,12 @@ class ChatScreen(App):
         self._send_task = None
     
     def compose(self) -> ComposeResult:
+        yield Static("", id="status")
         yield Log(id="chat")
         with Static(id="input-line"):
             yield Static(">", id="input-prompt")
             yield Input(placeholder="", id="input")
-        yield Static("", id="status")
+        yield Static("msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel", id="input-hint")
     
     def on_mount(self) -> None:
         self._add_message("OCOS 已就绪。开始对话...", False)
@@ -112,13 +129,12 @@ class ChatScreen(App):
                     return
         except Exception:
             pass
-        status_el.update(" OCOS │ 离线 │ 请检查服务 ")
+        status_el.update(" agnes-2.5-flash │ 离线 │ 请检查服务 ")
     
     def _add_message(self, text: str, is_user: bool) -> None:
         msg = {"text": text, "is_user": is_user, "timestamp": datetime.now()}
         self.messages.append(msg)
         cls = "user-msg" if is_user else "bot-msg"
-        # 直接显示文本，不显示标签
         self.query_one("#chat", Log).write_line(f"[{cls}]{text}[/{cls}]")
     
     async def _send_message(self) -> None:
