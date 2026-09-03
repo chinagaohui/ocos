@@ -10,6 +10,7 @@ from pathlib import Path
 
 import httpx
 from textual.app import App, ComposeResult
+from textual.containers import Container
 from textual.widgets import Static, Input, Log
 from textual.binding import Binding
 
@@ -24,23 +25,34 @@ class ChatScreen(App):
         background: #1e1e1e;
     }
     
+    #header {
+        height: 5;
+        background: #2d2d2d;
+        border-bottom: solid #d4c99a;
+    }
+    
+    #menu-bar {
+        height: 3;
+        content-align: center middle;
+        color: #cccccc;
+    }
+    
     #title {
         height: 2;
         content-align: left middle;
         padding-left: 2;
         color: #d4c99a;
         text-style: bold;
-        border-bottom: solid #d4c99a;
     }
     
-    #messages {
+    #chat {
         height: 1fr;
         padding: 1 2;
         overflow-y: auto;
     }
     
-    #input-bar {
-        height: 3;
+    #input-area {
+        height: 4;
         border-top: solid #d4c99a;
         background: #2d2d2d;
     }
@@ -51,7 +63,7 @@ class ChatScreen(App):
         border: none;
     }
     
-    #status-bar {
+    #status {
         height: 3;
         background: #000000;
         color: #cccccc;
@@ -75,10 +87,13 @@ class ChatScreen(App):
         self._send_task = None
     
     def compose(self) -> ComposeResult:
-        yield Static("ocos chat", id="title")
-        yield Log(id="messages")
-        yield Input(placeholder="输入消息... (Enter 发送)", id="input")
-        yield Static("", id="status-bar")
+        with Container(id="header"):
+            yield Static("文件(F)  编辑(E)  查看(V)  搜索(S)  终端(T)  帮助(H)", id="menu-bar")
+            yield Static("ocos chat", id="title")
+        yield Log(id="chat")
+        with Container(id="input-area"):
+            yield Input(placeholder="输入消息... (Enter 发送)", id="input")
+        yield Static("", id="status")
     
     def on_mount(self) -> None:
         self._add_message("OCOS 已就绪。开始对话...", False)
@@ -87,7 +102,7 @@ class ChatScreen(App):
         self.query_one("#input", Input).focus()
     
     async def _update_status(self) -> None:
-        status_el = self.query_one("#status-bar", Static)
+        status_el = self.query_one("#status", Static)
         try:
             async with httpx.AsyncClient(base_url=API_BASE, timeout=5.0) as client:
                 resp = await client.get("/ocos/introspect")
@@ -111,7 +126,8 @@ class ChatScreen(App):
         role = "你" if is_user else "OCOS"
         time = msg["timestamp"].strftime("%H:%M:%S")
         cls = "[cyan]" if is_user else "[bold green]"
-        self.query_one("#messages", Log).write_line(f"{cls}{role}[/{cls.replace('[', '').replace(']', '')}] {time}\n{text}")
+        close = "[/cyan]" if is_user else "[/bold green]"
+        self.query_one("#chat", Log).write_line(f"{cls}{role}{close} {time}\n{text}")
     
     async def _send_message(self) -> None:
         inp = self.query_one("#input", Input)
@@ -139,7 +155,7 @@ class ChatScreen(App):
     
     def action_clear(self) -> None:
         self.messages.clear()
-        self.query_one("#messages", Log).clear()
+        self.query_one("#chat", Log).clear()
         self._add_message("对话已清空", False)
         self.notify("对话已清空", title="操作完成")
     
