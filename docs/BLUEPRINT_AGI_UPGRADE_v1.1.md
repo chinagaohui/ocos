@@ -411,4 +411,24 @@ A1 样本转换 / A2 失败诊断 / A3 dream 调 learn —— 只验"管道通�
 
 ---
 
-**v1.1 修正完成。等待用户裁决（接受三项确认点 → 解锁 Phase A 实施）。**
+## 14. 实施状态（2026-09-03 收尾 — A-D 全部落地）
+
+| Phase | 内容 | Commit | 新增测试 |
+|-------|------|--------|---------|
+| A | L1 快通路 + L4 失败诊断 | `5d0f72a` | 22 |
+| B | L2 Recall 进认知 + L3 World 消费 | `56add19` | 14 |
+| C | L4 Replanner + L5/L6 Skill 生长 | `423903b` | 27 |
+| D | L7 泛化 + L8 元认知 | `aaa0062` + `64c6421` | 16 |
+| 合计 | L1-L8 八缺口全部落地 | — | 79 新增, 全量 6250 passed |
+
+**全链路 E-RUN 验证（隔离 DB 真实 daemon 4 ticks）:**
+- 真实 Episode 生产（含 LLM 转换诚实失败 "分析数据/生成报告"）→ 快通路学习 → 4 rules + LESSON artifacts
+- L8 闭环: 3 次失败累积 → rate=0.0 → 写类任务升级 ASK（行为改变成立）
+- L7: "检查内核版本" → "确认机器运行什么内核" 跨表面迁移 sim=0.7
+- E-RUN 发现并修复: success_rate=0.0 被 falsy 误读为 0.5（`64c6421`, 回归测试锁定）
+
+**收尾判断**: Cognitive Runtime → Adaptive Cognitive Runtime 第一跃迁（Experience→Learning→Capability→Behavior→新经历闭环）已完成代码落地与 E-RUN 验证。剩余声明级缺口: 完整 Behavior Delta 生产观测（需长周期运行）、L3-C Observation Supply、Skill 审批 UI 流。
+
+---
+
+**v1.1 修正 + Phase A-D 实施完成（2026-09-03）。**
