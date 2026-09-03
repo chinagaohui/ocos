@@ -172,7 +172,7 @@ ALLOWED_IMPORTS = {
                          # UX 自我认知 + PW-1.2 风格画像 + PW-1.4 内视执行史
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
-                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution", "ocos.perception", "ocos.capability.agents"],  # S4: Organ Client; P1-B: CLI self-modification via SelfModificationAgent
+                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution", "ocos.perception", "ocos.capability.agents", "ocos.growth", "ocos.engines"],  # S4: Organ Client; P1-B: CLI self-modification via SelfModificationAgent; Phase 50: growth CLI (LLM via engines)
     "ocos.interaction.repl": ["ocos.interaction"],
     "ocos.interaction.repl.commands": ["ocos.interaction", "ocos.goal",
                                         "ocos.storage", "ocos.planning",
@@ -182,6 +182,8 @@ ALLOWED_IMPORTS = {
                                      "ocos.planning", "ocos.opentale_bridge", "ocos.execution"],  # S6: WebChat 决策/器官调用
     # Phase 52: Perception System
     "ocos.perception": ["ocos.perception", "ocos.world_model"],  # GAP-P1-3: 感知链桥接世界模型
+    # Phase 50: Growth Module — 外部信号→自我优化 (仅 logging + LLM engines)
+    "ocos.growth": ["ocos.logging", "ocos.engines"],
     # Phase 53: Active Interaction — merged with existing
     # Phase 54: Event Memory Infrastructure
     "ocos.event_memory": ["ocos.event_memory"],

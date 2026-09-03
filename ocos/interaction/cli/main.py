@@ -175,6 +175,10 @@ def main(argv: list[str] | None = None) -> int:
             from ocos.interaction.cli.commands.chat import cmd_chat
             return cmd_chat(args, session)
 
+        elif args.command == "growth":
+            from ocos.interaction.cli.commands.growth import cmd_growth
+            return cmd_growth(args, session)
+
         else:
             parser.print_help()
             return 1

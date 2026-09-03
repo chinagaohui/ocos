@@ -95,6 +95,9 @@ Examples:
     chat.add_argument("--port", type=int, default=8900,
                       help="API服务器端口 (default: 8900)")
 
+    # ── growth（Phase 50：成长模块 — 外部信号→自我优化） ──────────────
+    _add_growth_parser(subparsers)
+
     return parser
 
 
@@ -322,3 +325,47 @@ def _add_run_parser(subparsers: argparse._SubParsersAction) -> None:
                      help="PW-5.1: 感知监听目录（可多次传入则逗号分隔）")
     run.add_argument("--agent-id", type=str, default="ocos-master",
                      help="Agent ID（默认 ocos-master）")
+
+
+def _add_growth_parser(subparsers: argparse._SubParsersAction) -> None:
+    """ocos growth — 成长模块（Phase 50：外部信号 → 自我优化）。
+
+    子命令:
+        ingest  接收外部智能体投递的技术信号 (持久化, 不分析)
+        analyze LLM 分析待处理信号 → 优化提案 (只读)
+        execute <proposal_id>  执行已分析提案 (受治理自动执行+回滚)
+        status  查看执行历史
+        grow    一键: ingest → analyze → execute (可 --preview 只预览)
+    """
+    growth = subparsers.add_parser("growth", help="成长模块: 外部信号→自我优化")
+    growth_sub = growth.add_subparsers(dest="growth_action", title="growth subcommands")
+
+    ingest = growth_sub.add_parser("ingest", help="接收外部技术信号")
+    ingest.add_argument("--topic", type=str, default="tech-signal", help="信号主题")
+    ingest.add_argument("--summary", type=str, required=True,
+                        help="信号摘要 (≥60 chars)")
+    ingest.add_argument("--source", type=str, default="external", help="投递者标识")
+    ingest.add_argument("--url", type=str, default="", help="来源 URL")
+    ingest.add_argument("--domain", type=str, default="python", help="技术域")
+    ingest.add_argument("--confidence", type=float, default=0.5, help="投递者置信度")
+
+    growth_sub.add_parser("analyze", help="LLM 分析待处理信号 (只读)")
+
+    execute = growth_sub.add_parser(
+        "execute", help="执行提案 (自动: 快照→改→测→保留/回滚)")
+    execute.add_argument("proposal_id", type=str, help="提案 ID")
+
+    status = growth_sub.add_parser("status", help="成长历史")
+    status.add_argument("--limit", type=int, default=20, help="记录条数")
+
+    grow = growth_sub.add_parser(
+        "grow", help="一键成长: ingest→analyze→execute")
+    grow.add_argument("--topic", type=str, default="tech-signal", help="信号主题")
+    grow.add_argument("--summary", type=str, required=True,
+                      help="信号摘要 (≥60 chars)")
+    grow.add_argument("--source", type=str, default="cli", help="投递者标识")
+    grow.add_argument("--url", type=str, default="", help="来源 URL")
+    grow.add_argument("--domain", type=str, default="python", help="技术域")
+    grow.add_argument("--confidence", type=float, default=0.5, help="置信度")
+    grow.add_argument("--preview", action="store_true",
+                      help="只分析+展示 diff, 不执行")
