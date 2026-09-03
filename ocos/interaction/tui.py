@@ -102,10 +102,7 @@ class SessionList(DataTable):
     """左侧会话列表"""
     
     def __init__(self):
-        super().__init__(
-            key_bindings=True,
-            id="session-list",
-        )
+        super().__init__(id="session-list")
         self.add_columns("会话ID", "标题", "时间")
         self.cursor_type = "row"
         self.fixed_rows = 1
