@@ -354,10 +354,10 @@ class RuntimeLoop:
                 continue
 
             tick_start = time.perf_counter()
+            self._tick_counter += 1  # 先递增计数器，确保失败路径也受 max_ticks 约束
             try:
                 result = self._runtime.tick()
                 tick_duration = (time.perf_counter() - tick_start) * 1000  # ms
-                self._tick_counter += 1
                 self._metrics.record_tick(
                     tick_duration, self._tick_counter,
                     datetime.now(timezone.utc),
@@ -368,6 +368,7 @@ class RuntimeLoop:
                     except Exception as e:
                         logger.warning("on_tick hook failed: %s", e)
             except Exception as e:
+                self._metrics.total_ticks += 1
                 self._metrics.failed_ticks += 1
                 logger.error("Tick %d failed: %s", self._tick_counter, e, exc_info=True)
                 if self._on_error:
@@ -375,6 +376,9 @@ class RuntimeLoop:
                         self._on_error(self._tick_counter, e)
                     except Exception:
                         pass
+                # 检查 max_ticks（失败路径也需要检查）
+                if self._max_ticks > 0 and self._tick_counter >= self._max_ticks:
+                    break
                 # 失败后短暂等待再重试
                 time.sleep(max(0.1, self._interval * 0.1))
                 continue

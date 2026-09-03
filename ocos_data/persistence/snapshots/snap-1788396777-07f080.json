@@ -1,0 +1,10 @@
+{
+  "snapshot_id": "snap-1788396777-07f080",
+  "type": "FULL",
+  "timestamp": 1788396777.6748989,
+  "datetime": "2026-09-03T00:52:57.674899+00:00",
+  "reason": "save_1",
+  "data": {
+    "data": "test_1"
+  }
+}

@@ -57,7 +57,24 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
     "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity",
-                         "ocos.evolution", "ocos.extension", "ocos.task", "ocos.initiative", "ocos.collaboration", "ocos.autonomous"],
+                         "ocos.evolution", "ocos.extension", "ocos.task", "ocos.initiative", "ocos.collaboration", "ocos.autonomous",
+                         # Phase AD: Human-AI
+                         "ocos.human",
+                         # Phase AE: Self-Reflection
+                         "ocos.reflection",
+                         # Phase AF: Self-Optimization
+                         "ocos.optimization",
+                         # Phase AG: Knowledge Synthesis
+                         "ocos.knowledge",
+                         # Phase V: Persistence
+                         "ocos.persistence",
+                         # Phase X: Security
+                         "ocos.security",
+                         # Phase AI: Tool Integration
+                         "ocos.tool",
+                         # Phase AK: External Communication
+                         "ocos.external_communication",
+                         ],
                          # PW-2: 自我迭代治理链上电
     "ocos.extension": ["ocos.extension", "ocos.operations"],
                          # PW-2.2: 沙箱真隔离复用 operations 闸门
@@ -211,6 +228,40 @@ ALLOWED_IMPORTS = {
         "ocos.goal.enforcer",
         "ocos.kernel.goal_types",
     ],
+    # Phase AD: Human-AI Collaboration
+    "ocos.human": ["ocos.logging", "ocos.agent", "ocos.interaction"],
+    # Phase AE: Self-Reflection & Meta-Cognition
+    "ocos.reflection": ["ocos.logging", "ocos.agent", "ocos.personal_memory", "ocos.memory"],
+    # Phase AF: Self-Optimization
+    "ocos.optimization": ["ocos.logging", "ocos.agent", "ocos.reflection", "ocos.performance"],
+    # Phase AG: Knowledge Synthesis
+    "ocos.knowledge": ["ocos.logging", "ocos.agent", "ocos.memory", "ocos.knowledge.store"],
+    # Phase V: Persistence & Recovery
+    "ocos.persistence": ["ocos.logging", "ocos.agent", "ocos.storage", "ocos.models"],
+    # Phase X: Security Hardening
+    "ocos.security": ["ocos.logging", "ocos.agent", "ocos.storage", "ocos.events"],
+    # Phase AI: Tool Integration
+    "ocos.tool": ["ocos.logging", "ocos.agent", "ocos.capability", "ocos.capability_reality"],
+    # Phase AK: External Communication
+    "ocos.external_communication": ["ocos.logging", "ocos.agent", "ocos.interaction"],
+    # Phase O: Attention — depends on runtime.attention_engine + homeostasis (historical design)
+    "ocos.attention": [
+        "ocos.logging",
+        "ocos.runtime.attention_engine",
+        "ocos.capability.homeostasis",
+    ],
+    # Phase W: External Integration — server_manager accesses interaction.api.server
+    "ocos.external": ["ocos.logging", "ocos.agent", "ocos.interaction"],
+    # Phase N: Orchestration — depends on agent_orchestration + collaboration
+    "ocos.orchestration": [
+        "ocos.logging",
+        "ocos.agent",
+        "ocos.agent_orchestration",
+        "ocos.collaboration",
+        "ocos.planning",
+    ],
+    # Phase P: Proactive Output — depends on attention.focus (historical design)
+    "ocos.proactive": ["ocos.logging", "ocos.agent", "ocos.attention"],
 }
 
 # 测试文件允许的 import 例外（白名单，当前 unused—保留供将来使用）
