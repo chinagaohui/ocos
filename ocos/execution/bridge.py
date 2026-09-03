@@ -137,6 +137,9 @@ class DecisionBridge:
         self._textgen: Any = None
         self._pending: list[dict] = []          # 无 store 时的内存回退（诚实降级）
         self._reports: list[BridgeReport] = []
+        # Phase 49-D (L8): 元认知置信度源 (注入 learning rules 查询函数)
+        # signature: confidence_source(task_desc, task_type) -> ConfidenceVerdict
+        self._confidence_source: Any = None
 
     # ── 装配 ──────────────────────────────────────────────────────────────
 
@@ -180,6 +183,15 @@ class DecisionBridge:
         for dag_action in ("dag_create", "dag_modify", "dag_execute", "dag_verify"):
             self._dispatcher.register_custom_handler(
                 dag_action, self._handler_dag_task)
+        return self
+
+    def attach_confidence_source(self, source: Any) -> "DecisionBridge":
+        """Phase 49-D (L8): 注入元认知置信度源。
+
+        source 为可调用对象: source(task_desc, task_type) -> ConfidenceVerdict
+        返回 verdict.should_escalate=True 时, 写类任务升级 ASK (治理增强)。
+        """
+        self._confidence_source = source
         return self
 
     # ── 决策执行入口 ──────────────────────────────────────────────────────
@@ -237,6 +249,31 @@ class DecisionBridge:
         """
         task_type = getattr(task, "task_type", "execute")
         description = getattr(task, "description", "")
+
+        # Phase 49-D (L8): 元认知置信度门 — 低置信写类任务升级 ASK
+        # (治理增强: 历史成功率低的写类动作不自动执行, 不烧 LLM token)
+        if self._confidence_source is not None \
+                and task_type in _DAG_ASK_TYPES:
+            try:
+                verdict = self._confidence_source(description, task_type)
+                if getattr(verdict, "should_escalate", False):
+                    self._enqueue_pending(
+                        action_type=f"dag_{task_type}",
+                        target="dag_task",
+                        payload={"task_id": getattr(task, "task_id", ""),
+                                 "description": description,
+                                 "metacognition": getattr(
+                                     verdict, "reason", "")},
+                        text=f"{description} (低置信升级待批)",
+                    )
+                    return {
+                        "status": "pending_approval",
+                        "reason": (f"metacognition: low confidence "
+                                   f"({getattr(verdict, 'reason', '')})"),
+                    }
+            except Exception as _mc_e:
+                logger.debug("metacognition gate failed (non-blocking): %s",
+                             _mc_e)
 
         # UX-F1: 目标由人工创建（→目标/CLI）= 隐式授权其子任务；
         # LLM 优先转换为具体动作真实执行（沙盒白名单+敏感路径拦截仍生效），
