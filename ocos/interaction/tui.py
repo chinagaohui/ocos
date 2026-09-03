@@ -1,8 +1,6 @@
-"""OCOS TUI - 简洁对话界面（复刻 Hermes Agent 风格）
+"""OCOS TUI - 复刻 Hermes Agent 对话界面
 
-Usage:
-    python -m ocos.interaction.tui
-    ocos chat
+设计参考: /home/laogao/下载/5566.png
 """
 
 from __future__ import annotations
@@ -15,52 +13,73 @@ from pathlib import Path
 
 import httpx
 from textual.app import App, ComposeResult
-from textual.containers import Container
-from textual.widgets import Log, Input, Static
+from textual.containers import Vertical
+from textual.widgets import Static, Input, Log
 from textual.binding import Binding
 
 
 API_BASE = "http://localhost:8900"
 
 
-class StatusBar(Static):
-    """状态栏组件"""
-    
-    def __init__(self):
-        super().__init__("", id="status-bar")
-    
-    def update(self, text: str) -> None:
-        super().update(text)
-
-
 class ChatScreen(App):
-    """简洁对话界面"""
+    """复刻 Hermes Agent 风格的对话界面"""
     
     CSS = """
     Screen {
         layout: vertical;
+        background: #1a1a1a;
+    }
+    
+    #menu-bar {
+        height: 3;
+        background: #2d2d2d;
+        color: #cccccc;
+        content-align: center middle;
+    }
+    
+    #title {
+        height: 2;
+        content-align: left middle;
+        padding-left: 2;
+        color: #d4c99a;
+        text-style: bold;
     }
     
     #messages {
         height: 1fr;
-        border-top: solid $primary;
-        border-bottom: none;
         padding: 1 2;
+        overflow-y: auto;
+        border-top: solid #d4c99a;
+        border-bottom: solid #d4c99a;
+    }
+    
+    .user-msg {
+        text-align: right;
+        margin-bottom: 1;
+        color: #00e5ff;
+    }
+    
+    .bot-msg {
+        text-align: left;
+        margin-bottom: 1;
+        color: #4caf50;
     }
     
     #input {
         height: 3;
-        border-top: solid $primary;
-        background: $surface-darken-2;
+        border-top: solid #d4c99a;
+        background: #2d2d2d;
+        color: white;
     }
     
     #status-bar {
         height: 3;
-        background: $primary;
-        color: $text;
-        text-align: center;
-        content-align: center middle;
-        border-top: solid $primary;
+        background: #000000;
+        color: #cccccc;
+        text-align: left;
+        content-align: left middle;
+        padding-left: 2;
+        border-top: solid #d4c99a;
     }
     """
     
@@ -73,28 +92,27 @@ class ChatScreen(App):
     def __init__(self):
         super().__init__()
         self.messages: list[dict] = []
-        self._status = StatusBar()
         
-        # 清除代理环境变量
         proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
         self._saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
         
         self._send_task = None
     
     def compose(self) -> ComposeResult:
+        yield Static("文件(F)  编辑(E)  查看(V)  搜索(S)  终端(T)  帮助(H)", id="menu-bar")
+        yield Static("ocos chat", id="title")
         yield Log(id="messages")
         yield Input(placeholder="输入消息... (Enter 发送)", id="input")
-        yield self._status
+        yield Static("", id="status-bar")
     
     def on_mount(self) -> None:
-        """挂载后添加初始消息"""
         self._add_message("OCOS 已就绪。开始对话...", False)
         self.set_interval(15.0, self._update_status)
         asyncio.create_task(self._update_status())
         self.query_one("#input", Input).focus()
     
     async def _update_status(self) -> None:
-        """更新状态栏"""
+        status_el = self.query_one("#status-bar", Static)
         try:
             async with httpx.AsyncClient(base_url=API_BASE, timeout=5.0) as client:
                 resp = await client.get("/ocos/introspect")
@@ -103,25 +121,22 @@ class ChatScreen(App):
                     ms = data.get("memory_stats", {})
                     episodes = ms.get("episode_count", 0)
                     beliefs = ms.get("belief_count", 0)
-                    pattern = ms.get("pattern_count", 0)
-                    
-                    status = f" OCOS │ Episodes: {episodes} │ Beliefs: {beliefs} │ Patterns: {pattern} │ agnes-2.5-flash │ 在线 ─ 读取上个会话 "
-                    self._status.update(status)
+                    patterns = ms.get("pattern_count", 0)
+                    status_el.update(f" agnes-2.5-flash │ {episodes}e/{beliefs}b/{patterns}p │ ████░░░░░░░░░░░░ 15% │ 在线 ─ 读取上个会话")
                     return
         except Exception:
             pass
-        self._status.update(" OCOS │ 离线 │ 请检查服务是否运行 ")
+        status_el.update(" OCOS │ 离线 │ 请检查服务 ")
     
     def _add_message(self, text: str, is_user: bool) -> None:
-        """添加消息"""
         msg = {"text": text, "is_user": is_user, "timestamp": datetime.now()}
         self.messages.append(msg)
         role = "你" if is_user else "OCOS"
         time = msg["timestamp"].strftime("%H:%M:%S")
-        self.query_one("#messages", Log).write_line(f"[bold cyan]{role}[/bold cyan] {time}\n{text}")
+        cls = "cyan" if is_user else "bold green"
+        self.query_one("#messages", Log).write_line(f"[{cls}]{role}[/] {time}\n{text}")
     
     async def _send_message(self) -> None:
-        """发送消息"""
         inp = self.query_one("#input", Input)
         text = inp.value.strip()
         if not text:
@@ -146,26 +161,23 @@ class ChatScreen(App):
         inp.focus()
     
     def action_clear(self) -> None:
-        """清空对话"""
         self.messages.clear()
         self.query_one("#messages", Log).clear()
         self._add_message("对话已清空", False)
         self.notify("对话已清空", title="操作完成")
     
     def action_save(self) -> None:
-        """保存对话"""
         path = Path.home() / ".ocos" / f"ocos_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         path.parent.mkdir(exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump([
-                {"text": m["text"], "is_user": m["is_user"], 
+                {"text": m["text"], "is_user": m["is_user"],
                  "time": m["timestamp"].strftime("%H:%M:%S")}
                 for m in self.messages
             ], f, ensure_ascii=False, indent=2)
         self.notify(f"已保存到 {path}", title="保存成功")
     
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """回车发送"""
         if self._send_task and not self._send_task.done():
             return
         self._send_task = asyncio.create_task(self._send_message())
