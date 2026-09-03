@@ -10,8 +10,8 @@ from __future__ import annotations
 
 def cmd_chat(args, session=None) -> int:
     """ocos chat — 启动TUI交互界面。"""
-    from ocos.interaction.tui import OCOSTUI
+    from ocos.interaction.tui import OcosChatScreen
     
-    app = OCOSTUI()
+    app = OcosChatScreen()
     app.run()
     return 0
