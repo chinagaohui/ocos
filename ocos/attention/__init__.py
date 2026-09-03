@@ -1,19 +1,31 @@
 """Phase O: Attention — 注意力焦点管理。"""
 
+from .attention_types import (
+    AttentionCandidate,
+    AttentionScoringWeights,
+    AttentionState,
+    AttentionTrace,
+    FocusType,
+    InertiaPolicy,
+)
 from .focus import (
     AttentionFocus,
     FocusState,
-    FocusType,
     create_attention_focus,
 )
 from .candidate_selector import CandidateCollector
 from .scoring import AttentionScoringEngine
 
 __all__ = [
+    "AttentionCandidate",
     "AttentionFocus",
+    "AttentionScoringWeights",
+    "AttentionState",
+    "AttentionTrace",
+    "CandidateCollector",
     "FocusState",
     "FocusType",
+    "InertiaPolicy",
     "create_attention_focus",
-    "CandidateCollector",
     "AttentionScoringEngine",
 ]
