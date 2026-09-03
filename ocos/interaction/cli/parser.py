@@ -181,6 +181,11 @@ def _add_self_parser(subparsers: argparse._SubParsersAction) -> None:
     # ocos self identity
     self_sub.add_parser("identity", help="Show identity boundary")
 
+    # ocos self review — Phase 52: 自省分析 (证据→LLM→报告)
+    review = self_sub.add_parser("review", help="自省分析: 采集证据→LLM综合→报告落盘")
+    review.add_argument("--db", type=str, default="", help="SQLite 路径")
+    review.add_argument("--out", type=str, default="", help="报告输出目录")
+
     # ocos self mod --file "path" --content "..." --task "description"
     mod = self_sub.add_parser("mod", help="Modify OCOS code (dry-run mode)")
     mod.add_argument("--file", type=str, required=True, help="Target file path (relative to project root)")

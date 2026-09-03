@@ -456,6 +456,9 @@ class TestGrowthEngine:
             "ocos/tests/test_phase50_growth.py",
             "ocos/execution/goal_executor.py",
             "ocos/tests/test_phase51_goal_exec.py",
+            "ocos/reflection/self_review.py",
+            "ocos/interaction/cli/commands/self.py",
+            "ocos/tests/test_phase52_self_review.py",
         }
         violations = [l for l in changed if l not in allowed]
         assert violations == [], f"测试污染了生产代码: {violations}"

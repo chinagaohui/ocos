@@ -24,6 +24,8 @@ def cmd_self(args, session: InteractionSession) -> int:
         return cmd_self_status(args, session)
     elif subcommand == "identity":
         return cmd_self_identity(args, session)
+    elif subcommand == "review":
+        return cmd_self_review(args, session)
     elif subcommand == "mod":
         return cmd_self_mod(args, session)
     elif subcommand == "preview":
@@ -65,6 +67,48 @@ def cmd_self_status(args, session: InteractionSession) -> int:
         print(f"  ⚠ {p}")
     print()
     print("Status: ENABLED (dry-run mode active)")
+    return 0
+
+
+def cmd_self_review(args, session: InteractionSession) -> int:
+    """ocos self review — 自省分析: 采集证据 → LLM 综合 → 报告落盘。
+
+    纯只读 (mode=ro sqlite + LLM 文本分析), 零变异。
+    """
+    from ocos.reflection.self_review import (
+        SelfReviewCollector, SelfReviewAnalyzer, render_markdown, write_report,
+    )
+
+    print("自省分析: 采集运行证据 (只读)...")
+    collector = SelfReviewCollector()
+    ev = collector.collect()
+    print(f"  证据: {ev.episodes_total} episodes "
+          f"(✓{ev.episodes_success}/✗{ev.episodes_failed}), "
+          f"{ev.goals_by_status.get('COMPLETED', 0)} completed goals, "
+          f"{ev.beliefs_total} beliefs, DLQ={ev.dlq_count}")
+    print("\n  失败模式:")
+    for p in ev.failure_patterns[:6]:
+        print(f"    - {p['pattern']} ×{p['count']}")
+
+    print("\nLLM 综合分析中...")
+    analyzer = SelfReviewAnalyzer()
+    analysis = analyzer.analyze(ev)
+    if "error" in analysis or "raw" in analysis:
+        print(f"  LLM 分析失败: {analysis}")
+        return 1
+
+    print(f"\n== 总体健康: {analysis.get('overall_health', '(无)')} ==")
+    print("\n不足:")
+    for w in analysis.get("weaknesses", []):
+        print(f"  - {w.get('issue', '')} [证据: {w.get('evidence', '')[:80]}]")
+    print("\n升级方向:")
+    for u in analysis.get("upgrades", []):
+        print(f"  - [{u.get('priority', 'P2')}] {u.get('upgrade', '')}")
+    print(f"\n最大瓶颈: {analysis.get('biggest_bottleneck', '(无)')}")
+
+    md = render_markdown(ev, analysis)
+    path = write_report(md)
+    print(f"\n报告已生成: {path}")
     return 0
 
 

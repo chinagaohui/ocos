@@ -172,7 +172,7 @@ ALLOWED_IMPORTS = {
                          # UX 自我认知 + PW-1.2 风格画像 + PW-1.4 内视执行史
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
-                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution", "ocos.perception", "ocos.capability.agents", "ocos.growth", "ocos.engines"],  # S4: Organ Client; P1-B: CLI self-modification via SelfModificationAgent; Phase 50: growth CLI (LLM via engines)
+                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution", "ocos.perception", "ocos.capability.agents", "ocos.growth", "ocos.engines", "ocos.reflection"],  # S4: Organ Client; P1-B: CLI self-modification via SelfModificationAgent; Phase 50: growth CLI (LLM via engines); Phase 52: self review
     "ocos.interaction.repl": ["ocos.interaction"],
     "ocos.interaction.repl.commands": ["ocos.interaction", "ocos.goal",
                                         "ocos.storage", "ocos.planning",
@@ -238,7 +238,7 @@ ALLOWED_IMPORTS = {
     # Phase AD: Human-AI Collaboration
     "ocos.human": ["ocos.logging", "ocos.agent", "ocos.interaction"],
     # Phase AE: Self-Reflection & Meta-Cognition
-    "ocos.reflection": ["ocos.logging", "ocos.agent", "ocos.personal_memory", "ocos.memory"],
+    "ocos.reflection": ["ocos.logging", "ocos.agent", "ocos.personal_memory", "ocos.memory", "ocos.engines"],
     # Phase AF: Self-Optimization
     "ocos.optimization": ["ocos.logging", "ocos.agent", "ocos.reflection", "ocos.performance"],
     # Phase AG: Knowledge Synthesis
