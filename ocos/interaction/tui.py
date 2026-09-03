@@ -60,13 +60,13 @@ class ChatScreen(App):
     
     .user-msg {
         text-align: right;
-        margin-bottom: 0.5;
+        margin-bottom: 1;
         color: #d4d4d4;
     }
     
     .bot-msg {
         text-align: left;
-        margin-bottom: 0.5;
+        margin-bottom: 1;
         color: #b5cea8;
     }
     
