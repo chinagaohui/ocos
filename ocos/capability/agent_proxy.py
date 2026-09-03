@@ -171,10 +171,25 @@ class AgentRegistry:
     def _load_and_create(self, name: str, inst: AgentInstance) -> Any:
         """动态加载并创建智能体实例。"""
         import importlib
+        import inspect
 
         module = importlib.import_module(inst.module_path)
         cls = getattr(module, inst.class_name)
-        return cls(**inst.config)
+
+        # 过滤无效的配置参数（只传 __init__ 接受的参数）
+        sig = inspect.signature(cls.__init__)
+        valid_params = set(sig.parameters.keys()) - {"self", "args", "kwargs"}
+        # 移除 description（元数据，非构造参数）
+        valid_params.discard("description")
+
+        filtered_config = {
+            k: v for k, v in inst.config.items()
+            if k in valid_params or k == "description"
+        }
+        # description 不是构造参数，移除它
+        filtered_config.pop("description", None)
+
+        return cls(**filtered_config)
 
     # ── 智能体配置修改 ──
 
@@ -247,6 +262,7 @@ class AgentRegistry:
             "config": dict(inst.config),
             "builtin_capabilities": builtin_info.get("capabilities", []),
             "description": builtin_info.get("description", ""),
+            "builtin": agent_name in self._builtin_agents,
         }
 
 
