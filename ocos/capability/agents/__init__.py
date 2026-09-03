@@ -8,10 +8,12 @@ from ocos.capability.agents.research_agent import ResearchAgent
 from ocos.capability.agents.code_agent import CodeAgent
 from ocos.capability.agents.summarizer_agent import SummarizerAgent
 from ocos.capability.agents.planner_agent import PlannerAgent
+from ocos.capability.agents.self_modification_agent import SelfModificationAgent
 
 __all__ = [
     "ResearchAgent",
     "CodeAgent",
     "SummarizerAgent",
     "PlannerAgent",
+    "SelfModificationAgent",
 ]
