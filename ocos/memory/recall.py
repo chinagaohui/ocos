@@ -13,15 +13,47 @@ from typing import Any, Optional
 
 @dataclass
 class RecallResult:
-    """单次记忆召回结果."""
+    """单次记忆召回结果.
+
+    Blueprint v1.1 L2 (Phase 49-B): 扩展认知消费元数据.
+    - confidence:     置信度 (来源记忆自身的置信, 缺失时 = relevance)
+    - provenance:     来源 ID (episode/trace/entry id)
+    - temporal_scope: 时间范围描述 (近/中/远期)
+    """
     source: str           # 'semantic' | 'pattern' | 'experience' | 'user'
     relevance: float      # 0.0-1.0
     content: str          # 可展示内容
     metadata: dict = None  # type: ignore[assignment]
+    confidence: Optional[float] = None   # Phase 49-B: 置信度
+    provenance: str = ""                 # Phase 49-B: 来源 ID
+    temporal_scope: str = ""             # Phase 49-B: 时间范围
 
     def __post_init__(self):
         if self.metadata is None:
             self.metadata = {}
+        if self.confidence is None:
+            self.confidence = self.relevance
+
+
+@dataclass
+class ConflictGroup:
+    """冲突记忆组 (Blueprint v1.1 L2).
+
+    同一方案/任务存在成功与失败两种经验时, 不简单 top-k,
+    而是输出结构化冲突供 L8 Metacognition 决策.
+    """
+    subject: str            # 冲突主题 (任务/方案描述)
+    success_rate: float     # 历史成功率
+    evidence_count: int     # 证据总数
+    success_count: int = 0
+    fail_count: int = 0
+    conflict: bool = True   # 存在冲突
+
+    def summary(self) -> str:
+        return (
+            f"{self.subject}: success_rate={self.success_rate:.2f}, "
+            f"evidence={self.evidence_count}, conflict={self.conflict}"
+        )
 
 
 class MemoryRecall:
@@ -200,3 +232,70 @@ class MemoryRecall:
     def clear_recent(self) -> None:
         """清空最近召回历史."""
         self._recent_recalls = []
+
+    # ── Phase 49-B: 认知消费增强 ──────────────────────────────────────
+
+    def recall_cognitive(self, context: str | None = None,
+                         limit: int = 10,
+                         learning_rules: list[dict] | None = None,
+                         ) -> dict:
+        """面向认知主链的召回 — 返回结构化结果 (Blueprint v1.1 L2).
+
+        相比 recall() (纯列表), 增加:
+          - conflict_set: 冲突记忆组 (来自学习规则的成功/失败统计)
+          - 统一字典结构, 供 think() premises 注入
+
+        Args:
+            context: 当前上下文
+            limit: 最大记忆条数
+            learning_rules: Phase 49-A LearningModel.rules 列表
+                           (每条含 task_pattern/success_rate/fail_count)
+        """
+        recalls = self.recall(context, limit)
+        conflict_set: list[ConflictGroup] = []
+
+        # 从学习规则检测冲突: 同任务既有成功又有失败 → 冲突
+        if learning_rules:
+            for rule in learning_rules:
+                succ = int(rule.get("success_count", 0) or 0)
+                fail = int(rule.get("fail_count", 0) or 0)
+                if succ + fail < 2:
+                    continue  # 单样本不构成冲突
+                rate = float(rule.get("success_rate", 0.0) or 0.0)
+                group = ConflictGroup(
+                    subject=rule.get("task_pattern", "unknown")[:60],
+                    success_rate=rate,
+                    evidence_count=succ + fail,
+                    success_count=succ,
+                    fail_count=fail,
+                    conflict=0.0 < rate < 1.0,
+                )
+                if group.conflict:
+                    conflict_set.append(group)
+
+        return {
+            "memories": [
+                {
+                    "source": r.source,
+                    "relevance": r.relevance,
+                    "confidence": r.confidence,
+                    "content": r.content[:300],
+                    "provenance": r.provenance,
+                    "temporal_scope": r.temporal_scope,
+                    "metadata": r.metadata,
+                }
+                for r in recalls
+            ],
+            "conflict_set": [
+                {
+                    "subject": c.subject,
+                    "success_rate": c.success_rate,
+                    "evidence_count": c.evidence_count,
+                    "success_count": c.success_count,
+                    "fail_count": c.fail_count,
+                    "conflict": c.conflict,
+                    "summary": c.summary(),
+                }
+                for c in conflict_set
+            ],
+        }

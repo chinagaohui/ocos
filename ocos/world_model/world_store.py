@@ -169,6 +169,54 @@ class WorldStore:
             "tick": self._tick,
         }
 
+    # ── Phase 49-B (L3-A): 面向认知的查询封装 ─────────────────────────
+
+    def cognitive_world_state(self, entity_id: str | None = None,
+                              limit: int = 10) -> dict:
+        """面向认知主链的世界状态查询 (Blueprint v1.1 L3-A).
+
+        空世界 (默认零传感器) 返回空结构 — L3-C Observation Supply
+        是后续能力, 本查询保证消费就绪且优雅降级。
+
+        返回值供 think/plan 注入 (L3-B), 不产生 Action。
+        """
+        state: dict = {
+            "available": self.entities.count > 0,
+            "entity_count": self.entities.count,
+            "relation_count": self.relations.count,
+            "tick": self._tick,
+            "entities": [],
+            "summary": self.summary(),
+        }
+        if not state["available"]:
+            return state
+
+        # 收集实体状态 (全部或指定实体)
+        ids: list[str] = []
+        if entity_id:
+            ids = [entity_id]
+        else:
+            try:
+                ids = [e.entity_id for e in
+                       self.entities.list_all()][:limit]
+            except AttributeError:
+                ids = []
+        for eid in ids[:limit]:
+            ent = self.get_entity(eid)
+            st = self.get_entity_state(eid)
+            if ent is None:
+                continue
+            state["entities"].append({
+                "entity_id": eid,
+                "name": getattr(ent, "name", eid),
+                "entity_type": getattr(getattr(ent, "entity_type", None),
+                                       "value", ""),
+                "state": (dict(st.attributes) if st is not None
+                          else {}),
+                "tick_id": getattr(st, "tick_id", None),
+            })
+        return state
+
 
 __all__ = ["WorldStore"]
 

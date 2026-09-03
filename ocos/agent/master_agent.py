@@ -178,6 +178,9 @@ class MasterAgent:
         #  LearningEngine.learn(examples, learn_fn), 不绕过治理: 只写模型, 无 Action)
         self._learning_engine = learning_engine
 
+        # Phase 49-B (L3-B): 世界模型消费注入点 (由 daemon attach 注入)
+        self._world_abi: Any = None
+
         # Phase S: Knowledge Graph (optional)
         self._knowledge_graph = knowledge_graph
 
@@ -524,11 +527,22 @@ class MasterAgent:
             return self._think_with_selector(obs)
 
         # ── Phase 22: CognitiveBridge fallback ──────────────────────────
-        premises = {
+        premises: dict[str, Any] = {
             "inputs": [
                 str(obs.content) if hasattr(obs, "content") else str(obs)
             ],
         }
+
+        # Phase 49-B (L2+L3): 注入记忆 + 世界状态 — 认知输入增强
+        try:
+            recall_ctx = self.recall_context()
+            if recall_ctx.get("available"):
+                premises["memory_context"] = recall_ctx
+            world_ctx = self.world_context()
+            if world_ctx.get("available"):
+                premises["world_state"] = world_ctx
+        except Exception:
+            pass  # 认知上下文注入失败不阻塞思考
 
         try:
             result: BridgeResult = self._bridge.reason(
@@ -580,6 +594,17 @@ class MasterAgent:
             "working_memory": getattr(self, "working_memory", None),
             "agent_id": self.agent_id,
         }
+
+        # Phase 49-B (L2+L3): 注入记忆 + 世界状态到 selector 决策输入
+        try:
+            recall_ctx = self.recall_context(context=str(intent)[:100])
+            if recall_ctx.get("available"):
+                context["memory_context"] = recall_ctx
+            world_ctx = self.world_context()
+            if world_ctx.get("available"):
+                context["world_state"] = world_ctx
+        except Exception:
+            pass  # 认知上下文注入失败不阻塞选择
 
         # 3. 选择 SkillGraph
         selector_result = self._capability_selector.select(intent, context)
@@ -834,6 +859,82 @@ class MasterAgent:
                     pass  # 简化：仅记录决策日志
         except Exception:
             pass  # 非阻塞
+
+    def set_world_abi(self, world: Any) -> None:
+        """Phase 49-B (L3-B): 注入世界模型查询接口 (由 daemon 装配时调用)."""
+        self._world_abi = world
+
+    def world_context(self, entity_id: str | None = None) -> dict:
+        """Phase 49-B (L3-B): 世界状态消费 — 供 think/plan 注入.
+
+        空世界 (默认零传感器) 返回 available=False — 优雅降级,
+        不把 L3-C Observation Supply 缺失误判为消费失败。
+        """
+        empty: dict = {"available": False, "source": "world"}
+        if self._world_abi is None or not hasattr(
+                self._world_abi, "cognitive_world_state"):
+            return empty
+        try:
+            state = self._world_abi.cognitive_world_state(
+                entity_id=entity_id)
+            state["source"] = "world"
+            return state
+        except Exception:
+            return empty
+
+    def recall_context(self, context: str | None = None,
+                       limit: int = 6) -> dict:
+        """Phase 49-B (Blueprint L2): 面向认知主链的记忆召回 — 真实现.
+
+        从 MemoryRecall + LearningModel 规则构建结构化记忆上下文,
+        注入 think() premises, 使历史记忆真正改变推理输入.
+
+        治理: 只读召回, 不产生 Action; 冲突集供未来决策保守化 (L8).
+        """
+        recall_ctx: dict = {
+            "memories": [],
+            "conflict_set": [],
+            "available": False,
+            "source": "recall",
+        }
+        if self._memory_recall is None:
+            return recall_ctx  # 无检索引擎 → 降级不抛
+
+        # 从学习引擎收集规则 (Phase 49-A: rules 含 task_pattern/success_rate)
+        learning_rules: list[dict] = []
+        try:
+            if self._learning_engine is not None and hasattr(
+                    self._learning_engine, "list_models"):
+                for model in self._learning_engine.list_models():
+                    for rule in (model.rules or ()):
+                        if isinstance(rule, dict):
+                            learning_rules.append(rule)
+        except Exception:
+            pass  # 规则收集失败不阻塞召回
+
+        # 构建召回上下文: 当前目标/意图作关键词
+        query_ctx = context
+        if not query_ctx:
+            try:
+                goal = self.goal_stack.peek() if hasattr(
+                    self.goal_stack, "peek") else None
+                if goal:
+                    query_ctx = str(goal)
+            except Exception:
+                pass
+
+        try:
+            result = self._memory_recall.recall_cognitive(
+                context=query_ctx, limit=limit,
+                learning_rules=learning_rules or None,
+            )
+            recall_ctx["memories"] = result["memories"]
+            recall_ctx["conflict_set"] = result["conflict_set"]
+            recall_ctx["available"] = bool(result["memories"]
+                                           or result["conflict_set"])
+        except Exception as e:
+            recall_ctx["error"] = str(e)
+        return recall_ctx
 
     def _act_via_bridge(self, decision: Any) -> Any:
         """Phase 22-A: 通过 EngineBridge 将决策派发到真实引擎。

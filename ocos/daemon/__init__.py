@@ -188,8 +188,19 @@ class ResidentRuntime:
 
         每个 tick 调一次 pipeline.tick()；无传感器时为零开销零写入
         （PerceptionEngine 无 sensor 返回空事件）。
+        Phase 49-B (L3-B): 同时把管线 WorldStore 注入 agent 供认知消费。
         """
         self._perception_pipeline = pipeline
+        # L3-B: agent.world_context() 经此消费世界状态
+        world = getattr(pipeline, "world", None)
+        agent_obj = getattr(
+            getattr(self, "_runtime", None), "agent", None)
+        if world is not None and agent_obj is not None and hasattr(
+                agent_obj, "set_world_abi"):
+            try:
+                agent_obj.set_world_abi(world)
+            except Exception:
+                pass
 
     def start(self) -> None:
         """启动 daemon — boot AgentRuntime + RuntimeKernel，启动 tick 线程。
