@@ -669,20 +669,27 @@ class DecisionBridge:
         try:
             import asyncio
             tg = self._get_textgen()
-            prompt = (
-                f"任务描述：{description}\n\n"
-                "把上述任务转换为**一条**可直接执行的动作。只输出单行，格式严格为：\n"
-                "RUN|<命令>（优先使用只读命令: uname/df/free/uptime/ls/cat/head/"
-                "tail/grep/find/ps/whoami/date/env/hostname/id）\n"
-                "FILE_WRITE|<绝对路径>|<文件内容>\n"
-                "NONE|<一句话说明为什么无法执行>\n"
-                "不要输出任何解释。"
-            )
-            raw = asyncio.run(tg._provider.generate(
-                prompt,
-                system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的单行动作。",
-                temperature=0.1, max_tokens=2000))
-            raw = raw.strip().splitlines()[0].strip()
+            # 清除代理环境变量，避免 socks 代理导致 OpenAI SDK 报错
+            proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
+            _saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
+            try:
+                prompt = (
+                    f"任务描述：{description}\n\n"
+                    "把上述任务转换为**一条**可直接执行的动作。只输出单行，格式严格为：\n"
+                    "RUN|<命令>（优先使用只读命令: uname/df/free/uptime/ls/cat/head/"
+                    "tail/grep/find/ps/whoami/date/env/hostname/id）\n"
+                    "FILE_WRITE|<绝对路径>|<文件内容>\n"
+                    "NONE|<一句话说明为什么无法执行>\n"
+                    "不要输出任何解释。"
+                )
+                raw = asyncio.run(tg._provider.generate(
+                    prompt,
+                    system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的单行动作。",
+                    temperature=0.1, max_tokens=2000))
+                raw = raw.strip().splitlines()[0].strip()
+            finally:
+                # 恢复代理环境变量
+                os.environ.update(_saved_proxies)
         except Exception as e:
             return {"ok": False, "error": f"LLM 规划失败: {e}"}
 
