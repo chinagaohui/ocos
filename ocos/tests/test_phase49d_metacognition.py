@@ -134,6 +134,19 @@ class TestCapabilityConfidence:
         assert LOW_CONFIDENCE_THRESHOLD == 0.4
         assert MIN_EVIDENCE == 3
 
+    def test_zero_success_rate_escalates(self):
+        """回归: rate=0.0 不得因 falsy 被误读为 0.5。"""
+        zero_rules = [
+            {"rule_id": "rule:z", "task_pattern": "生成季度报告",
+             "success_count": 0, "fail_count": 3, "success_rate": 0.0,
+             "failure_causes": {"ambiguous_task": 3}},
+        ]
+        v = CapabilityConfidence.evaluate(
+            "生成季度报告", zero_rules, task_type="execute")
+        assert v.success_rate == 0.0, f"rate 应为 0.0, got {v.success_rate}"
+        assert v.escalation == "ask"
+        assert v.should_escalate is True
+
     def test_verdict_dataclass(self):
         v = ConfidenceVerdict(
             task_pattern="x", success_rate=0.1, evidence_count=6,

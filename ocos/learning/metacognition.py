@@ -271,7 +271,8 @@ class CapabilityConfidence:
         succ = int(rule.get("success_count", 0) or 0)
         fail = int(rule.get("fail_count", 0) or 0)
         evidence = succ + fail
-        rate = float(rule.get("success_rate", 0.5) or 0.5)
+        raw_rate = rule.get("success_rate")
+        rate = float(raw_rate) if raw_rate is not None else 0.5
 
         if evidence < min_evidence:
             return ConfidenceVerdict(
