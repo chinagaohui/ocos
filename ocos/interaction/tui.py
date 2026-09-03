@@ -86,13 +86,13 @@ class OCOSTUI(App):
     .user-msg {
         background: $accent;
         color: $text;
-        border-left-color: $success;
+        border-left: thick $success;
     }
     
     .bot-msg {
         background: $surface-darken-1;
         color: $text;
-        border-left-color: $warning;
+        border-left: thick $warning;
     }
     
     #input-bar {
