@@ -87,7 +87,6 @@ class ChatScreen(App):
         yield Log(id="messages")
         yield Input(placeholder="输入消息... (Enter 发送)", id="input")
         yield self._status
-        yield Footer()
     
     def on_mount(self) -> None:
         """挂载后添加初始消息"""
