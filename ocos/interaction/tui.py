@@ -225,12 +225,12 @@ class OcosChatScreen(Screen):
         self.chat_area = ChatArea()
         self.session_list = SessionList()
         self.composer = Composer()
-        self.client = httpx.AsyncClient(base_url=API_BASE, timeout=60.0)
         
         # 清除代理环境变量，避免socks代理导致连接失败
         import os
         proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
         self._saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
+        self.client = httpx.AsyncClient(base_url=API_BASE, timeout=60.0)
         
         self._status = "离线"
         self._episode_count = 0
