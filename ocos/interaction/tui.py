@@ -127,17 +127,9 @@ class ChatScreen(App):
         self._add_message(text, True)
         self._input.value = ""
         
-        # 显示加载中
-        loading = MessageBlock("思考中...", False)
-        self.chat_area.mount(loading)
-        self.chat_area.scroll_end()
-        
         try:
             async with httpx.AsyncClient(base_url=API_BASE, timeout=60.0) as client:
                 resp = await client.post("/ocos/converse", json={"message": text})
-            
-            # 移除加载提示
-            self.chat_area.remove_child(loading)
             
             if resp.status_code == 200:
                 data = resp.json().get("data", {})
