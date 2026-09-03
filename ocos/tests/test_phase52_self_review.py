@@ -125,6 +125,56 @@ class TestCollector:
         ev = SelfReviewCollector(_make_db()).collect()
         json.dumps(ev.to_dict())  # 不应抛
 
+    def test_code_assets_collected(self):
+        """R1 双域: 采集真实仓库代码资产。"""
+        ev = SelfReviewCollector(_make_db()).collect()
+        assert ev.repo_root  # 自动定位仓库
+        assert ev.capability_modules  # 非空
+        assert "reflection" in ev.capability_modules  # 本模块所在
+        assert ev.test_files_total > 0
+
+    def test_self_checks_pass(self):
+        """R3 自检: 干净数据 → evidence_consistent=True。"""
+        ev = SelfReviewCollector(_make_db()).collect()
+        assert ev.evidence_consistent, ev.evidence_note
+        ids = {c["id"] for c in ev.evidence_checks}
+        assert "C1" in ids and "C3" in ids and "C4" in ids
+
+    def test_self_check_failure_detected(self):
+        """R3 自检: success+failed > total → 断言失败标记。"""
+        ev = ReviewEvidence()
+        ev.episodes_total = 10
+        ev.episodes_success = 8
+        ev.episodes_failed = 5  # 13 > 10 → 不一致
+        ev.repo_root = str(Path(__file__).resolve().parent.parent.parent)
+        SelfReviewCollector(_make_db())._run_self_checks(ev)
+        assert not ev.evidence_consistent
+        assert any(c["id"] == "C1" and not c["pass"] for c in ev.evidence_checks)
+
+    def test_time_window_7d(self):
+        """R2 时间窗: created_at 近7天过滤。"""
+        path = _make_db()
+        con = sqlite3.connect(path)
+        # 追加: 7 天前的失败 + 今天的失败
+        con.execute(
+            "INSERT INTO episodes VALUES ('E4','','','{}','旧任务',"
+            "'✗ 旧规划失败', '', '{\"success\": false}', NULL, 0,'','','',"
+            "'', datetime('now', '-10 days'))")
+        con.execute(
+            "INSERT INTO episodes VALUES ('E5','','','{}','新任务',"
+            "'✗ LLM 规划失败: proxy', '', '{\"success\": false}', NULL, 0,'','','',"
+            "'', datetime('now', '-1 hour'))")
+        con.commit()
+        con.close()
+        ev = SelfReviewCollector(path).collect()
+        pat7 = {p["pattern"]: p["count"] for p in ev.failure_patterns_7d}
+        # 7d 内: E2(now,模糊) + E3(now,规划失败) + E5(1h前,规划失败)
+        # 7d 外: E4(10天前,旧规划失败) 不入窗
+        assert pat7.get("规划失败") == 2, f"got {pat7}"
+        assert pat7.get("模糊") == 1, f"got {pat7}"
+        total_7d = sum(pat7.values())
+        assert total_7d == 3, f"7d 应含 3 条 (E2+E3+E5), got {pat7}"
+
 
 class TestRender:
     def test_markdown_sections(self, tmp_path):

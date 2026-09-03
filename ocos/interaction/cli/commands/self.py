@@ -86,9 +86,17 @@ def cmd_self_review(args, session: InteractionSession) -> int:
           f"(✓{ev.episodes_success}/✗{ev.episodes_failed}), "
           f"{ev.goals_by_status.get('COMPLETED', 0)} completed goals, "
           f"{ev.beliefs_total} beliefs, DLQ={ev.dlq_count}")
-    print("\n  失败模式:")
-    for p in ev.failure_patterns[:6]:
-        print(f"    - {p['pattern']} ×{p['count']}")
+    print(f"  代码资产: {len(ev.capability_modules)} 模块, "
+          f"学习引擎={ev.learning_engine_present}, 成长={ev.growth_module_present}, "
+          f"HEAD {ev.git_head or '?'}")
+    print(f"  证据自检: {'✅ ' + ev.evidence_note if ev.evidence_consistent else '⚠️ ' + ev.evidence_note}")
+    print("\n  失败模式 (全量 / 近7天):")
+    all_pat = {p["pattern"]: p["count"] for p in ev.failure_patterns}
+    pat7 = {p["pattern"]: p["count"] for p in ev.failure_patterns_7d}
+    for pat, cnt in all_pat.items():
+        d7 = pat7.get(pat, 0)
+        marker = " ← 现存" if d7 > 0 else ""
+        print(f"    - {pat} ×{cnt} (7d: ×{d7}){marker}")
 
     print("\nLLM 综合分析中...")
     analyzer = SelfReviewAnalyzer()
