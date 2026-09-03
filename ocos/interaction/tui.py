@@ -15,12 +15,22 @@ from pathlib import Path
 
 import httpx
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
-from textual.widgets import Log, Input, Footer
+from textual.containers import Container, Vertical
+from textual.widgets import Log, Input, Footer, Static
 from textual.binding import Binding
 
 
 API_BASE = "http://localhost:8900"
+
+
+class StatusBar(Static):
+    """状态栏组件"""
+    
+    def __init__(self):
+        super().__init__("", id="status-bar")
+    
+    def update(self, text: str) -> None:
+        super().update(text)
 
 
 class ChatScreen(App):
@@ -34,12 +44,25 @@ class ChatScreen(App):
     #messages {
         height: 1fr;
         border-top: solid $primary;
-        border-bottom: solid $primary;
+        border-bottom: none;
+        padding: 1 2;
     }
     
     #input {
         height: 3;
-        dock: bottom;
+    }
+    
+    #status-bar {
+        height: 3;
+        background: $primary;
+        color: $text;
+        text-align: center;
+        content-align: center middle;
+        border-top: solid $primary;
+    }
+    
+    #input {
+        width: 1fr;
     }
     """
     
@@ -52,6 +75,7 @@ class ChatScreen(App):
     def __init__(self):
         super().__init__()
         self.messages: list[dict] = []
+        self._status = StatusBar()
         
         # 清除代理环境变量
         proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
@@ -62,12 +86,35 @@ class ChatScreen(App):
     def compose(self) -> ComposeResult:
         yield Log(id="messages")
         yield Input(placeholder="输入消息... (Enter 发送)", id="input")
+        yield self._status
         yield Footer()
     
     def on_mount(self) -> None:
         """挂载后添加初始消息"""
         self._add_message("OCOS 已就绪。开始对话...", False)
+        self.set_interval(15.0, self._update_status)
+        asyncio.create_task(self._update_status())
         self.query_one("#input", Input).focus()
+    
+    async def _update_status(self) -> None:
+        """更新状态栏"""
+        try:
+            async with httpx.AsyncClient(base_url=API_BASE, timeout=5.0) as client:
+                resp = await client.get("/ocos/introspect")
+                if resp.status_code == 200:
+                    data = resp.json().get("data", {})
+                    ms = data.get("memory_stats", {})
+                    episodes = ms.get("episode_count", 0)
+                    beliefs = ms.get("belief_count", 0)
+                    pattern = ms.get("pattern_count", 0)
+                    
+                    # 构建状态栏文本（复刻 Hermes Agent 风格）
+                    status = f" OCOS │ Episodes: {episodes} │ Beliefs: {beliefs} │ Patterns: {pattern} │ agnes-2.5-flash │ ████░░░░░░░░░░░░░░░░ 15% │ 在线 ─ 读取上个会话 "
+                    self._status.update(status)
+                    return
+        except Exception:
+            pass
+        self._status.update(" OCOS │ 离线 │ 请检查服务是否运行 ")
     
     def _add_message(self, text: str, is_user: bool) -> None:
         """添加消息"""
