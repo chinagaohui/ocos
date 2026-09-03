@@ -174,8 +174,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "regulate":
             return cmd_regulate(args, session)
 
-        elif args.command == "feedback":
-            return cmd_feedback(args, session)
+        elif args.command == "run":
+            return cmd_run(args, session)
+
+        elif args.command == "chat":
+            from ocos.interaction.cli.commands.chat import cmd_chat
+            return cmd_chat(args, session)
 
         else:
             parser.print_help()

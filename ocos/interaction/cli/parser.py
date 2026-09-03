@@ -88,6 +88,13 @@ Examples:
     # ── run（P0：认知引擎生产启动入口） ─────────────────────────────────
     _add_run_parser(subparsers)
 
+    # ── chat（TUI交互界面） ───────────────────────────────────────────
+    chat = subparsers.add_parser("chat", help="启动TUI交互界面")
+    chat.add_argument("--host", type=str, default="localhost",
+                      help="API服务器地址 (default: localhost)")
+    chat.add_argument("--port", type=int, default=8900,
+                      help="API服务器端口 (default: 8900)")
+
     return parser
 
 
