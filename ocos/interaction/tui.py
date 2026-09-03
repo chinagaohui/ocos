@@ -94,10 +94,13 @@ class SessionList(DataTable):
     
     def __init__(self):
         super().__init__(id="session-list")
-        self.add_columns("会话ID", "标题", "时间")
         self.cursor_type = "row"
         self.fixed_rows = 1
         self.show_cursor = True
+    
+    def on_mount(self) -> None:
+        """挂载时添加列"""
+        self.add_columns("会话ID", "标题", "时间")
     
     def add_session(self, session_id: str, title: str, time: str) -> None:
         """添加会话"""
