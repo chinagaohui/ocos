@@ -1,11 +1,4 @@
-"""OCOS TUI - 复刻 Hermes Agent 对话界面
-
-设计参考: ~/.hermes/hermes-agent/apps/desktop/src/components/assistant-ui/
-- 用户消息: 右对齐，无标签
-- 助手消息: 左对齐，无标签
-- 输入框: > 提示符
-- 状态栏: 橙色高亮
-"""
+"""OCOS TUI - 复刻 Hermes Agent 对话界面"""
 
 from __future__ import annotations
 
@@ -17,7 +10,6 @@ from pathlib import Path
 
 import httpx
 from textual.app import App, ComposeResult
-from textual.containers import Container, Vertical
 from textual.widgets import Static, Input, Log
 from textual.binding import Binding
 
@@ -32,26 +24,6 @@ class ChatScreen(App):
         background: #1a1a1a;
     }
     
-    #header {
-        height: 5;
-        background: #252525;
-        border-bottom: solid #3e3e42;
-    }
-    
-    #menu {
-        height: 3;
-        content-align: center middle;
-        color: #858585;
-    }
-    
-    #title {
-        height: 2;
-        content-align: left middle;
-        padding-left: 3;
-        color: #d4d4d4;
-        text-style: bold;
-    }
-    
     #chat {
         height: 1fr;
         padding: 1 2;
@@ -60,26 +32,18 @@ class ChatScreen(App):
     
     .user-msg {
         text-align: right;
-        margin-bottom: 1;
         color: #d4d4d4;
     }
     
     .bot-msg {
         text-align: left;
-        margin-bottom: 1;
         color: #b5cea8;
     }
     
-    #input-area {
-        height: 4;
+    #input-line {
+        height: 3;
         border-top: solid #3e3e42;
-        background: #252525;
-    }
-    
-    #input-container {
-        height: 2;
-        content-align: left middle;
-        padding-left: 2;
+        background: #1a1a1a;
     }
     
     #input-prompt {
@@ -88,20 +52,11 @@ class ChatScreen(App):
     }
     
     #input {
-        height: 2;
         background: transparent;
         color: #d4d4d4;
         border: none;
         padding: 0;
         margin: 0;
-    }
-    
-    #input-hint {
-        height: 2;
-        content-align: right middle;
-        padding-right: 2;
-        color: #6a6a6a;
-        text-style: italic;
     }
     
     #status {
@@ -128,15 +83,10 @@ class ChatScreen(App):
         self._send_task = None
     
     def compose(self) -> ComposeResult:
-        with Container(id="header"):
-            yield Static("文件(F)  编辑(E)  查看(V)  搜索(S)  终端(T)  帮助(H)", id="menu")
-            yield Static("ocos chat", id="title")
         yield Log(id="chat")
-        with Vertical(id="input-area"):
-            with Container(id="input-container"):
-                yield Static(">", id="input-prompt")
-                yield Input(placeholder="", id="input")
-            yield Static("Enter 发送 · Ctrl+L 清空 · Ctrl+S 保存", id="input-hint")
+        with Static(id="input-line"):
+            yield Static(">", id="input-prompt")
+            yield Input(placeholder="", id="input")
         yield Static("", id="status")
     
     def on_mount(self) -> None:
@@ -167,21 +117,18 @@ class ChatScreen(App):
     def _add_message(self, text: str, is_user: bool) -> None:
         msg = {"text": text, "is_user": is_user, "timestamp": datetime.now()}
         self.messages.append(msg)
-        time = msg["timestamp"].strftime("%H:%M:%S")
         cls = "user-msg" if is_user else "bot-msg"
-        # 不显示角色标签，直接显示消息内容
-        self.query_one("#chat", Log).write_line(f"[{cls}]{time}[/]{cls} {text}")
+        # 直接显示文本，不显示标签
+        self.query_one("#chat", Log).write_line(f"[{cls}]{text}[/{cls}]")
     
     async def _send_message(self) -> None:
         inp = self.query_one("#input", Input)
-        hint = self.query_one("#input-hint", Static)
         text = inp.value.strip()
         if not text:
             return
         
         self._add_message(text, True)
         inp.value = ""
-        hint.display = False
         
         try:
             async with httpx.AsyncClient(base_url=API_BASE, timeout=60.0) as client:
@@ -197,7 +144,6 @@ class ChatScreen(App):
             self._add_message(f"连接失败: {e}", False)
         
         inp.focus()
-        hint.display = True
     
     def action_clear(self) -> None:
         self.messages.clear()
