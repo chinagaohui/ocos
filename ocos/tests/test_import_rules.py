@@ -167,7 +167,7 @@ ALLOWED_IMPORTS = {
                          # UX 自我认知 + PW-1.2 风格画像 + PW-1.4 内视执行史
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
-                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution", "ocos.perception"],  # S4: Organ Client（写作器官驱动）; P1-B: 生产入口经 daemon 装配层
+                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution", "ocos.perception", "ocos.capability.agents"],  # S4: Organ Client; P1-B: CLI self-modification via SelfModificationAgent
     "ocos.interaction.repl": ["ocos.interaction"],
     "ocos.interaction.repl.commands": ["ocos.interaction", "ocos.goal",
                                         "ocos.storage", "ocos.planning",
