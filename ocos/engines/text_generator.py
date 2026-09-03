@@ -261,7 +261,14 @@ class OpenaiProvider(LLMProvider):
         except ImportError:
             raise RuntimeError("openai package not installed: pip install openai")
 
-        client = AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
+        # 禁用系统代理，避免 socks5:// 解析失败
+        import os
+        proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
+        _saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
+        try:
+            client = AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
+        finally:
+            os.environ.update(_saved_proxies)
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})

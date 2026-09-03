@@ -326,6 +326,7 @@ class ChatResponder:
             from ocos.memory.hub import MemoryHub
             from ocos.memory.episode.models import Episode
             hub = MemoryHub(self._db_path)
+            hub.initialize()
             now = datetime.now(timezone.utc)
             ep = Episode(
                 id=f"EPI-{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}",
