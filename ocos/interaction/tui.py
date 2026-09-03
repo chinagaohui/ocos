@@ -137,6 +137,10 @@ class OCOSTUI(App):
     def __init__(self):
         super().__init__()
         self.messages: list[dict] = []
+        # 清除代理环境变量，避免socks代理导致连接失败
+        import os
+        proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
+        self._saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
         self.client = httpx.AsyncClient(base_url=API_BASE, timeout=60.0)
         self._input = Input(placeholder="输入消息... (Enter发送)", id="message-input")
         self._send_btn = Button("发送", id="send-btn", variant="primary")
