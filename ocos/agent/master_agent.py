@@ -181,6 +181,9 @@ class MasterAgent:
         # Phase 49-B (L3-B): 世界模型消费注入点 (由 daemon attach 注入)
         self._world_abi: Any = None
 
+        # Phase 49-C (L5/L6): 技能生长注册表 (可选注入; 无则只提议不提交)
+        self._skill_registry: Any = None
+
         # Phase S: Knowledge Graph (optional)
         self._knowledge_graph = knowledge_graph
 
@@ -860,6 +863,63 @@ class MasterAgent:
         except Exception:
             pass  # 非阻塞
 
+    def set_skill_registry(self, registry: Any) -> None:
+        """Phase 49-C (L5/L6): 注入 SkillRegistry (由 daemon 装配时调用)."""
+        self._skill_registry = registry
+
+    def grow_skills_from_episodes(self, episodes: list[Any]) -> dict[str, Any]:
+        """Phase 49-C (L5/L6): 从成功 Episode 提议 + 治理提交候选技能。
+
+        四段生命周期 (Blueprint v1.1 §5):
+          CANDIDATE (成功≥3 提议) → VALIDATED (规则验证) → COMMITTED (注册)
+
+        治理:
+          - 只读候选 (analyze/verify) → 自动验证提交
+          - 写类候选 (create/modify/execute) → 保持 CANDIDATE 待人工审批
+          - 无 registry → 只返回提议 (不提交), 不静默落库
+        """
+        from ocos.learning.skill_growth import (
+            GovernedSkillCommitter, SkillProposer,
+        )
+
+        stats: dict[str, Any] = {
+            "proposals": 0,
+            "validated": 0,
+            "committed": 0,
+            "pending_approval": 0,
+            "skills": [],
+        }
+        try:
+            proposals = SkillProposer.propose_from_episodes(episodes)
+            stats["proposals"] = len(proposals)
+            for proposal in proposals:
+                validated = GovernedSkillCommitter.validate(proposal)
+                if validated.approval_required:
+                    # 写类候选: 待人工审批 — 记录, 不自动提交
+                    stats["pending_approval"] += 1
+                    stats.setdefault("pending", []).append({
+                        "skill_id": validated.skill_id,
+                        "name": validated.name,
+                        "trigger": validated.trigger_pattern,
+                        "approval_required": True,
+                    })
+                    continue
+                stats["validated"] += 1
+                if self._skill_registry is None:
+                    # 无 registry → 只验不提交 (调用方决定持久化位置)
+                    continue
+                skill = GovernedSkillCommitter.commit(
+                    validated, self._skill_registry)
+                if skill is not None:
+                    stats["committed"] += 1
+                    stats["skills"].append({
+                        "id": skill.id,
+                        "name": skill.name,
+                    })
+        except Exception as e:
+            stats["error"] = str(e)
+        return stats
+
     def set_world_abi(self, world: Any) -> None:
         """Phase 49-B (L3-B): 注入世界模型查询接口 (由 daemon 装配时调用)."""
         self._world_abi = world
@@ -1532,6 +1592,13 @@ class MasterAgent:
                     })
                 except Exception:
                     continue  # 单条 artifact 失败不阻塞
+
+            # 5. Phase 49-C (L5/L6): 技能生长 — 从成功 Episode 提议/提交候选
+            try:
+                grow_stats = self.grow_skills_from_episodes(episodes)
+                stats["skill_growth"] = grow_stats
+            except Exception:
+                stats["skill_growth"] = {"error": "skill growth failed"}
 
         except Exception as e:
             stats["error"] = str(e)

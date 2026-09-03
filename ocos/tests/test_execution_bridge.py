@@ -236,16 +236,26 @@ class TestRuntimeWiring:
         assert rt._recent_results[0]["success"] is True
 
     def test_failed_status_passthrough(self, bridge, monkeypatch):
-        """bridge 返回 failed → step 7 如实标 failed (不折算成 pending_approval)。"""
+        """bridge 返回 failed → step 7 诚实透传 (不折算成 pending_approval)。
+
+        Phase 49-C (L4): 首次 execution_error → retry_pending (诚实重试);
+        重试耗尽 → 终态 failed (不伪装 completed/pending_approval)。
+        """
         dag, tid = self._dag("verify", "verify existence of /tmp")
         rt = self._bare_rt(dag)
         rt.attach_decision_bridge(bridge)
         monkeypatch.setattr(
             bridge, "_exec_fs",
             lambda op, path, content="": {"ok": False, "output": "", "error": "boom"})
+        # 首次失败 → retry_pending (L4 重试节奏, 非 pending_approval)
         rt._tick_step_core_loop()
+        assert rt._task_statuses.get(tid) == "retry_pending"
+        # 重试耗尽 (MAX_RETRY_PER_TASK=2) → 终态 failed
+        from ocos.learning.skill_growth import MAX_RETRY_PER_TASK
+        for _ in range(MAX_RETRY_PER_TASK + 1):
+            rt._tick_step_core_loop()
         assert rt._task_statuses.get(tid) == "failed"
-        assert rt._recent_results[0]["success"] is False
+        assert rt._recent_results[-1]["success"] is False
 
     def test_attach_decision_bridge_public(self, bridge):
         """公开装配入口 — factory 不再需要捅私有属性。"""

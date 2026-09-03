@@ -120,6 +120,8 @@ class AgentRuntime:
         self._task_statuses: dict[str, str] = {}  # task_id → status
         self._recent_results: list[dict[str, Any]] = []
         self._result_cursor: int = 0  # Phase 32: cursor for step 9 ingestion
+        # Phase 49-C (L4): 任务重试计数 — 失败→重规划 (最多 MAX_RETRY_PER_TASK 次)
+        self._task_retry_count: dict[str, int] = {}
         self._orchestrator: Any = None
         # R4-A: DecisionBridge (自治决策 → 真实执行铰链), 由 factory 装配
         self._decision_bridge: Any = None
@@ -1056,6 +1058,60 @@ class AgentRuntime:
         """
         self._decision_bridge = bridge
 
+    def _replan_failed_task(self, task_id: str, task: Any,
+                            reason: str) -> dict[str, Any]:
+        """Phase 49-C (L4): 失败任务重规划决策。
+
+        用 FailureDiagnoser 分类失败原因 → TaskReplanner 决定动作:
+          - 执行错误/超时 (未超次数) → retry_pending (下 tick 重试)
+          - 模糊任务/不可重试 → 终态 (推进 cursor, 记录 replan 元数据)
+
+        治理: 重试次数上限 MAX_RETRY_PER_TASK; 写类动作仍由
+        DecisionBridge 分级 (此处只管重试节奏, 不触碰权限)。
+        """
+        from ocos.learning.skill_growth import TaskReplanner
+        from ocos.learning.experience_learning import FailureDiagnoser
+
+        # 从失败文本分类原因 (复用 Phase 49-A 确定性诊断)
+        cause = "unknown"
+        try:
+            # 构造最小 episode 形状供诊断器使用
+            fake_ep = type("FailedTask", (), {
+                "id": task_id,
+                "outcome": {"success": False, "reason": reason,
+                            "error": reason},
+                "decision": f"failed: {reason[:100]}",
+            })()
+            diag = FailureDiagnoser.diagnose(fake_ep)
+            if diag is not None:
+                cause = diag.cause.value
+        except Exception:
+            pass
+
+        retry_count = getattr(self, "_task_retry_count", {}).get(task_id, 0)
+        decision = TaskReplanner.decide(task_id, cause, retry_count)
+        meta: dict[str, Any] = {
+            "task_id": task_id,
+            "cause": cause,
+            "decision": decision.action.value,
+            "reason": decision.reason,
+            "retry_count": retry_count,
+        }
+        if TaskReplanner.should_retry(decision):
+            # 裸实例兼容 (Phase 31: __new__ 构造无 __init__ 字段)
+            counts = getattr(self, "_task_retry_count", None)
+            if counts is None:
+                self._task_retry_count = {}
+                counts = self._task_retry_count
+            counts[task_id] = retry_count + 1
+            meta["decision"] = "retry_pending"
+        else:
+            # 终态: 清理重试计数, 该任务按失败归档
+            counts = getattr(self, "_task_retry_count", None)
+            if counts is not None:
+                counts.pop(task_id, None)
+        return meta
+
     def _tick_step_core_loop(self) -> dict[str, Any]:
         """Step 7: Core Loop — 优先执行 TaskDAG，无 DAG 时回退认知循环。
 
@@ -1076,6 +1132,38 @@ class AgentRuntime:
                         dag_result = bridge.execute_dag_task(task)
                         dag_status = dag_result.get("status", "")
                         if dag_status != "echo_fallback":
+                            # Phase 49-C (L4): 失败 → 重规划决策
+                            # (执行错误/超时 → 有限重试; 模糊任务 → 终态阻塞)
+                            replan_meta: dict[str, Any] = {}
+                            if dag_status == "failed":
+                                reason = str(
+                                    dag_result.get("reason")
+                                    or dag_result.get("error")
+                                    or "")[:300]
+                                replan_meta = self._replan_failed_task(
+                                    tid, task, reason)
+                                if replan_meta.get("decision") == "retry_pending":
+                                    # 本 tick 不推进 cursor — 下 tick 重试同任务
+                                    self._task_statuses[tid] = "retry_pending"
+                                    self._recent_results.append({
+                                        "task_id": tid,
+                                        "description": task.description,
+                                        "agent": task.agent_type,
+                                        "output": (f"retry scheduled: {reason[:120]}"),
+                                        "success": False,
+                                    })
+                                    return {
+                                        "step": 7, "name": "core_loop",
+                                        "strategy": "dag_execution",
+                                        "task": tid,
+                                        "progress":
+                                            f"{self._dag_cursor}/{self._dag_total}",
+                                        "execution": "retry_pending",
+                                        "retry_count": replan_meta.get(
+                                            "retry_count", 0),
+                                        "output": reason[:150],
+                                    }
+
                             # completed/failed/pending_approval 诚实透传, 不把失败伪装成待批
                             self._task_statuses[tid] = (
                                 dag_status if dag_status in ("completed", "failed", "pending_approval")
@@ -1096,6 +1184,7 @@ class AgentRuntime:
                                 "progress": f"{self._dag_cursor}/{self._dag_total}",
                                 "execution": dag_status,
                                 "output": str(dag_result)[:200],
+                                "replan": replan_meta or None,
                             }
                     # 既有 EchoAgent 回退 (无能力匹配 / bridge 未装配)
                     from ocos.capability.echo_agent import EchoAgent

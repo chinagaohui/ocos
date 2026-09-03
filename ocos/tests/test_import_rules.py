@@ -93,8 +93,9 @@ ALLOWED_IMPORTS = {
     "ocos.memory.belief": ["ocos.constitution"],
     # Phase 24: Attention → Logging
     "ocos.attention": ["ocos.logging"],
-    # Phase R: Continuous Learning — 反馈/偏好学习 + Phase 49-A 经验学习
-    "ocos.learning": ["ocos.logging", "ocos.models", "ocos.models.learning"],
+    # Phase R: Continuous Learning — 反馈/偏好学习 + Phase 49-A/C 经验学习/技能生长
+    "ocos.learning": ["ocos.logging", "ocos.models", "ocos.models.learning",
+                      "ocos.capability.models"],
     # Phase 24: Capability Lifecycle
     "ocos.capability.lifecycle_manager": ["ocos.logging"],
     # Phase 25: Knowledge Graph + Experience Memory
