@@ -120,6 +120,11 @@ def _add_goal_parser(subparsers: argparse._SubParsersAction) -> None:
     status = goal_sub.add_parser("status", help="Query goal status")
     status.add_argument("goal_id", type=str, help="Goal ID (e.g. GOAL-abc12345)")
 
+    # ocos goal exec "描述" — Phase 51: 直接执行 (绕过认领)
+    exec_p = goal_sub.add_parser(
+        "exec", help="直接执行: 描述→LLM分解→沙盒只读执行 (绕过 daemon 认领)")
+    exec_p.add_argument("input", type=str, help="Goal description to execute")
+
     # ocos goal list
     goal_sub.add_parser("list", help="List all goals")
 

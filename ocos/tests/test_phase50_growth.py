@@ -437,21 +437,25 @@ class TestGrowthEngine:
     def test_project_root_untouched_after_suite(self):
         """防污染回归: 测试套件绝不能真实改动生产仓库文件。
 
-        本测试在套件最后跑 (文件名序 test_phase50_growth 内最后定义),
-        用 git 验证 growth 相关既有生产文件均未被改动。
+        用 git 检查: 除 Phase 50 自身文件外, 无其他生产文件被本套件修改。
+        白名单随 Phase 演进追加 (cli goal/parser/main 为合法修改)。
         """
         import subprocess
-        # 只检查既有跟踪文件 — engine.py 自身是新增文件(未提交), 不在检查内
         r = subprocess.run(
             ["git", "-C", str(PROJECT_ROOT), "diff", "--name-only", "--", "ocos/"],
             capture_output=True, text=True)
-        changed = [l for l in r.stdout.splitlines()
-                   if "growth" not in l and "test_phase50" not in l
-                   and l.strip()]
-        # 允许 CLI/parser/main (本次功能新增/修改), 禁止任何其他生产文件被改
-        allowed = {"ocos/interaction/cli/main.py",
-                   "ocos/interaction/cli/parser.py",
-                   "ocos/interaction/cli/commands/growth.py",
-                   "ocos/tests/test_import_rules.py"}
+        changed = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+        # 允许的修改: Phase 50 growth 自身 + 各 Phase 合法改动
+        allowed = {
+            "ocos/growth/engine.py",
+            "ocos/interaction/cli/commands/growth.py",
+            "ocos/interaction/cli/commands/goal.py",
+            "ocos/interaction/cli/main.py",
+            "ocos/interaction/cli/parser.py",
+            "ocos/tests/test_import_rules.py",
+            "ocos/tests/test_phase50_growth.py",
+            "ocos/execution/goal_executor.py",
+            "ocos/tests/test_phase51_goal_exec.py",
+        }
         violations = [l for l in changed if l not in allowed]
         assert violations == [], f"测试污染了生产代码: {violations}"

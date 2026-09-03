@@ -76,6 +76,47 @@ def cmd_goal_create(args, session: InteractionSession) -> int:
     return 0
 
 
+def cmd_goal_exec(args, session: InteractionSession) -> int:
+    """ocos goal exec \"描述\" — 直接执行 (绕过 daemon 认领与模板分解)。
+
+    描述 → LLM 分解为只读命令 → DecisionBridge 沙盒逐条真实执行 → 汇总。
+    返回 0 成功, 2 无法执行 (含沙盒全拦截), 1 系统错误。
+    """
+    from ocos.execution.goal_executor import GoalDirectExecutor
+    from ocos.logging import get_logger
+    logger = get_logger(__name__)
+
+    description = args.input
+    print(f"直接执行: {description[:120]}")
+    print("  (绕过 daemon 认领 — 描述级 LLM 分解 → 沙盒只读执行)\n")
+
+    executor = GoalDirectExecutor()
+    try:
+        report = executor.execute_goal(description)
+    except Exception as e:
+        print(f"Error: 执行失败: {e}")
+        return 1
+
+    # 输出结果表
+    ok_n = 0
+    for i, c in enumerate(report.commands, 1):
+        status = "✓" if c.ok else ("⛔ 拦截" if c.blocked else "✗")
+        print(f"[{i}] {status} $ {c.command}")
+        if c.ok:
+            out = (c.stdout or "").strip()
+            for ln in out.splitlines()[:8]:
+                print(f"      {ln}")
+            ok_n += 1
+        elif c.blocked:
+            print(f"      → 沙盒拦截: {c.block_reason}")
+        else:
+            print(f"      → 失败: {c.stderr or c.block_reason}")
+        print()
+
+    print(f"== 汇总: {report.summary} ==")
+    return 0 if ok_n > 0 else 2
+
+
 def cmd_goal_status(args, session: InteractionSession) -> int:
     """ocos goal status <goal_id>"""
     # AUD-F8: 查询持久化 goal（goals 表）

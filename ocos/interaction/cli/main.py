@@ -73,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
                 return cmd_goal_create(args, session)
             elif args.goal_action == "status":
                 return cmd_goal_status(args, session)
+            elif args.goal_action == "exec":
+                from ocos.interaction.cli.commands.goal import cmd_goal_exec
+                return cmd_goal_exec(args, session)
             elif args.goal_action == "list":
                 return cmd_goal_list(args, session)
             else:
