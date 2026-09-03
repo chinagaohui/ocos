@@ -20,7 +20,11 @@ def cmd_self(args, session: InteractionSession) -> int:
     """OCOS 自我修改入口。"""
     subcommand = getattr(args, "self_action", None)
 
-    if subcommand == "mod":
+    if subcommand == "status":
+        return cmd_self_status(args, session)
+    elif subcommand == "identity":
+        return cmd_self_identity(args, session)
+    elif subcommand == "mod":
         return cmd_self_mod(args, session)
     elif subcommand == "preview":
         return cmd_self_preview(args, session)
@@ -32,6 +36,64 @@ def cmd_self(args, session: InteractionSession) -> int:
         print('  ocos self preview --file "path" --content "..." --task "description"')
         print('  ocos self validate --file "path"')
         return 1
+
+
+def cmd_self_status(args, session: InteractionSession) -> int:
+    """显示自我状态。"""
+    from ocos.capability.agents.self_modification_agent import SelfModificationAgent
+    import sys
+
+    project_root = _find_project_root()
+    agent = SelfModificationAgent(project_root)
+
+    print("=" * 60)
+    print("OCOS Self-Modification Capability Status")
+    print("=" * 60)
+    print(f"Project Root: {project_root}")
+    print(f"Python: {sys.version.split()[0]}")
+    print()
+    print("Safe Directories (can modify):")
+    for d in ["ocos/", "tests/", "docs/"]:
+        print(f"  ✓ {d}")
+    print()
+    print("Forbidden Directories (blocked):")
+    for d in [".venv/", ".git/", "__pycache__/"]:
+        print(f"  ✗ {d}")
+    print()
+    print("High-Risk Patterns (require approval):")
+    for p in ["import os", "subprocess", "open(", "write_file", "system()"]:
+        print(f"  ⚠ {p}")
+    print()
+    print("Status: ENABLED (dry-run mode active)")
+    return 0
+
+
+def cmd_self_identity(args, session: InteractionSession) -> int:
+    """显示身份边界。"""
+    from ocos.capability.agents.self_modification_agent import SelfModificationAgent
+
+    project_root = _find_project_root()
+    agent = SelfModificationAgent(project_root)
+
+    print("=" * 60)
+    print("OCOS Identity Boundary")
+    print("=" * 60)
+    print()
+    print("Self-Modification Policy:")
+    print("  - Can modify: source code in ocos/, tests/, docs/")
+    print("  - Cannot modify: .venv/, .git/, config.json, .env")
+    print("  - High-risk operations require human approval")
+    print("  - All changes are logged with diff preview")
+    print()
+    print("ABI Signature:")
+    print("  execute(task, file, content, dry_run=True) -> dict")
+    print()
+    print("Security Boundaries:")
+    print(f"  Forbidden dirs: {', '.join(agent.FORBIDDEN_DIRS)}")
+    print(f"  Forbidden files: {', '.join(agent.FORBIDDEN_FILES)}")
+    print(f"  Allowed extensions: {', '.join(agent.ALLOWED_EXTENSIONS)}")
+    print()
+    return 0
 
 
 def cmd_self_mod(args, session: InteractionSession) -> int:
