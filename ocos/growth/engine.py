@@ -57,6 +57,9 @@ ALLOWED_PREFIX = "ocos/"
 # 高置信优化所需 LLM 响应中必须存在的字段
 REQUIRED_PROPOSAL_FIELDS = ("rationale", "file_path", "new_content")
 
+# LLM 响应中试图输出 patch (而非明确放弃) 的信号 — 触发精确性重试
+_WANTED_PATCH_RE = re.compile(r'"old_snippet"\s*:\s*"[^"]+"', re.DOTALL)
+
 
 # ── 模型 ──────────────────────────────────────────────────────────
 
@@ -229,7 +232,11 @@ class GrowthAnalyzer:
         self._llm = llm_fn  # (prompt) -> str
 
     def analyze(self, signal: TechSignal) -> GrowthProposal | None:
-        """信号 → 提案。无 LLM 注入 / 信号太短 / 主题不在允许域 → None。"""
+        """信号 → 提案。无 LLM 注入 / 信号太短 / 主题不在允许域 → None。
+
+        patch 精确性补偿: LLM 偶发不逐字复制 old_snippet → 校验失败时
+        反馈差异重试一次 (最终仍须逐字唯一匹配才放行, 治理不削弱)。
+        """
         if self._llm is None:
             logger.info("GrowthAnalyzer: no llm_fn injected, skip analyze")
             return None
@@ -243,12 +250,30 @@ class GrowthAnalyzer:
             return None
 
         prompt = self._build_prompt(signal, candidates, excerpts)
+        raw = None
         try:
             raw = self._llm(prompt)
         except Exception as e:  # LLM 失败不阻断成长 — 记录并跳过
             logger.warning("GrowthAnalyzer: llm failed: %s", e)
             return None
-        return self._parse_response(raw, signal, candidates)
+        proposal = self._parse_response(raw, signal, candidates)
+
+        # 修正反馈重试: LLM 输出过 patch 但 old_snippet 未逐字命中时,
+        # 把期望与实况差异回喂, 请求重出精确片段
+        if (proposal is None and raw
+                and _WANTED_PATCH_RE.search(raw)):
+            try:
+                prompt2 = prompt + (
+                    "\n\n【系统反馈】你上次输出的 old_snippet 未在文件中逐字找到"
+                    "（可能缩进/换行/字符有出入）。请重新只输出 JSON："
+                    "打开该文件把待替换片段**原样完整复制**进 old_snippet"
+                    "（含原缩进、原换行、原引号），仅改动你想替换的最小范围，"
+                    "然后给出对应的 new_snippet。不要省略号、不要省略标记、不要改格式。")
+                raw2 = self._llm(prompt2)
+                proposal = self._parse_response(raw2, signal, candidates)
+            except Exception as e:
+                logger.warning("GrowthAnalyzer: retry llm failed: %s", e)
+        return proposal
 
     def _find_candidate_files(self, signal: TechSignal, limit: int = 8
                               ) -> tuple[list[str], dict[str, str]]:
@@ -278,22 +303,25 @@ class GrowthAnalyzer:
             rel = f.relative_to(PROJECT_ROOT).as_posix()
             text = f.read_text(encoding="utf-8", errors="ignore")
             low = text.lower()
-            # 内容命中 (词元在文件内容出现)
-            hits = [t for t in tokens if t in low]
-            content_hits = len(hits)
-            # 文件名命中
-            name_hits = sum(1 for t in tokens if t in f.stem.lower())
+            # 词边界匹配 — 防子串误命中 ("utc" 不应命中 "outcome")
+            word_hits = [t for t in tokens
+                         if re.search(rf"\b{re.escape(t)}\b", low)]
+            content_hits = len(word_hits)
+            # 文件名命中 (词边界在 stem 上)
+            name_hits = sum(1 for t in tokens
+                            if re.search(rf"\b{re.escape(t)}\b", f.stem.lower()))
             score = content_hits * 2 + name_hits * 5
             if score > 0:
                 lines = text.splitlines()
                 cutoff = max(2, int(len(lines) * 0.25))
                 # 特异性锚定: 用文件中出现最少的命中词元 (gather > asyncio),
                 # 在方法体区找其首行 → 覆盖真实调用点而非 docstring/import
-                freq = {t: low.count(t) for t in hits}
+                freq = {t: len(re.findall(rf"\b{re.escape(t)}\b", low))
+                        for t in word_hits}
                 anchor = -1
                 for t in sorted(freq, key=lambda x: freq[x]):
                     for i, ln in enumerate(lines):
-                        if i >= cutoff and t in ln.lower():
+                        if i >= cutoff and re.search(rf"\b{re.escape(t)}\b", ln.lower()):
                             anchor = i
                             break
                     if anchor >= 0:
@@ -305,7 +333,9 @@ class GrowthAnalyzer:
                 else:
                     # 兜底: 全部命中行
                     ctx = "\n".join(
-                        ln for ln in lines if any(t in ln.lower() for t in hits))[:3000]
+                        ln for ln in lines
+                        if any(re.search(rf"\b{re.escape(t)}\b", ln.lower())
+                               for t in word_hits))[:3000]
                 scored.append((score, rel, ctx))
 
         scored.sort(reverse=True)

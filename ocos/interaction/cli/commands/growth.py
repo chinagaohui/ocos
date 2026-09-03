@@ -47,6 +47,19 @@ def _make_engine(llm: bool = True) -> GrowthEngine:
             except Exception as e:  # pragma: no cover
                 return f'{{"worthwhile": false, "rationale": "llm error: {e}"}}'
 
+        # 预检: LLM 依赖可用性 (openai 包) — 缺失时明确报错而非静默无提案
+        try:
+            import openai  # noqa: F401
+        except ImportError:
+            print(
+                "Error: LLM 分析不可用 — 当前 Python 环境缺少 'openai' 包。\n"
+                "  CLI venv 缺依赖时 growth analyze/grow 的 LLM 分析会静默失效。\n"
+                "  修复: 安装依赖或改用含 openai 的环境运行 (如 daemon 的 opentale/.venv)。\n"
+                "  信号已持久化, 环境修复后重跑 analyze 即可。",
+                file=sys.stderr)
+            # 返回仅存储引擎 (无 LLM), 不伪装分析成功
+            engine = GrowthEngine(store=GrowthSignalStore(), optimizer=optimizer)
+            return engine
         analyzer = GrowthAnalyzer(llm_fn=_llm)
     else:
         analyzer = GrowthAnalyzer()  # 无 LLM → 只接收/存储

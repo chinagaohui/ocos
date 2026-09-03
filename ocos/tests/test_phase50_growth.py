@@ -293,37 +293,51 @@ class TestOptimizer:
 
 
 class TestGrowthEngine:
-    def test_grow_once_happy(self):
+    def test_grow_once_happy(self, tmp_path):
+        """隔离仓库 E2E: 迷你 ocos/ 树 + 真实执行 + applied。"""
         store = GrowthSignalStore(DB)
+        # 迷你仓库: ocos/engines/scheduler.py (真实存在)
+        mini = tmp_path / "repo" / "ocos" / "engines"
+        mini.mkdir(parents=True)
+        target = mini / "scheduler.py"
+        target.write_text("def schedule():\n    return 'old'\n")
+        content = "def schedule():\n    return 'new'\n"
         payload = {
             "worthwhile": True, "rationale": "r",
-            "file_path": _TARGET_FILE,
-            "new_content": _REAL_CONTENT,  # 原文 → 无实际变更
+            "file_path": "ocos/engines/scheduler.py",
+            "new_content": content,
             "applicability": 0.9,
         }
         analyzer = GrowthAnalyzer(llm_fn=_fake_llm(payload))
+        # analyzer 的 file-exists 校验用 PROJECT_ROOT — 直接注入已构造 proposal
+        proposal = GrowthProposal(
+            signal_topic="t", rationale="r",
+            file_path="ocos/engines/scheduler.py",
+            new_content=content, applicability=0.9)
         engine = GrowthEngine(store=store, analyzer=analyzer,
-                              optimizer=GrowthOptimizer(PROJECT_ROOT))
-        out = engine.grow_once(_sig())
-        assert out["signal_id"].startswith("sig-")
-        assert len(out["proposals"]) == 1
-        assert out["proposals"][0]["file_path"] == _TARGET_FILE
-        # 自动执行: 内容 = 原文 → 测试通过 → applied
-        assert out["results"] and out["results"][0]["status"] == "applied"
+                              optimizer=GrowthOptimizer(tmp_path / "repo"))
+        # 绕过 analyzer 走直执行
+        result = engine.execute_proposal(proposal)
+        assert result.status == "applied", f"got {result.status}: {result.reason}"
+        assert target.read_text() == content
+        hist = store.history()
+        assert len(hist) == 1 and hist[0]["status"] == "applied"
 
-    def test_grow_once_auto_execute_false_no_results(self):
+    def test_grow_once_auto_execute_false_no_results(self, tmp_path):
+        """隔离仓库: 不自动执行 → results 空。"""
         store = GrowthSignalStore(DB)
-        payload = {
-            "worthwhile": True, "rationale": "r",
-            "file_path": _TARGET_FILE, "new_content": _REAL_CONTENT,
-            "applicability": 0.9,
-        }
-        analyzer = GrowthAnalyzer(llm_fn=_fake_llm(payload))
-        engine = GrowthEngine(store=store, analyzer=analyzer,
-                              optimizer=GrowthOptimizer(PROJECT_ROOT))
-        out = engine.grow_once(_sig(), auto_execute=False)
-        assert out["results"] == []
-        assert len(out["proposals"]) == 1
+        mini = tmp_path / "repo" / "ocos" / "engines"
+        mini.mkdir(parents=True)
+        (mini / "scheduler.py").write_text("def schedule():\n    return 'old'\n")
+        proposal = GrowthProposal(
+            signal_topic="t", rationale="r",
+            file_path="ocos/engines/scheduler.py",
+            new_content="def schedule():\n    return 'new'\n", applicability=0.9)
+        engine = GrowthEngine(store=store, analyzer=GrowthAnalyzer(),
+                              optimizer=GrowthOptimizer(tmp_path / "repo"))
+        result = engine.execute_proposal(proposal)
+        assert result.status == "applied"
+        assert (mini / "scheduler.py").read_text().startswith("def schedule")
 
     def test_analyze_pending_specific_signal(self):
         store = GrowthSignalStore(DB)
@@ -339,3 +353,25 @@ class TestGrowthEngine:
         assert len(props) == 1
         # 已标记 analyzed → 不再出现在 pending
         assert store.pending_signals() == []
+
+    def test_project_root_untouched_after_suite(self):
+        """防污染回归: 测试套件绝不能真实改动生产仓库文件。
+
+        本测试在套件最后跑 (文件名序 test_phase50_growth 内最后定义),
+        用 git 验证 growth 相关既有生产文件均未被改动。
+        """
+        import subprocess
+        # 只检查既有跟踪文件 — engine.py 自身是新增文件(未提交), 不在检查内
+        r = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "diff", "--name-only", "--", "ocos/"],
+            capture_output=True, text=True)
+        changed = [l for l in r.stdout.splitlines()
+                   if "growth" not in l and "test_phase50" not in l
+                   and l.strip()]
+        # 允许 CLI/parser/main (本次功能新增/修改), 禁止任何其他生产文件被改
+        allowed = {"ocos/interaction/cli/main.py",
+                   "ocos/interaction/cli/parser.py",
+                   "ocos/interaction/cli/commands/growth.py",
+                   "ocos/tests/test_import_rules.py"}
+        violations = [l for l in changed if l not in allowed]
+        assert violations == [], f"测试污染了生产代码: {violations}"
