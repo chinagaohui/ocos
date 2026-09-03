@@ -920,7 +920,10 @@ async function pollOutbox() {
   try {
     const j = await (await fetch(`/ocos/outbox?after=${outboxCursor}`)).json();
     for (const m of j.data.messages) {
-      addMessage('📋 ' + m.content, false, false);
+      // 只添加实际的用户消息，过滤掉系统错误日志
+      if (m.content && !m.content.includes('LLM 规划失败') && !m.content.includes('proxy')) {
+        addMessage('📋 ' + m.content.slice(0, 100), false, false);
+      }
       outboxCursor = Math.max(outboxCursor, m.rid);
     }
   } catch (e) {}
