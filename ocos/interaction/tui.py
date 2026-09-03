@@ -1,6 +1,4 @@
-"""OCOS TUI - 简洁对话界面
-
-纯对话布局：消息列表 + 底部输入框
+"""OCOS TUI - 简洁对话界面（复刻 Hermes Agent 风格）
 
 Usage:
     python -m ocos.interaction.tui
@@ -17,32 +15,12 @@ from pathlib import Path
 
 import httpx
 from textual.app import App, ComposeResult
-from textual.containers import Container, Vertical
-from textual.widgets import Static, Input, Button, Footer
+from textual.containers import Vertical
+from textual.widgets import Log, Input, Footer
 from textual.binding import Binding
 
 
 API_BASE = "http://localhost:8900"
-
-
-class MessageBlock(Static):
-    """消息块"""
-    
-    def __init__(self, text: str, is_user: bool):
-        super().__init__()
-        self.text = text
-        self.is_user = is_user
-        self.timestamp = datetime.now()
-    
-    def compose(self) -> ComposeResult:
-        role = "你" if self.is_user else "OCOS"
-        time = self.timestamp.strftime("%H:%M")
-        content = self.text[:5000]
-        
-        if self.is_user:
-            yield Static(f"[bold cyan]{role}[/bold cyan] {time}\n{content}")
-        else:
-            yield Static(f"[bold green]{role}[/bold green] {time}\n{content}")
 
 
 class ChatScreen(App):
@@ -51,27 +29,17 @@ class ChatScreen(App):
     CSS = """
     Screen {
         layout: vertical;
-        background: $surface;
     }
     
-    #chat-area {
+    #messages {
         height: 1fr;
-        overflow-y: auto;
-        padding: 1 2;
-    }
-    
-    #input-bar {
-        height: 4;
-        layout: horizontal;
-        align: center middle;
-        padding: 1;
         border-top: solid $primary;
-        background: $surface-darken-2;
+        border-bottom: solid $primary;
     }
     
-    #message-input {
-        width: 1fr;
-        margin-right: 1;
+    #input {
+        height: 3;
+        dock: bottom;
     }
     """
     
@@ -84,10 +52,6 @@ class ChatScreen(App):
     def __init__(self):
         super().__init__()
         self.messages: list[dict] = []
-        self.chat_area = Vertical(id="chat-area")
-        self._input = Input(placeholder="输入消息... (Enter 发送)", id="message-input")
-        self._send_btn = Button("发送", id="send-btn", variant="primary")
-        self._clear_btn = Button("清空", id="clear-btn")
         
         # 清除代理环境变量
         proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
@@ -96,36 +60,33 @@ class ChatScreen(App):
         self._send_task = None
     
     def compose(self) -> ComposeResult:
-        yield self.chat_area
-        
-        with Container(id="input-bar"):
-            yield self._input
-            yield self._send_btn
-            yield self._clear_btn
-        
+        yield Log(id="messages")
+        yield Input(placeholder="输入消息... (Enter 发送)", id="input")
         yield Footer()
     
     def on_mount(self) -> None:
         """挂载后添加初始消息"""
         self._add_message("OCOS 已就绪。开始对话...", False)
-        self._input.focus()
+        self.query_one("#input", Input).focus()
     
     def _add_message(self, text: str, is_user: bool) -> None:
-        """添加消息到界面"""
+        """添加消息"""
         msg = {"text": text, "is_user": is_user, "timestamp": datetime.now()}
         self.messages.append(msg)
-        self.chat_area.mount(MessageBlock(text, is_user))
-        self.chat_area.scroll_end()
+        role = "你" if is_user else "OCOS"
+        time = msg["timestamp"].strftime("%H:%M:%S")
+        self.query_one("#messages", Log).write_line(f"[bold cyan]{role}[/bold cyan] {time}\n{text}")
     
     async def _send_message(self) -> None:
         """发送消息"""
-        text = self._input.value.strip()
+        inp = self.query_one("#input", Input)
+        text = inp.value.strip()
         if not text:
             return
         
         # 添加用户消息
         self._add_message(text, True)
-        self._input.value = ""
+        inp.value = ""
         
         try:
             async with httpx.AsyncClient(base_url=API_BASE, timeout=60.0) as client:
@@ -140,12 +101,12 @@ class ChatScreen(App):
         except Exception as e:
             self._add_message(f"连接失败: {e}", False)
         
-        self._input.focus()
+        inp.focus()
     
     def action_clear(self) -> None:
         """清空对话"""
         self.messages.clear()
-        self.chat_area.remove_children()
+        self.query_one("#messages", Log).clear()
         self._add_message("对话已清空", False)
         self.notify("对话已清空", title="操作完成")
     
@@ -166,14 +127,6 @@ class ChatScreen(App):
         if self._send_task and not self._send_task.done():
             return
         self._send_task = asyncio.create_task(self._send_message())
-    
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """按钮点击"""
-        if event.button.id == "send-btn":
-            if not (self._send_task and self._send_task.done()):
-                self._send_task = asyncio.create_task(self._send_message())
-        elif event.button.id == "clear-btn":
-            self.action_clear()
 
 
 if __name__ == "__main__":
