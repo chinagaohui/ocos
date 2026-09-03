@@ -170,8 +170,7 @@ class ChatScreen(App):
         time = msg["timestamp"].strftime("%H:%M:%S")
         cls = "user-msg" if is_user else "bot-msg"
         # 不显示角色标签，直接显示消息内容
-        self.query_one("#chat", Log).write_line(f"[{cls}]{time} ", style=f"{cls} ")
-        self.query_one("#chat", Log).write_line(f"[{cls}]{text}[/{cls}]")
+        self.query_one("#chat", Log).write_line(f"[{cls}]{time}[/]{cls} {text}")
     
     async def _send_message(self) -> None:
         inp = self.query_one("#input", Input)
