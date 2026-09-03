@@ -58,6 +58,8 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge.process": [],
     "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity",
                          "ocos.evolution", "ocos.extension", "ocos.task", "ocos.initiative", "ocos.collaboration", "ocos.autonomous",
+                         # Phase R: Continuous Learning
+                         "ocos.learning",
                          # Phase AD: Human-AI
                          "ocos.human",
                          # Phase AE: Self-Reflection
@@ -91,6 +93,8 @@ ALLOWED_IMPORTS = {
     "ocos.memory.belief": ["ocos.constitution"],
     # Phase 24: Attention → Logging
     "ocos.attention": ["ocos.logging"],
+    # Phase R: Continuous Learning — 反馈/偏好学习 + Phase 49-A 经验学习
+    "ocos.learning": ["ocos.logging", "ocos.models", "ocos.models.learning"],
     # Phase 24: Capability Lifecycle
     "ocos.capability.lifecycle_manager": ["ocos.logging"],
     # Phase 25: Knowledge Graph + Experience Memory

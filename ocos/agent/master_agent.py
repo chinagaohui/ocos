@@ -173,6 +173,11 @@ class MasterAgent:
         # Phase R: Continuous Learning (optional)
         self._continuous_learning = continuous_learning
 
+        # Phase 49-A: Experience Learning — 保留 learning_engine 直引用
+        # (CognitiveBridge.learn 签名不兼容 → 快通路经 _fast_path_learning 直调
+        #  LearningEngine.learn(examples, learn_fn), 不绕过治理: 只写模型, 无 Action)
+        self._learning_engine = learning_engine
+
         # Phase S: Knowledge Graph (optional)
         self._knowledge_graph = knowledge_graph
 
@@ -1154,7 +1159,17 @@ class MasterAgent:
             except Exception:
                 pass  # 合成失败不阻塞 Agent
 
+        # Phase 49-A: 快通路学习（Episode→LearningExample→LearningEngine.learn）
+        # 必须在 _consolidate_episodes 之前执行: 慢通路会 mark CONSOLIDATED,
+        # 快通路过滤 status!=CONSOLIDATED → 后执行将永远拿到空样本。
+        try:
+            fast_stats = self._fast_path_learning()
+            consolidation["fast_learning"] = fast_stats
+        except Exception:
+            consolidation["fast_learning"] = {}  # 快通路失败不阻塞睡眠
+
         # P2-C: Dream Consolidation — 重放当日 Episode → Belief/Pattern 巩固 + 修剪
+        # (慢通路: 在快通路之后消化同一批样本并置 CONSOLIDATED, 幂等由状态位保证)
         try:
             stats = self._consolidate_episodes()
             consolidation["consolidation_stats"] = stats
@@ -1329,6 +1344,97 @@ class MasterAgent:
             except Exception:
                 pass  # 单条标记失败不阻塞
 
+        return stats
+
+    # ── Phase 49-A: 快通路学习（Adaptation Path）──────────────────────
+
+    def _fast_path_learning(self) -> dict[str, Any]:
+        """快通路学习 — Episode → LearningExample → LearningEngine.learn。
+
+        Blueprint v1.1 L1: 快通路（在线 Adaptation）与慢通路（Consolidation,
+        _consolidate_episodes）共享 LearningArtifact 语义，本方法实现快通路激活。
+
+        治理纪律:
+          - 只写 LearningModel（引擎内存模型），不产生 Action
+          - Decision 唯一 Mutation Authority 未触碰
+          - 学习样本来自已持久化 Episode（provenance 完整）
+        """
+        stats: dict[str, Any] = {
+            "fast_path": "learning",
+            "examples": 0,
+            "models": 0,
+            "rules": 0,
+            "lessons": 0,
+            "learning_engine": False,
+        }
+        if self._learning_engine is None:
+            return stats  # 无引擎 → 降级不抛
+
+        store = self._episode_store
+        if store is None:
+            return stats
+
+        from ocos.learning.experience_learning import (
+            EpisodeExampleConverter,
+            RuleBasedLearner,
+            build_lesson_artifact,
+        )
+        from ocos.models.learning import LearningStrategy
+
+        try:
+            # 1. 重放今日 ACTIVE Episodes（与慢通路同源，幂等由 CONSOLIDATED 保证）
+            today_start = datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            episodes = [
+                ep
+                for ep in store.query_by_time(limit=self._CONSOLIDATION_BATCH_LIMIT)
+                if ep.created_at >= today_start and ep.status.name != "CONSOLIDATED"
+            ]
+            if not episodes:
+                stats["replayed"] = 0
+                return stats
+
+            # 2. Episode → LearningExample（含失败诊断）
+            examples, diagnoses, _ = EpisodeExampleConverter.convert_many(episodes)
+            stats["replayed"] = len(episodes)
+            stats["examples"] = len(examples)
+            stats["lessons"] = len(diagnoses)
+
+            if not examples:
+                return stats
+
+            # 3. 规则型 learn_fn → LearningEngine.learn（快通路激活）
+            model, trace = self._learning_engine.learn(
+                examples=examples,
+                learn_fn=RuleBasedLearner.learn_fn,
+                strategy=LearningStrategy.SUPERVISED,
+            )
+            stats["models"] = 1
+            stats["rules"] = len(model.rules)
+            stats["trace_id"] = trace.trace_id
+            stats["learning_engine"] = True
+            stats["accuracy"] = model.accuracy
+            stats["rule_count_metadata"] = model.metadata.get("rule_count", 0)
+
+            # 4. LESSON artifacts（失败诊断 → 统一语义）
+            for diag in diagnoses[:10]:
+                try:
+                    artifact = build_lesson_artifact(
+                        diag, diag.episode_id or "unknown"
+                    )
+                    stats.setdefault("artifacts", []).append({
+                        "id": artifact.id,
+                        "type": artifact.artifact_type.value,
+                        "cause": artifact.learned_rule.get("cause", ""),
+                        "delta": artifact.behavioral_delta,
+                    })
+                except Exception:
+                    continue  # 单条 artifact 失败不阻塞
+
+        except Exception as e:
+            stats["error"] = str(e)
+            logger.debug("fast_path_learning failed: %s", e)
         return stats
 
     # ── P2-D: 主动输出 ────────────────────────────────────────────────
