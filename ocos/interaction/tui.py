@@ -15,8 +15,8 @@ from pathlib import Path
 
 import httpx
 from textual.app import App, ComposeResult
-from textual.containers import Container, Vertical
-from textual.widgets import Log, Input, Footer, Static
+from textual.containers import Container
+from textual.widgets import Log, Input, Static
 from textual.binding import Binding
 
 
@@ -50,6 +50,8 @@ class ChatScreen(App):
     
     #input {
         height: 3;
+        border-top: solid $primary;
+        background: $surface-darken-2;
     }
     
     #status-bar {
@@ -59,10 +61,6 @@ class ChatScreen(App):
         text-align: center;
         content-align: center middle;
         border-top: solid $primary;
-    }
-    
-    #input {
-        width: 1fr;
     }
     """
     
@@ -107,8 +105,7 @@ class ChatScreen(App):
                     beliefs = ms.get("belief_count", 0)
                     pattern = ms.get("pattern_count", 0)
                     
-                    # 构建状态栏文本（复刻 Hermes Agent 风格）
-                    status = f" OCOS │ Episodes: {episodes} │ Beliefs: {beliefs} │ Patterns: {pattern} │ agnes-2.5-flash │ ████░░░░░░░░░░░░░░░░ 15% │ 在线 ─ 读取上个会话 "
+                    status = f" OCOS │ Episodes: {episodes} │ Beliefs: {beliefs} │ Patterns: {pattern} │ agnes-2.5-flash │ 在线 ─ 读取上个会话 "
                     self._status.update(status)
                     return
         except Exception:
@@ -130,7 +127,6 @@ class ChatScreen(App):
         if not text:
             return
         
-        # 添加用户消息
         self._add_message(text, True)
         inp.value = ""
         
