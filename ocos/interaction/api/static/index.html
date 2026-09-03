@@ -3,479 +3,937 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OCOS · 数字生命</title>
+<title>OCOS · 数字生命体</title>
 <style>
-  :root {
-    --bg:#04060c; --cyan:#35e0ff; --violet:#7a5cff; --fg:#dfe9f5;
-    --dim:#5f7086; --panel:rgba(10,18,30,.62); --line:rgba(53,224,255,.28);
-    --warn:#ffc857; --ok:#3ddc84; --bad:#ff5c7a;
-  }
-  * { box-sizing:border-box; margin:0; }
-  html,body { height:100%; overflow:hidden; }
-  body { background:var(--bg); color:var(--fg);
-         font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
-  #scene { position:fixed; inset:0; display:block; }
+:root {
+  --bg: #020810;
+  --panel: rgba(4, 12, 28, 0.85);
+  --border: rgba(0, 212, 255, 0.25);
+  --cyan: #00d4ff;
+  --blue: #1e6bff;
+  --purple: #a855f7;
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --fg: #e2e8f0;
+  --muted: #64748b;
+}
 
-  /* ── 人形体（SVG） ── */
-  #human { position:fixed; left:50%; top:47%; transform:translate(-50%,-50%);
-           width:min(46vh, 420px); }
-  #bodyG { animation:breathe 6s ease-in-out infinite;
-           transform-origin:200px 320px; }
-  @keyframes breathe { 0%,100% { transform:scale(1); } 50% { transform:scale(1.018); } }
-  body.thinking #bodyG { animation-duration:2.4s; }
-  .outline { fill:rgba(53,224,255,.05); stroke:var(--cyan); stroke-width:1.6;
-             filter:url(#glow); }
-  .spine { stroke:rgba(122,92,255,.6); stroke-width:1.2; stroke-dasharray:4 5; }
-  .organ { cursor:pointer; }
-  .organ circle { fill:rgba(53,224,255,.18); stroke:var(--cyan); stroke-width:1.4;
-                  transition:.3s; }
-  .organ:hover circle, .organ.active circle {
-      fill:rgba(53,224,255,.45); filter:drop-shadow(0 0 8px var(--cyan)); }
-  .organ text { fill:var(--dim); font-size:10px; text-anchor:middle;
-                opacity:0; transition:.3s; pointer-events:none; }
-  .organ:hover text { opacity:1; fill:var(--cyan); }
-  .pulse { animation:opulse 3.2s ease-in-out infinite; transform-box:fill-box;
-           transform-origin:center; }
-  @keyframes opulse { 0%,100% { opacity:.55; } 50% { opacity:1; } }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'JetBrains Mono', 'SF Mono', 'PingFang SC', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
 
-  .ring { position:fixed; left:50%; top:47%; border-radius:50%;
-          border:1px dashed var(--line); pointer-events:none; }
-  #ring1 { width:min(60vh,470px); height:min(60vh,470px);
-           margin:calc(min(60vh,470px)/-2) 0 0 calc(min(60vh,470px)/-2);
-           animation:spin 30s linear infinite; }
-  @keyframes spin { to { transform:rotate(360deg); } }
+/* ── 粒子背景 ── */
+#particles { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
 
-  /* ── 身份牌 ── */
-  #idcard { position:fixed; top:22px; left:26px; }
-  #idcard h1 { font-size:17px; letter-spacing:.35em; font-weight:600;
-               color:var(--cyan); text-shadow:0 0 14px rgba(53,224,255,.55); }
-  #idcard .sub { color:var(--dim); font-size:11px; letter-spacing:.2em; }
-  #idcard .clock { color:var(--dim); font-size:11px; margin-top:6px;
-                   font-variant-numeric:tabular-nums; }
-  .ops { margin-top:10px; display:flex; gap:8px; }
-  .op { background:transparent; color:var(--cyan); border:1px solid var(--line);
-        border-radius:8px; padding:4px 10px; font-size:11px; cursor:pointer;
-        letter-spacing:.1em; }
-  .op:hover { background:rgba(53,224,255,.12); }
+/* ── 主容器 ── */
+.app {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 280px 1fr 300px;
+  grid-template-rows: 60px 1fr 80px;
+  height: 100vh;
+  gap: 1px;
+  background: var(--border);
+}
 
-  /* ── 状态文字 ── */
-  #corestate { position:fixed; left:50%; bottom:120px;
-               transform:translateX(-50%); color:var(--cyan);
-               font-size:12px; letter-spacing:.4em;
-               text-shadow:0 0 10px rgba(53,224,255,.5); }
+/* ── 顶部状态栏 ── */
+.topbar {
+  grid-column: 1 / -1;
+  background: var(--panel);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  backdrop-filter: blur(12px);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.brand-icon {
+  width: 32px; height: 32px;
+  background: conic-gradient(from 180deg, var(--cyan), var(--purple), var(--cyan));
+  border-radius: 50%;
+  animation: spin 4s linear infinite;
+  box-shadow: 0 0 20px var(--cyan);
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.brand h1 {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  background: linear-gradient(90deg, var(--cyan), var(--purple));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.brand .sub {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.2em;
+}
+.clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 12px;
+}
+.status-pills {
+  display: flex;
+  gap: 8px;
+}
+.pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(0, 212, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--cyan);
+}
+.pill .dot {
+  width: 6px; height: 6px;
+  background: var(--green);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--green);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.85); }
+}
+.pill.warn .dot { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+.pill.error .dot { background: var(--red); box-shadow: 0 0 8px var(--red); }
 
-  /* ── 对话气泡 ── */
-  #chatcol { position:fixed; left:26px; bottom:110px; width:min(430px, 40vw);
-             display:flex; flex-direction:column; gap:10px; z-index:5; }
-  .bubble { padding:10px 14px; border-radius:12px; font-size:13.5px;
-            white-space:pre-wrap; word-break:break-word;
-            backdrop-filter:blur(6px); animation:rise .35s ease; }
-  @keyframes rise { from { opacity:0; transform:translateY(10px); } }
-  .user { align-self:flex-end; background:rgba(43,95,217,.28);
-          border:1px solid rgba(43,95,217,.5); border-bottom-right-radius:3px; }
-  .bot  { align-self:flex-start; background:var(--panel);
-          border:1px solid var(--line); border-bottom-left-radius:3px; }
-  .bot.mock { border-style:dashed; border-color:rgba(255,200,87,.45); }
-  .bot .tag { display:block; margin-top:6px; color:var(--warn); font-size:11px; }
-  .faded { opacity:.35; transition:opacity 1s; }
-  .togoal { display:inline-block; margin-left:10px; color:var(--cyan);
-            font-size:11px; cursor:pointer; opacity:.7;
-            border-bottom:1px dotted var(--cyan); }
-  .togoal:hover { opacity:1; }
+/* ── 左侧面板 - 核心状态 ── */
+.left-panel {
+  background: var(--panel);
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.panel-title {
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.card {
+  background: rgba(0, 212, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.card-title {
+  font-size: 11px;
+  color: var(--cyan);
+  letter-spacing: 0.15em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.card-title::before {
+  content: '';
+  width: 4px; height: 4px;
+  background: var(--cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--cyan);
+}
+.value-lg {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--fg);
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.value-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.metric-row:last-child { border-bottom: none; }
+.metric-label { color: var(--muted); font-size: 11px; }
+.metric-value { color: var(--fg); font-size: 12px; font-weight: 500; }
+.progress-bar {
+  height: 3px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 2px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--cyan), var(--purple));
+  border-radius: 2px;
+  transition: width 0.5s ease;
+}
 
-  /* ── 生命体征 ── */
-  #vitals { position:fixed; right:26px; top:22px; width:225px;
-            background:var(--panel); border:1px solid var(--line);
-            border-radius:14px; padding:14px 16px; backdrop-filter:blur(8px);
-            z-index:6; }
-  #vitals h2 { font-size:11px; color:var(--cyan); letter-spacing:.3em;
-               margin-bottom:10px; font-weight:500; }
-  .stat { display:flex; justify-content:space-between; padding:3px 0; font-size:12.5px; }
-  .stat span { color:var(--dim); }
-  .stat b { font-weight:600; font-variant-numeric:tabular-nums; }
-  .bar { height:3px; background:rgba(53,224,255,.12); border-radius:2px;
-         margin:2px 0 8px; overflow:hidden; }
-  .bar i { display:block; height:100%;
-           background:linear-gradient(90deg,var(--cyan),var(--violet)); }
+/* ── 中央 - 核心可视化 ── */
+.center-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(0,212,255,0.03) 0%, transparent 70%);
+}
+#coreCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.core-status {
+  position: absolute;
+  bottom: 100px;
+  text-align: center;
+}
+.core-status .state {
+  font-size: 12px;
+  letter-spacing: 0.3em;
+  color: var(--cyan);
+  text-shadow: 0 0 20px var(--cyan);
+}
+.core-status .sub-state {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 4px;
+}
 
-  /* ── 待批动作 ── */
-  #asks { position:fixed; right:26px; bottom:110px; width:225px;
-          display:flex; flex-direction:column; gap:8px; z-index:6; }
-  .ask { background:var(--panel); border:1px solid rgba(255,200,87,.4);
-         border-radius:12px; padding:10px 12px; font-size:12px;
-         backdrop-filter:blur(6px); }
-  .ask b { color:var(--warn); font-size:11px; }
-  .ask .row { display:flex; gap:8px; margin-top:8px; }
-  .ask button { flex:1; background:transparent; color:var(--cyan);
-                border:1px solid var(--line); border-radius:8px;
-                padding:5px; cursor:pointer; font-size:12px; }
-  .ask button.deny { color:#ff7a9c; border-color:rgba(255,122,156,.35); }
+/* ── 右侧面板 - 目标与记忆 ── */
+.right-panel {
+  background: var(--panel);
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.goal-item {
+  background: rgba(168, 85, 247, 0.08);
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.goal-id {
+  font-size: 10px;
+  color: var(--purple);
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+}
+.goal-desc {
+  font-size: 12px;
+  color: var(--fg);
+  line-height: 1.4;
+}
+.goal-meta {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 6px;
+  display: flex;
+  gap: 12px;
+}
+.episode-item {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-size: 11px;
+  color: var(--muted);
+}
+.episode-item .time {
+  color: var(--cyan);
+  margin-right: 8px;
+}
+.episode-item .status-ok { color: var(--green); }
+.episode-item .status-fail { color: var(--red); }
 
-  /* ── 模块详情面板（点击器官拉出） ── */
-  #modulePanel { position:fixed; right:26px; top:70px; bottom:90px; width:390px;
-                 background:rgba(8,14,24,.94); border:1px solid var(--line);
-                 border-radius:14px; padding:16px; backdrop-filter:blur(12px);
-                 overflow-y:auto; z-index:20; display:none; }
-  #modulePanel.open { display:block; animation:slidein .25s ease; }
-  @keyframes slidein { from { opacity:0; transform:translateX(24px); } }
-  #modulePanel h2 { font-size:14px; color:var(--cyan); letter-spacing:.15em;
-                    display:flex; justify-content:space-between; align-items:center;
-                    margin-bottom:10px; }
-  #modulePanel h2 .close { cursor:pointer; color:var(--dim); font-size:16px; }
-  #modulePanel h3 { font-size:12px; color:var(--violet); margin:12px 0 6px;
-                    letter-spacing:.1em; }
-  #modulePanel .kv { display:flex; gap:8px; font-size:12.5px; padding:2px 0; }
-  #modulePanel .kv span { color:var(--dim); min-width:88px; }
-  #modulePanel .kv b { font-weight:500; word-break:break-all; }
-  #modulePanel pre { font-size:11px; white-space:pre-wrap; word-break:break-all;
-                     color:var(--fg); background:rgba(53,224,255,.06);
-                     border-radius:8px; padding:8px; margin:6px 0; }
-  #modulePanel .hint { color:var(--dim); font-size:11.5px; margin:6px 0; }
+/* ── 底部 - 对话输入 ── */
+.bottom-bar {
+  grid-column: 1 / -1;
+  background: var(--panel);
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.chat-messages {
+  flex: 1;
+  max-height: 60px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.msg {
+  padding: 6px 12px;
+  border-radius: 8px;
+  max-width: 80%;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.msg.user {
+  align-self: flex-end;
+  background: rgba(30, 107, 255, 0.2);
+  border: 1px solid rgba(30, 107, 255, 0.4);
+  color: var(--fg);
+}
+.msg.bot {
+  align-self: flex-start;
+  background: rgba(0, 212, 255, 0.08);
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+.msg.bot.mock {
+  border-style: dashed;
+  border-color: rgba(245, 158, 11, 0.4);
+  color: var(--amber);
+}
+.input-row {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+}
+#chatInput {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 10px 20px;
+  color: var(--fg);
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+#chatInput:focus {
+  border-color: var(--cyan);
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.2);
+}
+#chatInput::placeholder { color: var(--muted); }
+.send-btn {
+  background: linear-gradient(135deg, var(--cyan), var(--blue));
+  border: none;
+  border-radius: 24px;
+  padding: 10px 24px;
+  color: #000;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  letter-spacing: 0.1em;
+  transition: all 0.2s;
+}
+.send-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(0, 212, 255, 0.4);
+}
+.send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
 
-  /* ── 输入栏 ── */
-  #inputbar { position:fixed; left:50%; bottom:26px; transform:translateX(-50%);
-              width:min(620px, 76vw); display:flex; gap:10px; z-index:5; }
-  #input { flex:1; background:rgba(10,18,30,.7); color:var(--fg);
-           border:1px solid var(--line); border-radius:24px;
-           padding:12px 20px; font-size:14px; outline:none;
-           backdrop-filter:blur(8px); transition:.3s; }
-  #input:focus { border-color:var(--cyan); box-shadow:0 0 18px rgba(53,224,255,.25); }
-  #send { background:transparent; color:var(--cyan); border:1px solid var(--line);
-          border-radius:24px; width:88px; cursor:pointer; letter-spacing:.2em; }
-  #send:hover { background:rgba(53,224,255,.12); }
-  #send:disabled { opacity:.4; cursor:default; }
+/* ── 待批请求 ── */
+.pending-card {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 10px;
+  padding: 12px;
+}
+.pending-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.pending-id {
+  font-size: 10px;
+  color: var(--amber);
+}
+.pending-actions {
+  display: flex;
+  gap: 8px;
+}
+.btn-approve {
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: var(--green);
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.btn-deny {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: var(--red);
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* ── 滚动条 ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── 响应式 ── */
+@media (max-width: 1024px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 50px 1fr 80px; }
+  .left-panel, .right-panel { display: none; }
+}
 </style>
 </head>
 <body>
-<canvas id="scene"></canvas>
 
-<svg id="human" viewBox="0 0 400 620">
-  <defs>
-    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="2.2" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-  </defs>
-  <g id="bodyG">
-    <!-- 身体轮廓 -->
-    <path class="outline" d="M 200 104
-      C 174 110, 154 120, 147 140
-      C 138 162, 141 202, 149 240
-      C 154 268, 157 284, 155 300
-      C 153 322, 157 342, 164 360
-      L 171 432 C 173 484, 175 522, 177 556 L 160 564
-      L 196 568 L 200 380 L 204 568 L 240 564 L 223 556
-      C 225 522, 227 484, 229 432 L 236 360
-      C 243 342, 247 322, 245 300
-      C 243 284, 246 268, 251 240
-      C 259 202, 262 162, 253 140
-      C 246 120, 226 110, 200 104 Z"/>
-    <!-- 手臂 -->
-    <path class="outline" d="M 147 141 C 127 162, 117 202, 115 242 C 113 270, 111 284, 111 296"/>
-    <path class="outline" d="M 253 141 C 273 162, 283 202, 285 242 C 287 270, 289 284, 289 296"/>
-    <!-- 神经脊柱 -->
-    <line class="spine" x1="200" y1="112" x2="200" y2="356"/>
-    <!-- 头 -->
-    <circle class="outline" cx="200" cy="66" r="36"/>
+<canvas id="particles"></canvas>
 
-    <!-- 器官（可点击） -->
-    <g class="organ" data-m="identity"><circle class="pulse" cx="200" cy="46" r="10"/>
-      <text x="200" y="28">宪法 / 身份</text></g>
-    <g class="organ" data-m="engines"><circle class="pulse" cx="200" cy="72" r="13"/>
-      <text x="200" y="105">认知引擎</text></g>
-    <g class="organ" data-m="perception"><circle class="pulse" cx="186" cy="82" r="5"/>
-      <circle class="pulse" cx="214" cy="82" r="5"/>
-      <text x="200" y="122">感知</text></g>
-    <g class="organ" data-m="language"><circle class="pulse" cx="200" cy="100" r="6"/>
-      <text x="243" y="103">语言核心</text></g>
-    <g class="organ" data-m="immune"><circle class="pulse" cx="163" cy="152" r="9"/>
-      <text x="140" y="136">免疫诊断</text></g>
-    <g class="organ" data-m="memory"><circle class="pulse" cx="218" cy="172" r="12"/>
-      <text x="252" y="176">记忆</text></g>
-    <g class="organ" data-m="goals"><circle class="pulse" cx="200" cy="226" r="12"/>
-      <text x="200" y="254">目标核心</text></g>
-    <g class="organ" data-m="execution"><circle class="pulse" cx="111" cy="300" r="9"/>
-      <circle class="pulse" cx="289" cy="300" r="9"/>
-      <text x="200" y="318">执行</text></g>
-    <g class="organ" data-m="daemon"><circle class="pulse" cx="200" cy="560" r="10"/>
-      <text x="200" y="590">立足 · daemon</text></g>
-  </g>
-</svg>
-<div class="ring" id="ring1"></div>
+<div class="app">
+  <!-- 顶部栏 -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon"></div>
+      <div>
+        <h1>OCOS</h1>
+        <div class="sub">DIGITAL ORGANISM · v1.1</div>
+      </div>
+    </div>
+    <div class="status-pills">
+      <div class="pill" id="daemonPill">
+        <span class="dot"></span>
+        <span id="daemonText">连接中...</span>
+      </div>
+      <div class="pill" id="llmPill">
+        <span class="dot" style="background:var(--muted)"></span>
+        <span id="llmText">等待配置</span>
+      </div>
+    </div>
+    <div class="clock" id="clock">--:--:--</div>
+  </header>
 
-<div id="idcard">
-  <h1>OCOS</h1>
-  <div class="sub">DIGITAL ORGANISM · 点击身体模块查看</div>
-  <div class="clock" id="clock"></div>
-  <div class="ops">
-    <button class="op" onclick="openModule('all')">◉ 内视全景</button>
-    <button class="op" onclick="selfImprove(this)">↻ 自省升级</button>
-  </div>
-</div>
+  <!-- 左侧面板 -->
+  <aside class="left-panel">
+    <div>
+      <div class="panel-title">核心状态</div>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">认知引擎</span>
+        </div>
+        <div id="engineStatus">
+          <div class="metric-row">
+            <span class="metric-label">planner</span>
+            <span class="metric-value" style="color:var(--green)">● 运行中</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">reasoner</span>
+            <span class="metric-value" style="color:var(--green)">● 运行中</span>
+          </div>
+        </div>
+      </div>
+    </div>
 
-<div id="corestate">待命中</div>
-<div id="chatcol"></div>
+    <div>
+      <div class="panel-title">记忆容量</div>
+      <div class="card">
+        <div class="value-lg" id="episodeCount">0</div>
+        <div class="value-label">已沉淀 episode</div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="episodeBar" style="width:0%"></div>
+        </div>
+        <div class="metric-row" style="margin-top:10px">
+          <span class="metric-label">beliefs</span>
+          <span class="metric-value" id="beliefCount">0</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">patterns</span>
+          <span class="metric-value" id="patternCount">0</span>
+        </div>
+      </div>
+    </div>
 
-<div id="vitals">
-  <h2>VITALS · 生命体征</h2>
-  <div id="stats"><div class="stat"><span>连接中…</span></div></div>
-</div>
-<div id="asks"></div>
+    <div>
+      <div class="panel-title">能力矩阵</div>
+      <div class="card">
+        <div class="metric-row">
+          <span class="metric-label">filesystem</span>
+          <span class="metric-value" style="color:var(--green)">✓</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">shell·HTTP</span>
+          <span class="metric-value" style="color:var(--amber)">◑ 需审批</span>
+        </div>
+      </div>
+    </div>
 
-<div id="modulePanel">
-  <h2><span id="mp-title">模块</span><span class="close" onclick="closeModule()">✕</span></h2>
-  <div id="mp-body"><div class="hint">加载中…</div></div>
-</div>
+    <div>
+      <div class="panel-title">自我认知</div>
+      <div class="card">
+        <div id="selfKnowledge" style="font-size:11px;color:var(--muted);line-height:1.6">
+          加载中...
+        </div>
+      </div>
+    </div>
+  </aside>
 
-<div id="inputbar">
-  <input id="input" placeholder="对它说点什么…（⏎ 发送）" autocomplete="off">
-  <button id="send">发送</button>
+  <!-- 中央可视化 -->
+  <main class="center-panel">
+    <canvas id="coreCanvas"></canvas>
+    <div class="core-status">
+      <div class="state" id="coreState">待命中</div>
+      <div class="sub-state" id="coreSub">等待输入...</div>
+    </div>
+  </main>
+
+  <!-- 右侧面板 -->
+  <aside class="right-panel">
+    <div>
+      <div class="panel-title">活跃目标</div>
+      <div id="goalsContainer">
+        <div style="color:var(--muted);font-size:11px;text-align:center;padding:20px">
+          暂无活跃目标
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title">待批请求</div>
+      <div id="pendingContainer">
+        <div style="color:var(--muted);font-size:11px;text-align:center;padding:20px">
+          无待批项
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title">最近记忆</div>
+      <div id="recentEpisodes">
+        <div style="color:var(--muted);font-size:11px;text-align:center;padding:20px">
+          加载中...
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel-title">操作</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="send-btn" onclick="runSelfImprove()" style="background:rgba(168,85,247,0.2);border:1px solid rgba(168,85,247,0.4);color:var(--purple)">
+          ↻ 自省升级
+        </button>
+        <button class="send-btn" onclick="refreshAll()" style="background:rgba(0,212,255,0.1);border:1px solid var(--border);color:var(--cyan)">
+          ⟳ 刷新状态
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 底部对话栏 -->
+  <footer class="bottom-bar">
+    <div class="chat-messages" id="chatMessages">
+      <div class="msg bot">你好，我是 OCOS。有什么可以帮你的？</div>
+    </div>
+    <div class="input-row">
+      <input id="chatInput" type="text" placeholder="对它说点什么... (Enter发送)" autocomplete="off">
+      <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
+    </div>
+  </footer>
 </div>
 
 <script>
-/* ═══════════════ 背景星尘（canvas） ═══════════════ */
-const scene = document.getElementById("scene");
-const ctx2d = scene.getContext("2d");
-let W, H;
-function resize() {
-  W = scene.width = innerWidth * devicePixelRatio;
-  H = scene.height = innerHeight * devicePixelRatio;
-  scene.style.width = innerWidth + "px"; scene.style.height = innerHeight + "px";
+// ═══════════════════════════════════════════════════════
+// 粒子背景
+// ═══════════════════════════════════════════════════════
+const pCanvas = document.getElementById('particles');
+const pCtx = pCanvas.getContext('2d');
+let pW, pH;
+function resizeParticles() {
+  pW = pCanvas.width = window.innerWidth * devicePixelRatio;
+  pH = pCanvas.height = window.innerHeight * devicePixelRatio;
+  pCanvas.style.width = window.innerWidth + 'px';
+  pCanvas.style.height = window.innerHeight + 'px';
 }
-addEventListener("resize", resize); resize();
-const stars = Array.from({length: 130}, () => ({
+resizeParticles();
+window.addEventListener('resize', resizeParticles);
+
+const particles = Array.from({length: 80}, () => ({
   x: Math.random(), y: Math.random(),
-  r: Math.random() * 1.4 + .3, tw: Math.random() * 6.28 }));
-function drawScene(t) {
-  ctx2d.clearRect(0, 0, W, H);
-  const s = devicePixelRatio;
-  for (const st of stars) {
-    const a = .2 + .35 * Math.abs(Math.sin(t * .6 + st.tw));
-    ctx2d.fillStyle = `rgba(160,200,255,${a * .45})`;
-    ctx2d.fillRect(st.x * W, st.y * H, st.r * s, st.r * s);
+  vx: (Math.random() - 0.5) * 0.0003,
+  vy: (Math.random() - 0.5) * 0.0003,
+  r: Math.random() * 1.5 + 0.5,
+  a: Math.random() * 0.4 + 0.1
+}));
+
+function drawParticles(t) {
+  pCtx.clearRect(0, 0, pW, pH);
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy;
+    if (p.x < 0 || p.x > 1) p.vx *= -1;
+    if (p.y < 0 || p.y > 1) p.vy *= -1;
+    const alpha = p.a * (0.7 + 0.3 * Math.sin(t + p.x * 10));
+    pCtx.fillStyle = `rgba(0, 212, 255, ${alpha})`;
+    pCtx.beginPath();
+    pCtx.arc(p.x * pW, p.y * pH, p.r * devicePixelRatio, 0, Math.PI * 2);
+    pCtx.fill();
   }
-  requestAnimationFrame(() => drawScene(t + 1/60));
-}
-requestAnimationFrame(drawScene);
-
-/* ═══════════════ 状态机 ═══════════════ */
-const corestate = document.getElementById("corestate");
-function setState(s, label) {
-  document.body.classList.toggle("thinking", s === "thinking");
-  corestate.textContent = label;
-}
-
-/* ═══════════════ 对话 ═══════════════ */
-const stream = document.getElementById("chatcol");
-const input = document.getElementById("input");
-const sendBtn = document.getElementById("send");
-
-function bubble(text, who, mock) {
-  const div = document.createElement("div");
-  div.className = "bubble " + who + (mock ? " mock" : "");
-  div.textContent = text;
-  if (mock) {
-    const tag = document.createElement("span");
-    tag.className = "tag"; tag.textContent = "◦ 状态回复 · 未接入语言核心";
-    div.appendChild(tag);
+  // 连线
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const dx = particles[i].x - particles[j].x;
+      const dy = particles[i].y - particles[j].y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < 0.15) {
+        pCtx.strokeStyle = `rgba(0, 212, 255, ${0.08 * (1 - dist/0.15)})`;
+        pCtx.lineWidth = 0.5 * devicePixelRatio;
+        pCtx.beginPath();
+        pCtx.moveTo(particles[i].x * pW, particles[i].y * pH);
+        pCtx.lineTo(particles[j].x * pW, particles[j].y * pH);
+        pCtx.stroke();
+      }
+    }
   }
-  stream.appendChild(div);
-  while (stream.children.length > 5) stream.firstChild.remove();
-  [...stream.children].slice(0, -2).forEach(k => k.classList.add("faded"));
-  return div;
+  requestAnimationFrame((t) => drawParticles(t + 1));
 }
+requestAnimationFrame((t) => drawParticles(t));
 
-async function send() {
-  const text = input.value.trim();
-  if (!text) return;
-  bubble(text, "user");
-  input.value = ""; sendBtn.disabled = true;
-  setState("thinking", "处理中");
-  try {
-    const j = await (await fetch("/ocos/converse", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({message: text}),
-    })).json();
-    setState("speaking", "回应中");
-    if (j.success) bubble(j.data.reply, "bot", j.data.mock);
-    else bubble("出错: " + j.message, "bot");
-    setTimeout(() => setState("idle", "待命中"), 3200);
-  } catch (e) {
-    setState("idle", "待命中");
-    bubble("连接失败（ocos-server 在跑吗？）", "bot");
+// ═══════════════════════════════════════════════════════
+// 核心可视化
+// ═══════════════════════════════════════════════════════
+const coreCanvas = document.getElementById('coreCanvas');
+const coreCtx = coreCanvas.getContext('2d');
+let cW, cH, cx, cy;
+
+function resizeCore() {
+  const rect = coreCanvas.parentElement.getBoundingClientRect();
+  cW = coreCanvas.width = rect.width * devicePixelRatio;
+  cH = coreCanvas.height = rect.height * devicePixelRatio;
+  cx = cW / 2; cy = cH / 2;
+  coreCanvas.style.width = rect.width + 'px';
+  coreCanvas.style.height = rect.height + 'px';
+}
+resizeCore();
+window.addEventListener('resize', resizeCore);
+
+// 脉冲环
+const rings = Array.from({length: 5}, (_, i) => ({
+  r: 40 + i * 35, phase: i * 0.8, speed: 0.02 + i * 0.005
+}));
+
+// 数据流节点
+const nodes = Array.from({length: 12}, (_, i) => ({
+  angle: (i / 12) * Math.PI * 2,
+  dist: 120 + Math.random() * 60,
+  size: 2 + Math.random() * 3,
+  pulse: Math.random() * Math.PI * 2
+}));
+
+function drawCore(t) {
+  coreCtx.clearRect(0, 0, cW, cH);
+  
+  // 背景光晕
+  const grad = coreCtx.createRadialGradient(cx, cy, 0, cx, cy, 200);
+  grad.addColorStop(0, 'rgba(0, 212, 255, 0.06)');
+  grad.addColorStop(0.5, 'rgba(168, 85, 247, 0.03)');
+  grad.addColorStop(1, 'transparent');
+  coreCtx.fillStyle = grad;
+  coreCtx.fillRect(0, 0, cW, cH);
+  
+  // 脉冲环
+  for (const ring of rings) {
+    const pulse = Math.sin(t * ring.speed + ring.phase) * 0.5 + 0.5;
+    const alpha = 0.15 + pulse * 0.15;
+    coreCtx.strokeStyle = `rgba(0, 212, 255, ${alpha})`;
+    coreCtx.lineWidth = 1 * devicePixelRatio;
+    coreCtx.beginPath();
+    coreCtx.arc(cx, cy, ring.r * devicePixelRatio, 0, Math.PI * 2);
+    coreCtx.stroke();
   }
-  sendBtn.disabled = false; input.focus(); refreshSide();
+  
+  // 中心核心
+  const coreR = 25 * devicePixelRatio;
+  const coreGrad = coreCtx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+  coreGrad.addColorStop(0, 'rgba(0, 212, 255, 0.8)');
+  coreGrad.addColorStop(0.5, 'rgba(168, 85, 247, 0.4)');
+  coreGrad.addColorStop(1, 'transparent');
+  coreCtx.fillStyle = coreGrad;
+  coreCtx.beginPath();
+  coreCtx.arc(cx, cy, coreR, 0, Math.PI * 2);
+  coreCtx.fill();
+  
+  // 节点连接
+  for (const node of nodes) {
+    const nx = cx + Math.cos(node.angle + t * 0.0003) * node.dist * devicePixelRatio;
+    const ny = cy + Math.sin(node.angle + t * 0.0003) * node.dist * devicePixelRatio;
+    const pulse = Math.sin(t * 0.03 + node.pulse) * 0.5 + 0.5;
+    
+    // 连线
+    coreCtx.strokeStyle = `rgba(0, 212, 255, ${0.1 + pulse * 0.1})`;
+    coreCtx.lineWidth = 0.5 * devicePixelRatio;
+    coreCtx.beginPath();
+    coreCtx.moveTo(cx, cy);
+    coreCtx.lineTo(nx, ny);
+    coreCtx.stroke();
+    
+    // 节点
+    coreCtx.fillStyle = `rgba(0, 212, 255, ${0.4 + pulse * 0.4})`;
+    coreCtx.beginPath();
+    coreCtx.arc(nx, ny, node.size * devicePixelRatio, 0, Math.PI * 2);
+    coreCtx.fill();
+  }
+  
+  requestAnimationFrame(drawCore);
 }
-sendBtn.onclick = send;
-input.addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+requestAnimationFrame(drawCore);
 
+// ═══════════════════════════════════════════════════════
+// 时钟
+// ═══════════════════════════════════════════════════════
 setInterval(() => {
-  document.getElementById("clock").textContent =
-    new Date().toLocaleString("zh-CN", {hour12: false});
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('zh-CN', { hour12: false });
 }, 1000);
 
-async function selfImprove(btn) {
-  btn.disabled = true; btn.textContent = "自省中…";
-  setState("thinking", "自省中");
-  try {
-    const j = await (await fetch("/ocos/self-improve", {method: "POST"})).json();
-    const d = j.data;
-    if (!d.proposals || !d.proposals.length)
-      bubble(d.note || "本轮没有值得记的改进点。", "bot", d.mock);
-    else {
-      bubble(`自省完成，${d.proposals.length} 条升级提案进入待批队列等你裁决：` +
-             d.proposals.map(p => "「" + p.title + "」").join(" "), "bot");
-      refreshSide();
-    }
-  } catch (e) { bubble("自省失败: " + e, "bot"); }
-  setState("idle", "待命中");
-  btn.disabled = false; btn.textContent = "↻ 自省升级";
+// ═══════════════════════════════════════════════════════
+// 对话系统
+// ═══════════════════════════════════════════════════════
+const chatMessages = document.getElementById('chatMessages');
+const chatInput = document.getElementById('chatInput');
+const sendBtn = document.getElementById('sendBtn');
+
+function addMessage(text, isUser, isMock) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + (isUser ? 'user' : 'bot' + (isMock ? ' mock' : ''));
+  div.textContent = text;
+  chatMessages.appendChild(div);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  // 保留最近5条
+  while (chatMessages.children.length > 5) {
+    chatMessages.firstChild.remove();
+  }
 }
 
-/* ═══════════════ 体征 + 待批 ═══════════════ */
-async function refreshSide() {
+async function sendMessage() {
+  const text = chatInput.value.trim();
+  if (!text) return;
+  
+  addMessage(text, true, false);
+  chatInput.value = '';
+  sendBtn.disabled = true;
+  
+  document.getElementById('coreState').textContent = '处理中';
+  document.getElementById('coreSub').textContent = 'LLM 思考中...';
+  
   try {
-    const d = (await (await fetch("/ocos/summary")).json()).data;
-    const g = d.goals || {}, mem = d.memory || {};
-    const memMax = Math.max(1, (mem.episodes || 0) + 10);
-    const dm = d.daemon || {};
-    const dmColor = dm.alive ? "var(--ok)" : "var(--bad)";
-    const dmText = dm.alive ? `在线 · ${dm.age_s}s 前` : "离线 — 启动 ocos run";
-    document.getElementById("stats").innerHTML =
-      `<div class="stat"><span>daemon</span><b style="color:${dmColor}">● ${dmText}</b></div>
-       <div class="stat"><span>目标 P / A</span><b>${g.PENDING||0} / ${g.ACTIVE||0}</b></div>
-       <div class="stat"><span>待批动作</span><b>${d.approvals_pending}</b></div>
-       <div class="stat"><span>收件箱</span><b>${d.inbox_queued}</b></div>
-       <div class="stat"><span>episodes</span><b>${mem.episodes||0}</b></div>
-       <div class="bar"><i style="width:${Math.min(100,(mem.episodes||0)/memMax*100)}%"></i></div>
-       <div class="stat"><span>beliefs</span><b>${mem.beliefs||0}</b></div>`;
-    const rows = (await (await fetch("/ocos/approvals")).json()).data.pending;
-    const box = document.getElementById("asks"); box.innerHTML = "";
-    for (const r of rows) {
-      const card = document.createElement("div");
-      card.className = "ask";
-      card.innerHTML = `<b>${r.id}</b> ${r.action_type}
-        <div style="color:var(--dim)">${(r.text||"").slice(0,46)}</div>
-        <div class="row">
-          <button onclick="decide('${r.id}','approve')">批 准</button>
-          <button class="deny" onclick="decide('${r.id}','deny')">拒 绝</button>
-        </div>`;
-      box.appendChild(card);
+    const resp = await fetch('/ocos/converse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+    const j = await resp.json();
+    
+    document.getElementById('coreState').textContent = '回应中';
+    document.getElementById('coreSub').textContent = '生成回复...';
+    
+    if (j.success) {
+      addMessage(j.data.reply, false, j.data.mock);
+      updateLLMStatus(j.data.provider, j.data.mock);
+    } else {
+      addMessage('出错: ' + j.message, false, false);
     }
-  } catch (e) { /* 静默重试 */ }
+  } catch (e) {
+    addMessage('连接失败（ocos-server 在跑吗？）', false, false);
+  }
+  
+  sendBtn.disabled = false;
+  chatInput.focus();
+  document.getElementById('coreState').textContent = '待命中';
+  document.getElementById('coreSub').textContent = '等待输入...';
 }
+
+sendBtn.onclick = sendMessage;
+chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
+
+function updateLLMStatus(provider, mock) {
+  const pill = document.getElementById('llmPill');
+  const dot = pill.querySelector('.dot');
+  const text = document.getElementById('llmText');
+  
+  if (mock) {
+    dot.style.background = 'var(--amber)';
+    dot.style.boxShadow = '0 0 8px var(--amber)';
+    text.textContent = '状态模式';
+  } else {
+    dot.style.background = 'var(--green)';
+    dot.style.boxShadow = '0 0 8px var(--green)';
+    text.textContent = provider === 'openai' ? 'Agnes AI' : provider;
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// 状态刷新
+// ═══════════════════════════════════════════════════════
+async function refreshAll() {
+  try {
+    // 获取核心状态
+    const introResp = await fetch('/ocos/introspect');
+    const intro = await introResp.json();
+    const d = intro.data;
+    
+    // 更新记忆计数
+    const mem = d.memory_stats || {};
+    document.getElementById('episodeCount').textContent = mem.episode_count || 0;
+    document.getElementById('beliefCount').textContent = mem.belief_count || 0;
+    document.getElementById('patternCount').textContent = mem.pattern_count || 0;
+    
+    // 更新进度条
+    const epCount = mem.episode_count || 0;
+    document.getElementById('episodeBar').style.width = Math.min(100, epCount / 10) + '%';
+    
+    // 更新自我认知
+    const sk = d.self_knowledge || '';
+    const lines = sk.split('\n').filter(l => l.trim()).slice(0, 3);
+    document.getElementById('selfKnowledge').innerHTML =
+      lines.length ? lines.map(l => `<div style="margin-bottom:4px">${l.replace(/^- /, '•')}</div>`).join('')
+                  : '<div style="color:var(--muted)">暂无</div>';
+    
+    // 更新最近记忆
+    const recent = d.recent_episodes || [];
+    const recentHtml = recent.slice(0, 5).map(e => {
+      const time = e.created_at?.slice(11, 16) || '--:--';
+      const ok = e.decision?.includes('completed') || e.decision?.includes('success');
+      const icon = ok ? '<span class="status-ok">✓</span>' : '<span class="status-fail">✗</span>';
+      const text = (e.decision || e.context || '').slice(0, 50);
+      return `<div class="episode-item">${icon}<span class="time">${time}</span>${text}...</div>`;
+    }).join('');
+    document.getElementById('recentEpisodes').innerHTML = recentHtml || '<div style="color:var(--muted);font-size:11px">暂无</div>';
+    
+    // 更新LLM状态
+    if (d.llm) {
+      updateLLMStatus('openai', !String(d.llm).includes('configured'));
+    }
+    
+    // 获取目标和待批
+    const [goalsResp, pendingResp] = await Promise.all([
+      fetch('/ocos/summary'),
+      fetch('/ocos/approvals')
+    ]);
+    const goals = await goalsResp.json();
+    const pending = await pendingResp.json();
+    
+    // 渲染目标
+    const goalList = goals.data?.goals || {};
+    if (goalList.ACTIVE || goalList.PENDING) {
+      document.getElementById('goalsContainer').innerHTML = `
+        <div class="goal-item">
+          <div class="goal-id">GOAL-ACTIVE</div>
+          <div class="goal-desc">${goalList.ACTIVE || 0} 活跃目标</div>
+          <div class="goal-meta"><span>${goalList.PENDING || 0} 待执行</span></div>
+        </div>
+      `;
+    }
+    
+    // 渲染待批
+    const pendList = pending.data?.pending || [];
+    if (pendList.length > 0) {
+      document.getElementById('pendingContainer').innerHTML = pendList.map(p => `
+        <div class="pending-card">
+          <div class="pending-header">
+            <span class="pending-id">${p.id}</span>
+          </div>
+          <div style="font-size:11px;color:var(--fg);margin-bottom:8px">${(p.text || '').slice(0, 60)}</div>
+          <div class="pending-actions">
+            <button class="btn-approve" onclick="decide('${p.id}','approve')">批准</button>
+            <button class="btn-deny" onclick="decide('${p.id}','deny')">拒绝</button>
+          </div>
+        </div>
+      `).join('');
+    }
+    
+    // 更新daemon状态
+    const daemon = goals.data?.daemon || {};
+    const daemonPill = document.getElementById('daemonPill');
+    const daemonText = document.getElementById('daemonText');
+    if (daemon.alive) {
+      daemonPill.classList.remove('warn', 'error');
+      daemonText.textContent = `在线 · ${daemon.age_s}s前`;
+    } else {
+      daemonPill.classList.add('warn');
+      daemonText.textContent = '离线';
+    }
+    
+  } catch (e) {
+    console.error('Refresh failed:', e);
+  }
+}
+
 async function decide(pid, action) {
-  await fetch(`/ocos/approvals/${pid}/${action}`, {method: "POST"});
-  refreshSide();
+  await fetch(`/ocos/approvals/${pid}/${action}`, { method: 'POST' });
+  refreshAll();
 }
-/* UX-J: 出站消息轮询 — 目标完成后结果自动弹入对话流 */
-let _outboxCursor = 0;
+
+async function runSelfImprove() {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '自省中...';
+  
+  try {
+    const j = await (await fetch('/ocos/self-improve', { method: 'POST' })).json();
+    const d = j.data;
+    if (d.proposals?.length) {
+      addMessage(`自省完成，${d.proposals.length} 条提案进入待批队列`, false, d.mock);
+      refreshAll();
+    } else {
+      addMessage(d.note || '本轮没有值得记录的改进点', false, d.mock);
+    }
+  } catch (e) {
+    addMessage('自省失败: ' + e, false, false);
+  }
+  
+  btn.disabled = false;
+  btn.textContent = '↻ 自省升级';
+}
+
+// 出站消息轮询
+let outboxCursor = 0;
 async function pollOutbox() {
   try {
-    const j = await (await fetch(`/ocos/outbox?after=${_outboxCursor}`)).json();
+    const j = await (await fetch(`/ocos/outbox?after=${outboxCursor}`)).json();
     for (const m of j.data.messages) {
-      bubble("📋 " + m.content, "bot");
-      _outboxCursor = Math.max(_outboxCursor, m.rid);
+      addMessage('📋 ' + m.content, false, false);
+      outboxCursor = Math.max(outboxCursor, m.rid);
     }
-  } catch (e) { /* 静默 */ }
+  } catch (e) {}
 }
 setInterval(pollOutbox, 3000);
 pollOutbox();
 
-refreshSide(); setInterval(refreshSide, 5000);
-input.focus();
+// 初始刷新
+refreshAll();
+setInterval(refreshAll, 5000);
 
-/* ═══════════════ 模块详情面板（点击器官拉出） ═══════════════ */
-const MODULE_META = {
-  identity:   { title: "宪法 / 身份 · 灵魂", desc: "不可变的身份锚点与行为宪法。core 层锁死，修改需主人审批。" },
-  engines:    { title: "认知引擎 · 大脑", desc: "推理/规划/决策/反思/学习五引擎 + writer，经 EngineBridge 注册调度。" },
-  perception: { title: "感知 · 眼睛", desc: "FileSensor/TextSensor 采集环境 → 注意力打分 → 世界模型落库。--watch-dir 开启文件感知。" },
-  language:   { title: "语言核心 · 喉舌", desc: "LLM 对话回复。未配 key 时诚实降级为状态回复。" },
-  immune:     { title: "免疫 · 诊断修复", desc: "体检 → 故障检测 → 修复提案（白名单步骤）→ 批准后带检查点执行，失败自动回滚。" },
-  memory:     { title: "记忆 · 心脏", desc: "Episode 情节 / Belief 信念 / Pattern 模式 / Semantic 知识，四库共享 SQLite。对话自动沉淀。" },
-  goals:      { title: "目标核心 · 动机", desc: "人工目标（→目标 按钮）与稳态 SELF 目标，来源分级 + 宪法工厂，分解为任务图执行。" },
-  execution:  { title: "执行 · 双手", desc: "RUN_COMMAND 沙盒命令 / file_op 文件操作 / HTTP 抓取。白名单+敏感路径拦截，全部需审批。" },
-  daemon:     { title: "立足 · daemon", desc: "常驻进程心跳。认领目标、分解执行、周期体检。离线时一切停摆。" },
-  all:        { title: "内视全景 · 全模块", desc: "" },
-};
-
-let _introCache = null, _introAt = 0;
-async function getIntrospect() {
-  if (_introCache && Date.now() - _introAt < 5000) return _introCache;
-  _introCache = (await (await fetch("/ocos/introspect")).json()).data;
-  _introAt = Date.now();
-  return _introCache;
-}
-
-function kv(k, v) {
-  return `<div class="kv"><span>${k}</span><b>${v ?? "—"}</b></div>`;
-}
-
-const MODULE_RENDER = {
-  identity: d => kv("身份", d.identity) +
-    kv("自我知识", `<pre>${d.self_knowledge || "（暂无）"}</pre>`),
-  engines: d => kv("引擎", d.engines) +
-    `<h3>说明</h3><div class="hint">Reasoning 推理 · Planning 规划 · Decision 决策 · Reflection 反思 · Learning 学习 · Writer 写作。经 EngineBridge 注入认知循环。</div>`,
-  perception: d => `<div class="hint">${d.capabilities}</div>` +
-    `<h3>最近事件</h3><pre>${JSON.stringify(d.execution_history?.slice(0,2) || "（无）", null, 1)}</pre>`,
-  language: d => kv("配置", d.llm) +
-    (String(d.llm).includes("True") ? `<div class="hint">语言核心已接入 — 对话为真实 LLM 回复。</div>`
-      : `<div class="hint">未配置 LLM key（~/.ocos/config.json）— 当前为状态回复。</div>`),
-  immune: d => {
-    const pend = (d.pending_actions || []).filter(p => p.action_type === "system_repair");
-    return kv("待批修复", pend.length) +
-      `<pre>${pend.map(p => `${p.id} ${p.text}`).join("\n") || "（无待批修复）"}</pre>` +
-      `<div class="hint">体检→故障检测→白名单修复，失败自动回滚。</div>`;
-  },
-  memory: d => {
-    const s = typeof d.memory_stats === "object" ? d.memory_stats : {};
-    return kv("episodes", s.episode_count ?? "?") + kv("beliefs", s.belief_count ?? "?") +
-      kv("patterns", s.pattern_count ?? "?") +
-      `<h3>最近经历</h3><pre>${(d.recent_episodes||[]).map(e =>
-        `${e.created_at.slice(11,19)} [${e.source}] ${e.decision||e.context}`).join("\n") || "（暂无）"}</pre>`;
-  },
-  goals: d => {
-    const g = d.active_goals || [];
-    return kv("活跃目标", g.length) +
-      `<pre>${g.map(x => `${x.id} [${x.status}] ${x.description}`).join("\n") || "（无）"}</pre>`;
-  },
-  execution: d => kv("能力", d.capabilities) +
-    `<h3>执行史</h3><pre>${JSON.stringify(d.execution_history?.slice(0,3) || "（无）", null, 1)}</pre>`,
-  daemon: d => kv("检查点", d.continuity?.checkpoint_id || "—") +
-    `<div class="hint">daemon 存活状态见右侧生命体征。离线时目标/对话处理全部停摆。</div>`,
-  all: d => `<pre>${JSON.stringify(d, null, 2)}</pre>`,
-};
-
-async function openModule(m) {
-  const panel = document.getElementById("modulePanel");
-  panel.classList.add("open");
-  document.querySelectorAll(".organ").forEach(o =>
-    o.classList.toggle("active", o.dataset.m === m));
-  const meta = MODULE_META[m] || MODULE_META.all;
-  document.getElementById("mp-title").textContent =
-    m === "all" ? "内视全景 · 全模块" : meta.title;
-  document.getElementById("mp-body").innerHTML =
-    (meta.desc ? `<div class="hint">${meta.desc}</div>` : "") + `<div class="hint">加载中…</div>`;
-  try {
-    const d = await getIntrospect();
-    const render = MODULE_RENDER[m] || MODULE_RENDER.all;
-    document.getElementById("mp-body").innerHTML =
-      (meta.desc ? `<div class="hint">${meta.desc}</div>` : "") + render(d);
-  } catch (e) {
-    document.getElementById("mp-body").innerHTML = `<div class="hint">加载失败: ${e}</div>`;
-  }
-}
-function closeModule() {
-  document.getElementById("modulePanel").classList.remove("open");
-  document.querySelectorAll(".organ").forEach(o => o.classList.remove("active"));
-}
-document.querySelectorAll(".organ").forEach(o =>
-  o.addEventListener("click", () => openModule(o.dataset.m)));
-
-setInterval(() => {
-  document.getElementById("clock").textContent =
-    new Date().toLocaleString("zh-CN", {hour12: false});
-}, 1000);
+chatInput.focus();
 </script>
 </body>
 </html>
