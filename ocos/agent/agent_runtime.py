@@ -119,6 +119,7 @@ class AgentRuntime:
         self._dag_total: int = 0
         self._task_statuses: dict[str, str] = {}  # task_id → status
         self._recent_results: list[dict[str, Any]] = []
+        self._result_mark: int = 0   # UX-F2+: 当前 DAG 起始下标（结果汇总按目标切片）
         self._result_cursor: int = 0  # Phase 32: cursor for step 9 ingestion
         # Phase 49-C (L4): 任务重试计数 — 失败→重规划 (最多 MAX_RETRY_PER_TASK 次)
         self._task_retry_count: dict[str, int] = {}
@@ -371,14 +372,19 @@ class AgentRuntime:
         from ocos.memory.recall import MemoryRecall
 
         self._memory_recall = MemoryRecall(memory_hub=self._memory_hub)
+        # FIX-3: 回填到 MasterAgent → 认知轮 think() 的 recall_context() 可用
+        # （此前只挂在本 runtime, agent._memory_recall 恒 None 断链）
+        if hasattr(self.agent, "attach_memory_recall"):
+            self.agent.attach_memory_recall(self._memory_recall)
         logger.info("MemoryRecall initialized. Ready for cross-session retrieval.")
 
     def _init_true_initiative(self) -> None:
         """Phase I: 初始化 TrueInitiative — 真正主动性引擎."""
         from ocos.initiative import TrueInitiative
 
-        # 注入到 MasterAgent
-        agent_obj = getattr(self, '_agent', None)
+        # 注入到 MasterAgent（注: 运行时的 agent 属性是 self.agent，
+        # 历史用 _agent 导致永远取不到 → 注入一直没生效）
+        agent_obj = self.agent
         if agent_obj is not None:
             agent_obj._true_initiative = TrueInitiative(
                 user_memory=self._user_memory,
@@ -393,8 +399,9 @@ class AgentRuntime:
         from ocos.autonomous import create_goal_manager
 
         goal_mgr = create_goal_manager()
-        # 注入到 MasterAgent
-        agent_obj = getattr(self, '_agent', None)
+        # 注入到 MasterAgent（注: 运行时的 agent 属性是 self.agent，
+        # 历史用 _agent 导致永远取不到 → 注入一直没生效）
+        agent_obj = self.agent
         if agent_obj is not None:
             agent_obj._goal_manager = goal_mgr
             logger.info("GoalManager initialized. Endogenous goal support ready.")
@@ -956,6 +963,9 @@ class AgentRuntime:
                     self._active_dag = dag
                     self._dag_cursor = 0
                     self._dag_total = len(dag.tasks)
+                    # UX-F2+: 结果汇总起点 — 只汇总当前目标的任务输出，
+                    # 不混入上一目标残留（此前 _recent_results 不清空导致串味）
+                    self._result_mark = len(getattr(self, "_recent_results", []))
                     # UX-堆积修复: 分解后目标状态推进 PENDING → ACTIVE
                     # （此前状态不变 → 同一目标每 tick 被重复分解 + 重复调 LLM）
                     try:
@@ -1020,11 +1030,12 @@ class AgentRuntime:
             from datetime import datetime, timezone
             from ocos.memory.episode.models import Episode, EpisodeStatus
 
-            results = list(self._recent_results)[-12:]
+            results = list(self._recent_results)[
+                max(getattr(self, "_result_mark", 0), len(self._recent_results) - 12):]
             lines = []
             for r in results:
                 ok = "✓" if r.get("success") else "✗"
-                out = str(r.get("output", ""))[:120]
+                out = str(r.get("output", ""))[:1500]
                 lines.append(f"{ok} {r.get('description', '')[:50]} → {out}")
             if not lines:
                 return
@@ -1036,7 +1047,7 @@ class AgentRuntime:
                 context={"task_count": len(results),
                          "kind": "goal_execution_result"},
                 goal="目标执行结果汇总",
-                decision="\n".join(lines)[:1500],
+                decision="\n".join(lines)[:4000],
                 action="goal_result",
                 outcome={"success": all(r.get("success") for r in results),
                          "cycle": self._cycle_count},
@@ -1105,12 +1116,48 @@ class AgentRuntime:
                 counts = self._task_retry_count
             counts[task_id] = retry_count + 1
             meta["decision"] = "retry_pending"
+
+            # FIX-9: 重试不再"原样重放同描述" — 把失败原因回注到任务描述,
+            # 使下 tick 桥端规划 LLM 看到失败上下文并给出修正/替代的可行方案
+            # （等价于 bridge 沙盒拦截后的带反馈重试, 只是从 daemon 重试层生效）。
+            # task==PlanTask 可变, 用 try 防御; base 存档避免多次重试反复叠加注记。
+            bases = getattr(self, "_task_base_desc", None)
+            if bases is None:
+                bases = {}
+                self._task_base_desc = bases
+            if task_id not in bases:
+                bases[task_id] = (getattr(task, "description", "") or "")
+            revised = self._revise_task_description(
+                bases[task_id], reason, retry_count + 1)
+            try:
+                task.description = revised
+            except Exception:
+                pass
+            meta["revised_description"] = revised
         else:
             # 终态: 清理重试计数, 该任务按失败归档
             counts = getattr(self, "_task_retry_count", None)
             if counts is not None:
                 counts.pop(task_id, None)
         return meta
+
+    def _revise_task_description(self, base: str, reason: str,
+                                 attempt: int) -> str:
+        """FIX-9: 把失败原因回注为修正后的任务描述。
+
+        覆盖 base 保持不含历史注记的原始描述；返回带【执行反馈】的修订版，
+        供重试时桥端规划 LLM 可见失败上下文，产出一套可规避该失败的方案
+        （而非原样重放导致同样失败）。确定性文本拼接，无需额外 LLM。
+        """
+        _base = (base or "").strip()
+        _reason = (reason or "").strip()[:200]
+        note = (
+            f"【执行反馈】第{attempt}次尝试执行失败"
+            + (f"：{_reason}" if _reason else "。")
+            + "\n请据此修正或换一种可行的具体命令/方案"
+              "（优先使用只读白名单命令），不要重复会失败的做法。"
+        )
+        return f"{_base}\n{note}" if _base else note.strip()
 
     def _tick_step_core_loop(self) -> dict[str, Any]:
         """Step 7: Core Loop — 优先执行 TaskDAG，无 DAG 时回退认知循环。
@@ -1169,11 +1216,17 @@ class AgentRuntime:
                                 dag_status if dag_status in ("completed", "failed", "pending_approval")
                                 else "pending_approval"
                             )
+                            # UX-F2+: completed → 提取真实 stdout（此前存整个
+                            # dict repr 截断 200 字符，主人问结果时无数据可答）
+                            _res = dag_result.get("result")
+                            _stdout = (_res.get("stdout", "")
+                                       if isinstance(_res, dict) else "")
+                            _out = str(_stdout or dag_result)[:1600]
                             self._recent_results.append({
                                 "task_id": tid,
                                 "description": task.description,
                                 "agent": task.agent_type,
-                                "output": str(dag_result)[:200],
+                                "output": _out,
                                 "success": dag_status == "completed",
                             })
                             self._dag_cursor += 1

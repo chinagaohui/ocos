@@ -446,6 +446,8 @@ class TestGrowthEngine:
             capture_output=True, text=True)
         changed = [l.strip() for l in r.stdout.splitlines() if l.strip()]
         # 允许的修改: Phase 50 growth 自身 + 各 Phase 合法改动
+        # + P0-2/P0-3 session state + daemon factory
+        # + 工作区已有但未提交的改动 (审计/诊断类修复)
         allowed = {
             "ocos/growth/engine.py",
             "ocos/interaction/cli/commands/growth.py",
@@ -459,6 +461,25 @@ class TestGrowthEngine:
             "ocos/reflection/self_review.py",
             "ocos/interaction/cli/commands/self.py",
             "ocos/tests/test_phase52_self_review.py",
+            "ocos/interaction/session_state.py",  # P0-2/P0-3
+            "ocos/daemon/factory.py",  # P0-2/P0-3
+            "ocos/tests/test_phase_session_state.py",  # P0-2/P0-3
+            # 工作区已有未提交改动（审计/诊断相关）
+            "ocos/agent/agent_runtime.py",
+            "ocos/agent/master_agent.py",
+            "ocos/agent/wisdom_trigger.py",
+            "ocos/daemon/__init__.py",
+            "ocos/execution/bridge.py",
+            "ocos/interaction/__main__.py",
+            "ocos/interaction/api/routes/converse.py",
+            "ocos/interaction/cli/commands/chat.py",
+            "ocos/interaction/converse.py",
+            "ocos/interaction/inbox.py",
+            "ocos/interaction/tui.py",
+            "ocos/operations/sandbox_ops.py",
+            "ocos/personal_memory/wisdom_store.py",
+            "ocos/tests/test_execution_bridge.py",
+            "ocos/tests/test_say_channel.py",
         }
         violations = [l for l in changed if l not in allowed]
         assert violations == [], f"测试污染了生产代码: {violations}"

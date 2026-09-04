@@ -94,6 +94,12 @@ Examples:
                       help="API服务器地址 (default: localhost)")
     chat.add_argument("--port", type=int, default=8900,
                       help="API服务器端口 (default: 8900)")
+    chat.add_argument("-c", "--continue", dest="continue_", action="store_true",
+                      help="恢复最近的会话")
+    chat.add_argument("-r", "--resume", type=str, default=None, metavar="ID|TITLE",
+                      help="通过 ID 或标题恢复指定会话")
+    chat.add_argument("--mouse", action="store_true",
+                      help="启用程序内鼠标（默认关闭以保留终端原生选中/复制/粘贴）")
 
     # ── growth（Phase 50：成长模块 — 外部信号→自我优化） ──────────────
     _add_growth_parser(subparsers)

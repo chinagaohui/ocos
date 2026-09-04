@@ -14,6 +14,35 @@ from __future__ import annotations
 from typing import Any, Optional
 
 
+def _make_confidence_source(db_path: str):
+    """FIX-6: L8 元认知置信度 source（DecisionBridge.execute_dag_task 消费）。
+
+    签名: callable(description, task_type) → 含 should_escalate/reason 的对象。
+    用 CapabilityConfidence 评估；学习规则 best-effort 加载，失败/为空 → 返回
+    "none"（安全不干预，仅当前无历史时保持默认分级）。
+    """
+    def _load_rules() -> list[dict]:
+        try:
+            from ocos.engines.learning_engine import LearningEngine
+            engine = LearningEngine(db_path=db_path) if db_path else LearningEngine()
+            rules: list[dict] = []
+            for model in engine.list_models():
+                for rule in (getattr(model, "rules", None) or ()):
+                    if isinstance(rule, dict):
+                        rules.append(rule)
+            return rules
+        except Exception:
+            return []
+
+    def _source(description: str, task_type: str = "analyze"):
+        from ocos.learning.metacognition import CapabilityConfidence
+        rules = _load_rules()
+        return CapabilityConfidence.evaluate(
+            description, rules, task_type=task_type)
+
+    return _source
+
+
 def build_master_agent(agent_id: str):
     """组装真实组件 MasterAgent — 全部生产实现，零 Mock。"""
     from ocos.agent.capability_manager import CapabilityManager
@@ -23,6 +52,7 @@ def build_master_agent(agent_id: str):
     from ocos.agent.master_agent import MasterAgent
     from ocos.agent.state import AgentState
     from ocos.capability.attention import CognitiveAttentionController
+    from ocos.constitution.behavioral import BehavioralConstitution
     from ocos.runtime.context_manager import WorkingMemory
     from ocos.self.identity_boundary import IdentityBoundary
 
@@ -39,6 +69,9 @@ def build_master_agent(agent_id: str):
         capability_manager=CapabilityManager(),
         execution_manager=ExecutionManager(),
         state=AgentState(),
+        # FIX-6b: 装配行为宪法 → decide() 前置合规检查真实生效
+        # （此前工厂不装, master_agent.decide 的 constitution 检查永不执行）
+        constitution=BehavioralConstitution(),
         **engines,
     )
 
@@ -188,6 +221,17 @@ def build_execution_bridge(agent: Any = None, agent_id: str = "decision_bridge",
         import logging
         logging.getLogger(__name__).warning(
             "DecisionBridge capability discovery failed: %s", e)
+    # FIX-6: 启用 L8 元认知置信度门 — attach_confidence_source 此前无生产调用者
+    # （审计 P2）。装配 CapabilityConfidence 评估；无学习规则时返回 "none"
+    # （安全不干预），有规则且写类低成功率 → 升级 ASK。失败不阻断装配。
+    try:
+        source = _make_confidence_source(db_path or "")
+        if source is not None:
+            bridge.attach_confidence_source(source)
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).debug(
+            "confidence source attach skipped: %s", e)
     if agent is not None:
         attach = getattr(agent, "attach_decision_bridge", None)
         if attach is not None:

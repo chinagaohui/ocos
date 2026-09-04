@@ -4,12 +4,11 @@ Usage:
     python -m ocos.interaction.tui
 """
 
-from ocos.interaction.tui import OCOSTUI
+from ocos.interaction.tui import run_tui
 
 
 def main():
-    app = OCOSTUI()
-    app.run()
+    run_tui()
 
 
 if __name__ == "__main__":

@@ -205,7 +205,22 @@ class SandboxOps:
 
         # ── 真实执行 ────────────────────────────────────────────
         try:
+            import os as _os
             import subprocess as sp
+
+            # stack-smashing 根治 (FIX-RUNTIME-1): 给子进程最小安全环境,
+            # 不再 env=None 全继承调用方进程的巨型变量集(如 daemon 的几十个
+            # ICUBE_* 长变量)。"/bin/sh -c"(dash) 在解析超大/异常环境变量时
+            # 触发 glibc __stack_chk_fail → SIGABRT("stack smashing detected"),
+            # 偶发导致命令执行崩溃。最小环境既消除该栈压力, 也顺带避免向沙箱
+            # 子进程泄漏宿主内部变量(沙箱更严格)。调用方 cmd.env 可追加/覆盖。
+            base_env = {
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "LANG": "C.UTF-8",
+                "HOME": _os.path.expanduser("~"),
+            }
+            if cmd.env:
+                base_env.update(cmd.env)
 
             proc = sp.run(
                 cmd.command,
@@ -214,7 +229,7 @@ class SandboxOps:
                 text=True,
                 timeout=cmd.timeout,
                 cwd=cmd.workdir,
-                env=({**cmd.env} if cmd.env else None),
+                env=base_env,
             )
 
             self._audit_log.append(SandboxAuditRecord(

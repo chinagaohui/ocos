@@ -38,9 +38,13 @@ async def converse(body: dict[str, Any]) -> APIResponse:
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
 
+    # FIX-8: 客户端会话 id 贯穿到对话记忆（无状态 ChatResponder 的会话归属）
+    session_id = str(body.get("session_id", "") or "").strip()[:64] or "web"
+
     from ocos.interaction.converse import ChatResponder
     responder = ChatResponder(db_path=_db())
-    out = await asyncio.to_thread(responder.respond_auto, message)
+    out = await asyncio.to_thread(
+        responder.respond_auto, message, session_id=session_id)
     return APIResponse(
         success=True,
         message="ok",

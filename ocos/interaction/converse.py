@@ -23,7 +23,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from ocos.logging import get_logger
 
@@ -36,22 +36,31 @@ _SYSTEM_PROMPT = (
     "不是通用聊天助手。你的身份锚点：陪伴主人长期成长。\n"
     "回答规则：\n"
     "- 用中文，简洁自然，像长期相处的伙伴\n"
-    "- 只基于【自我认知】和【当前状态】里的真实数据说话，不要编造\n"
-    "- 被问到自己的能力/模块/内部状态时，依据【自我认知】如实回答，"
-    "可以主动建议用户打开内视面板看完整报告\n"
-    "- 涉及执行类请求（写文件/跑命令/联网/处理任务）：说明可以让用户把这句话"
-    "转为目标（对话气泡旁的 →目标 按钮），daemon 会自动认领并执行；"
-    "写文件/跑命令类子任务会进入待批队列等主人批准\n"
+    "- 只基于【自我认知】【最近对话】【最近目标结果】里的真实数据说话，不要编造\n"
+    "- 回复即结果：直接把答案和关键数据写进回复正文，一次性给全；"
+    "绝不要让用户去其他界面、面板、按钮查看\n"
+    "- 用户问进度/结果（好了吗/结果呢/什么时候给）→ 直接引用【最近目标结果】"
+    "的真实数据作答；活跃目标为空不代表没做过任务\n"
+    "- 用户的话指向之前聊过的事 → 依据【最近对话】衔接作答，"
+    "不要反问'你指哪件事'（除非确实无从判断）\n"
+    "- 绝不发明不存在的界面元素（按钮/面板/气泡/→目标）；你只有这个对话窗口\n"
+    "- 涉及执行类请求（写文件/跑命令/联网/处理任务）：说明你会转成目标"
+    "交给后台自动执行，完成后结果会自动出现在这个对话里\n"
     "- 你的每轮对话都会沉淀为记忆（episodes），这是你的长期经验\n"
     "- 200 字以内为宜"
 )
 
 
 class ChatResponder:
-    """对话回复器 — 自我认知 + 记忆 + LLM（或诚实状态回复）。"""
+    """对话回复器 — 自我认知 + 记忆 + LLM（或诚实状态回复）。
 
-    def __init__(self, db_path: str) -> None:
+    P0-2/P0-3: 可选接受 SessionManager — 保持跨请求会话状态。
+    无 SessionManager 时退化为无状态模式（原有行为）。
+    """
+
+    def __init__(self, db_path: str, session_manager: Any = None) -> None:
         self._db_path = db_path
+        self._session_manager = session_manager
 
     # ── B: 自我认知包 ────────────────────────────────────────────────
 
@@ -96,8 +105,12 @@ class ChatResponder:
         text = read_self_knowledge()
         return f"已习得自我知识:\n{text[-800:]}" if text else ""
 
-    def build_context(self) -> str:
-        """喂给 LLM 的自我认知 + 真实状态。"""
+    def build_context(self, message: str = "") -> str:
+        """喂给 LLM 的自我认知 + 真实状态。
+
+        message: 当前用户消息，用于触发相关记忆召回（FIX-2），
+        使历史语义/用户画像/窗口外的对话片段进入本轮的 reasoning 上下文。
+        """
         lines: list[str] = [f"身份: {self._identity()}",
                             f"认知引擎: {self._engines()}",
                             f"真实能力: {self._capabilities()}"]
@@ -111,13 +124,22 @@ class ChatResponder:
             lines.append(
                 f"记忆: episodes={stats.get('episode_count', 0)}, "
                 f"beliefs={stats.get('belief_count', 0)}")
-            for ep in hub.episode.query_by_time(limit=3):
-                desc = (getattr(ep, "decision", "")
-                        or getattr(ep, "context", {}).get("content", ""))
-                if desc:
-                    lines.append(f"最近记忆: {str(desc)[:60]}")
         except Exception as e:
             logger.debug("memory context failed: %s", e)
+
+        # ── UX-I2: 最近对话转录 — 指代/追问（"让你分析…""好了吗"）全靠它衔接
+        # P0-2: 优先使用会话状态（跨请求保持），退化到 MemoryHub
+        dlg = self._recent_dialogue_from_session()
+        if not dlg:
+            dlg = self._recent_dialogue()
+        if dlg:
+            lines.append("最近对话（时间正序）:\n" + dlg)
+
+        # FIX-2: 相关记忆召回 — 激活 recall→prompt 链,
+        # 把语义/模式/经验/用户画像 + 窗口外的历史对话片段注入本轮推理
+        recall = self._recall_context(message)
+        if recall:
+            lines.append("相关记忆（召回）:\n" + recall)
 
         # 目标 / 待批
         try:
@@ -141,7 +163,7 @@ class ChatResponder:
         try:
             for ep in hub.episode.query_by_time(limit=15):
                 if getattr(ep, "action", "") == "goal_result":
-                    lines.append(f"最近目标结果:\n{getattr(ep, 'decision', '')[:400]}")
+                    lines.append(f"最近目标结果:\n{getattr(ep, 'decision', '')[:1000]}")
                     break
         except Exception as e:
             logger.debug("goal result context failed: %s", e)
@@ -320,8 +342,118 @@ class ChatResponder:
 
     # ── A: 对话落记忆 ────────────────────────────────────────────────
 
-    def _remember_conversation(self, message: str, reply: str) -> None:
-        """每轮对话沉淀为 Episode（长期记忆），供上下文与 dream 巩固消费。"""
+    def _recent_dialogue_from_session(self, turns: int = 6, width: int = 160) -> str:
+        """P0-2: 从会话状态（内存）取最近对话，避免每次请求重建。
+
+        退化到 MemoryHub：无 SessionManager 或会话为空时。
+        """
+        if self._session_manager is None:
+            return ""
+        try:
+            state = self._session_manager.current_state
+            if state is None or not state.history:
+                return ""
+            # 用内存中的历史（更可靠，无 DB IO）
+            recent = state.history[-(turns * 2):]
+            lines = []
+            for t in recent:
+                label = "主人" if t.role == "user" else "我"
+                lines.append(f"{label}: {t.content[:width]}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.debug("Session dialogue read failed: %s", e)
+            return ""
+
+    def _recent_dialogue(self, turns: int = 6, width: int = 160) -> str:
+        """UX-I2: 最近对话转录（时间正序）— LLM 连续性的最小充分上下文。
+
+        没有它，"让你分析宿主机的任务""好了吗"这类指代/追问全靠猜。
+        """
+        try:
+            from ocos.memory.hub import MemoryHub
+            hub = MemoryHub(self._db_path)
+            hub.initialize()
+            eps = [ep for ep in hub.episode.query_by_time(limit=40)
+                   if getattr(ep, "source", "") == "conversation"][:turns]
+            lines = []
+            for ep in reversed(eps):
+                user = str(getattr(ep, "context", {}).get("content", ""))[:width]
+                bot = str(getattr(ep, "decision", ""))[:width]
+                if user or bot:
+                    lines.append(f"主人: {user}\n我: {bot}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.debug("recent dialogue read failed: %s", e)
+            return ""
+
+    def _recall_context(self, message: str, top: int = 4) -> str:
+        """FIX-2: 相关记忆召回 — 让历史真正进入本轮 reasoning 上下文。
+
+        两部分来源:
+          1. MemoryRecall.format_for_prompt(): 召回语义/模式/经验/用户画像
+             —— 此函数此前全仓库无调用者（审计 P0-1: recall 链断）, 在此激活
+          2. 对话片段内容检索: 从 conversation episodes 按字符 bi-gram 重叠
+             命中"6 轮窗口之外"的历史讨论, 缓解三轮之前信息丢失（场景 A）
+        """
+        sections: list[str] = []
+
+        # 1) 激活 MemoryRecall → prompt 链
+        try:
+            from ocos.memory.hub import MemoryHub
+            from ocos.memory.recall import MemoryRecall
+            hub = MemoryHub(self._db_path)
+            hub.initialize()
+            prompt_block = MemoryRecall(memory_hub=hub).format_for_prompt(
+                context=message, limit=6)
+            if prompt_block:
+                sections.append(prompt_block)
+        except Exception as e:
+            logger.debug("memory recall failed: %s", e)
+
+        # 2) 对话片段内容检索（窗口外历史）
+        try:
+            from ocos.memory.hub import MemoryHub
+            hub = MemoryHub(self._db_path)
+            hub.initialize()
+            if not message:
+                return "\n\n".join(sections)
+            # bi-gram 字符重叠, 对中文分段友好
+            msg_grams = {message[i:i + 2] for i in range(len(message) - 1)}
+            if not msg_grams:
+                return "\n\n".join(sections)
+            eps = hub.episode.query_by_time(limit=120)
+            conv = [ep for ep in eps
+                    if getattr(ep, "source", "") == "conversation"]
+            hits: list[str] = []
+            for ep in reversed(conv):
+                c = str(getattr(ep, "context", {}).get("content", ""))
+                d = str(getattr(ep, "decision", ""))
+                if not c:
+                    continue
+                c_grams = {c[i:i + 2] for i in range(len(c) - 1)}
+                if not c_grams:
+                    continue
+                overlap = len(msg_grams & c_grams) / max(
+                    len(msg_grams | c_grams), 1)
+                if overlap >= 0.3:  # 语义重叠阈值
+                    hits.append(f"主人: {c[:120]}\n我: {d[:120]}")
+                    if len(hits) >= top:
+                        break
+            if hits:
+                sections.append("相关历史对话:\n" + "\n".join(hits))
+        except Exception as e:
+            logger.debug("dialogue recall failed: %s", e)
+
+        return "\n\n".join(sections)
+
+    def _remember_conversation(self, message: str, reply: str,
+                               session_id: str = "web") -> None:
+        """每轮对话沉淀为 Episode（长期记忆），供上下文与 dream 巩固消费。
+
+        FIX-8: session_id 从请求贯穿到此 — 同一会话的对话共享同一 session_id，
+        为"继续/追问绑定会话"提供实体（每次 ChatResponder 无状态重建，
+        会话归属由此字段承载）。
+        """
         try:
             from ocos.memory.hub import MemoryHub
             from ocos.memory.episode.models import Episode
@@ -332,7 +464,7 @@ class ChatResponder:
                 id=f"EPI-{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}",
                 experience_id=f"EXP-CONV-{uuid.uuid4().hex[:8]}",
                 created_at=now,
-                session_id="web",
+                session_id=session_id,
                 context={"content": message[:500], "sender": "user"},
                 decision=reply[:500],
                 action="conversation_reply",
@@ -392,14 +524,16 @@ class ChatResponder:
         from ocos.engines.text_generator import _read_llm_config
         return bool(_read_llm_config().get("api_key"))
 
-    def respond(self, message: str, goal_note: str = "") -> dict:
+    def respond(self, message: str, goal_note: str = "",
+                session_id: str = "web") -> dict:
         """生成回复。返回 {reply, provider, mock}。
 
         goal_note: UX-H 目标受理提示（auto 受理时注入 prompt，
-                   让 LLM 确认任务已受理并说明后续流程）。"""
-        context = self.build_context()
+                   让 LLM 确认任务已受理并说明后续流程）。
+        session_id: FIX-8 会话实体，透传给对话记忆样本归属。"""
+        context = self.build_context(message)
         if goal_note:
-            context = f"{context}\n【目标受理】\n{goal_note}"
+            context = f"{context}\n【内部提示】\n{goal_note}"
         if not self._has_real_llm():
             out = self._state_reply(message, context)
         else:
@@ -437,7 +571,14 @@ class ChatResponder:
                 out["reply"] = f"（LLM 调用失败: {e}）\n" + out["reply"]
 
         # A: 无论走哪条路，这轮对话都沉淀为记忆
-        self._remember_conversation(message, out["reply"])
+        self._remember_conversation(message, out["reply"], session_id=session_id)
+        # P0-2: 追加到会话状态
+        if self._session_manager is not None:
+            try:
+                self._session_manager.append_turn("user", message, session_id=session_id)
+                self._session_manager.append_turn("assistant", out["reply"], session_id=session_id)
+            except Exception as e:
+                logger.debug("Session append failed: %s", e)
         return out
 
     def _state_reply(self, message: str, context: str) -> dict:
@@ -469,14 +610,30 @@ class ChatResponder:
             return {"kind": "task", "description": message,
                     "domain": "development", "fallback": True}
 
+        # UX-I2: 编译时携带最近对话与活跃目标 — 引用上文/重复请求不再误建新目标
+        dlg = self._recent_dialogue(turns=4, width=100)
+        try:
+            from ocos.goal.store import GoalStore
+            _act = GoalStore(db_path=self._db_path).load_active()[:3]
+            act = "; ".join(str(g.get("description", ""))[:40]
+                            for g in _act) or "无"
+        except Exception:
+            act = "无"
+
         prompt = (
             f"用户消息：{message[:200]}\n\n"
+            f"【最近对话】\n{dlg or '（无）'}\n\n"
+            f"【活跃目标】{act}\n\n"
             "你是 OCOS 的目标编译器。把这条消息分类并（若为任务）改写：\n"
             "1. kind 判定：\n"
-            '   - "question"：询问状态/结果/进度（如"结果呢""怎么样了"）\n'
-            '   - "continue"：推进指令而非新任务（如"开始""继续""好"）\n'
+            '   - "question"：询问状态/结果/进度（如"结果呢""怎么样了"）；'
+            '含"什么时候/好了吗/给我了吗/多久"等词 → 一律 "question"，'
+            '绝不能是 "task"，哪怕句子读起来像请求\n'
+            '   - "continue"：推进或追问已有话题/目标（如"开始""继续""好"；'
+            '引用刚聊过的事，如"让你分析宿主机的任务"；'
+            '或与【活跃目标】重复的请求）\n'
             '   - "nonsense"：无明确语义\n'
-            '   - "task"：真实任务请求\n'
+            '   - "task"：全新任务请求（与最近对话和活跃目标无关才建新目标）\n'
             "2. 若为 task，把 description 改写为**自包含、具体、可直接执行**的版本：\n"
             "   - 写明数据来源与方法（如'执行 uname -a 与 df -h，汇总系统版本和磁盘使用'）\n"
             "   - 不依赖对话上下文即可执行\n"
@@ -535,31 +692,59 @@ class ChatResponder:
         except (OSError, ValueError, KeyError):
             return False
 
-    def respond_auto(self, message: str) -> dict:
+    def _find_duplicate_goal(self, description: str) -> Optional[str]:
+        """UX-H+: 同义目标去重 — 活跃目标里已有相同任务则复用，不重复建。"""
+        try:
+            from ocos.goal.store import GoalStore
+            desc = description.strip()
+            if not desc:
+                return None
+            for g in GoalStore(db_path=self._db_path).load_active():
+                d = str(g.get("description", "")).strip()
+                if d and (d == desc or d in desc or desc in d):
+                    gid = str(g.get("id", "") or "")
+                    return gid or None
+        except Exception:
+            return None
+        return None
+
+    def respond_auto(self, message: str, session_id: str = "web") -> dict:
         """UX-H: 对话即路由 — 任务类消息自动受理为目标，其余正常对话。
 
         - compile_goal 分类：task → 自动建目标（无需点→目标），
           daemon 在线即认领执行；离线则诚实提示
-        - question/continue/nonsense → 正常对话回复
+        - 活跃目标里已有同义任务 → 复用既有目标，不重复建（UX-H+）
+        - question/continue → 内部提示引导 LLM 依据对话/结果上下文作答
         - 危险子任务仍走待批二次审批（不变）
         """
         compiled = self.compile_goal(message)
         goal_note, goal_id = "", None
         if compiled["kind"] == "task":
             compiled["_original"] = message
-            goal_id = self._create_goal_from_chat(compiled)
-            daemon_state = "在线，将自动认领执行" if self._daemon_alive()                 else "离线 — 目标已排队，启动 ocos run 后执行"
-            goal_note = (f"用户的这条消息已自动受理为目标 {goal_id}"
-                         f"（编译后描述：{compiled['description'][:120]}）。"
-                         f"daemon {daemon_state}。"
-                         "回复时确认受理并简述执行计划，不要让用户再手动操作。")
-        out = self.respond(message, goal_note=goal_note)
+            dup = self._find_duplicate_goal(compiled["description"])
+            if dup:
+                goal_id = dup
+                goal_note = (f"用户的这条消息与已在推进的目标 {dup} 重复 — "
+                             "不要重复创建目标；简要告知该目标正在进行，"
+                             "完成后结果会自动出现在这个对话里。")
+            else:
+                goal_id = self._create_goal_from_chat(compiled)
+                daemon_state = "在线，将自动认领执行" if self._daemon_alive()                     else "离线 — 目标已排队，启动 ocos run 后执行"
+                goal_note = (f"用户的这条消息已自动受理为目标 {goal_id}"
+                             f"（编译后描述：{compiled['description'][:120]}）。"
+                             f"daemon {daemon_state}。"
+                             "回复时确认受理并简述执行计划，不要让用户再手动操作。")
+        elif compiled["kind"] in ("question", "continue"):
+            goal_note = ("用户在追问已有话题/任务 — 依据【最近对话】【最近目标结果】"
+                         "直接作答；不要新建目标，也不要反问用户指什么（除非无据可查）。")
+        out = self.respond(message, goal_note=goal_note, session_id=session_id)
         out["goal_id"] = goal_id
         out["kind"] = compiled["kind"]
         return out
 
     # ── FastAPI 便利入口 ─────────────────────────────────────────────
 
-    async def respond_async(self, message: str) -> dict:
+    async def respond_async(self, message: str, session_id: str = "web") -> dict:
         """异步包装（API 路由用，避免阻塞事件循环）。"""
-        return await asyncio.to_thread(self.respond, message)
+        return await asyncio.to_thread(self.respond, message,
+                                       session_id=session_id)

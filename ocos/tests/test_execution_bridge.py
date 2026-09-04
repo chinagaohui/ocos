@@ -297,3 +297,58 @@ class TestFactoryIntegration:
         bridge = build_execution_bridge(agent)
         assert agent._decision_bridge is bridge
         assert bridge._registry is not None
+
+
+# ── 8. UX-I+: LLM 多动作任务（多 RUN 行聚合执行） ───────────────────────
+
+class TestLLMDagTaskMultiRun:
+    def _bridge_with_llm(self, bridge, monkeypatch, llm_output: str):
+        from types import SimpleNamespace
+        monkeypatch.setenv("OCOS_DB_PATH", str(Path(os.environ.get("TMPDIR", "/tmp")) / "empty-goal.db"))
+        monkeypatch.setattr(bridge, "_llm_available", lambda: True)
+        monkeypatch.setattr(bridge, "_llm_budget_ok", lambda: (True, ""))
+        async def _gen(*a, **k):
+            return llm_output
+        fake_tg = SimpleNamespace(_provider=SimpleNamespace(generate=_gen))
+        monkeypatch.setattr(bridge, "_textgen", fake_tg)
+
+    def test_multi_run_lines_execute_and_aggregate(self, bridge, monkeypatch):
+        from types import SimpleNamespace
+        self._bridge_with_llm(bridge, monkeypatch, "RUN|uname -a\nRUN|df -h")
+        calls = []
+
+        def fake_run(action):
+            calls.append(action.payload["command"])
+            return {"ok": True, "blocked": False, "exit_code": 0,
+                    "stdout": f"out-for-{action.payload['command']}"}
+        monkeypatch.setattr(bridge, "_handler_run_command", fake_run)
+        task = Task.create(goal_id="GOAL-test", description="系统状态汇总",
+                           task_type="execute", agent_type="researcher")
+        result = bridge.execute_dag_task(task)
+        assert result["status"] == "completed"
+        assert calls == ["uname -a", "df -h"]
+        assert "out-for-uname -a" in result["result"]["stdout"]
+        assert "out-for-df -h" in result["result"]["stdout"]
+
+    def test_multi_run_auto_readonly_blocks_write(self, bridge, monkeypatch):
+        self._bridge_with_llm(
+            bridge, monkeypatch, "RUN|echo hi > /tmp/ocos_x\nRUN|uname -a")
+        task = Task.create(goal_id="GOAL-test", description="收集数据",
+                           task_type="analyze", agent_type="researcher")
+        result = bridge.execute_dag_task(task)
+        assert result["status"] == "failed"
+        assert "只读" in result["reason"]
+
+    def test_multi_run_midway_failure_is_honest(self, bridge, monkeypatch):
+        from types import SimpleNamespace
+        self._bridge_with_llm(bridge, monkeypatch, "RUN|uname -a\nRUN|df -h")
+
+        def fake_run(action):
+            if action.payload["command"] == "df -h":
+                return {"ok": False, "blocked": False, "error": "boom"}
+            return {"ok": True, "blocked": False, "exit_code": 0, "stdout": "Linux"}
+        monkeypatch.setattr(bridge, "_handler_run_command", fake_run)
+        task = Task.create(goal_id="GOAL-test", description="汇总",
+                           task_type="execute", agent_type="researcher")
+        result = bridge.execute_dag_task(task)
+        assert result["status"] == "failed"

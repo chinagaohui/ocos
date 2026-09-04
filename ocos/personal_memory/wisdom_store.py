@@ -26,6 +26,16 @@ from ocos.personal_memory.wisdom_types import (
     WisdomScope,
 )
 
+# 状态等级 — 用于防止低状态对象覆盖高状态智慧（生命周期倒退保护）
+# CANDIDATE → VALIDATING → CONFIRMED → ACTIVE → DEPRECATED(终点)
+_STATE_RANK = {
+    "candidate": 0,
+    "validating": 1,
+    "confirmed": 2,
+    "active": 3,
+    "deprecated": 4,
+}
+
 
 @dataclass
 class WisdomStore:
@@ -44,7 +54,11 @@ class WisdomStore:
     """GAP-P2-4: 可选 SQLite 连接。注入后 add/promote 同步落盘。"""
 
     def _persist_item(self, user_id: str, wisdom: WisdomItem) -> None:
-        """GAP-P2-4: 写入 wisdom_items 表（INSERT OR IGNORE + state 覆盖）。"""
+        """GAP-P2-4: 写入 wisdom_items 表（INSERT OR IGNORE + 状态保护覆盖）。
+
+        UPDATE 仅在目标状态等级 >= 库内现有状态时执行 —
+        防止 dream 重巩固用新 CANDIDATE 把已 CONFIRMED/ACTIVE 的智慧打回候选。
+        """
         if self.connection is None:
             return
         import json as _json
@@ -63,6 +77,15 @@ class WisdomStore:
                 ),
             ),
         )
+        row = self.connection.execute(
+            "SELECT state FROM wisdom_items WHERE user_id=? AND wisdom_id=?",
+            (user_id, wisdom.wisdom_id),
+        ).fetchone()
+        if row is not None and (
+            _STATE_RANK.get(str(row[0]), 0)
+            > _STATE_RANK.get(wisdom.state.value, 0)
+        ):
+            return  # 库内状态更高 — 保持不回退
         self.connection.execute(
             "UPDATE wisdom_items SET state=? WHERE user_id=? AND wisdom_id=?",
             (wisdom.state.value, user_id, wisdom.wisdom_id),
@@ -111,8 +134,14 @@ class WisdomStore:
     # ── 智慧 CRUD ──
 
     def add_wisdom(self, user_id: str, wisdom: WisdomItem) -> None:
-        """添加新智慧条目。"""
+        """添加新智慧条目（状态保护：低状态不得覆盖内存与库中的高状态）。"""
         coll = self.get_or_create_collection(user_id)
+        existing = coll.get(wisdom.wisdom_id)
+        if existing is not None and (
+            _STATE_RANK.get(existing.state.value, 0)
+            > _STATE_RANK.get(wisdom.state.value, 0)
+        ):
+            return  # 内存已有更高状态 — 保持不回退
         coll.add(wisdom)
         self._persist_item(user_id, wisdom)
 

@@ -142,7 +142,7 @@ class UserInbox:
             """INSERT INTO user_messages
                (id, sender, content, status, created_at)
                VALUES (?, 'ocos', ?, 'outbound', ?)""",
-            (mid, content[:2000], datetime.now(timezone.utc).isoformat()))
+            (mid, content[:4000], datetime.now(timezone.utc).isoformat()))
         conn.commit()
         return mid
 

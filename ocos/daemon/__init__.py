@@ -117,6 +117,16 @@ class ResidentRuntime:
         # （此前 dream 只挂在 LifeCycleOrchestrator 的 SLEEP 分支，daemon
         #   不经过该编排器 → 生产环境巩固管线从未运转，belief/pattern 恒 0）
         self.dream_interval_ticks: int = 200
+        # P0-2/P0-3: 会话状态管理（多实例隔离 + 对话持久化）
+        self._session_manager: Any = None
+        if db_path and db_path != ":memory:":
+            try:
+                from ocos.interaction.session_state import SessionManager
+                self._session_manager = SessionManager(db_path=db_path)
+                if not self._session_manager.acquire_lock():
+                    logger.warning("Daemon lock failed — another instance holds db_path %s", db_path)
+            except Exception as e:
+                logger.warning("SessionManager unavailable: %s", e)
         # PW-4.4: 目标队列背压阈值 + runtime_scheduler PriorityQueue 上电
         self.max_queue_size: int = 50
         self._priority_queue: Any = None
@@ -137,7 +147,10 @@ class ResidentRuntime:
                 logger.warning("UserInbox unavailable, say channel disabled: %s", e)
             try:
                 from ocos.interaction.converse import ChatResponder
-                self._responder = ChatResponder(db_path=db_path)
+                self._responder = ChatResponder(
+                    db_path=db_path,
+                    session_manager=self._session_manager,
+                )
             except Exception as e:
                 logger.warning("ChatResponder unavailable: %s", e)
         self._tick_interval = tick_interval
@@ -169,6 +182,11 @@ class ResidentRuntime:
         """AUD-F1: 暴露 runtime 的 MemoryHub（唯一 store 源），供 run.py
         装配知识平面 SemanticStore 镜像等 — 避免外部窥探 _runtime 私有属性。"""
         return getattr(self._runtime, "_memory_hub", None)
+
+    @property
+    def session_manager(self) -> Any:
+        """P0-2/P0-3: 暴露会话管理器（对话持久化 + 多实例隔离）."""
+        return self._session_manager
 
     def attach_decision_bridge(self, bridge: Any) -> None:
         """UX-F1: 决策执行铰链挂到内部 AgentRuntime（关键修复 —
@@ -460,7 +478,7 @@ class ResidentRuntime:
                 self._result_cursor_init = True
                 return
             rows = conn.execute(
-                "SELECT rowid, substr(decision,1,600), created_at FROM episodes "
+                "SELECT rowid, substr(decision,1,4000), created_at FROM episodes "
                 "WHERE tags LIKE '%goal_result%' AND rowid > ? "
                 "ORDER BY rowid LIMIT 5",
                 (self._last_result_rowid,)).fetchall()
@@ -522,18 +540,6 @@ class ResidentRuntime:
             if result.get("accepted"):
                 logger.info("User message delivered: %s (%s)",
                             msg["id"], msg["content"][:40])
-            else:
-                logger.warning("User message inject failed: %s — %s",
-                               msg["id"], result.get("error"))
-            # R1: 生成并回写自然语言回复（say --wait 的取回点）
-            if self._responder is not None:
-                try:
-                    out = self._responder.respond(msg["content"])
-                    self._user_inbox.reply(msg["id"], out["reply"])
-                    logger.info("Reply written: %s (provider=%s)",
-                                msg["id"], out["provider"])
-                except Exception:
-                    logger.exception("Reply generation failed for %s", msg["id"])
         return len(messages)
 
     def _claim_persisted_goals(self) -> int:

@@ -227,7 +227,10 @@ ALLOWED_IMPORTS = {
                     "ocos.alerts", "ocos.health_examination",
                     "ocos.perception", "ocos.world_model", "ocos.knowledge",
                     "ocos.execution", "ocos.engines", "ocos.events", "ocos.diagnosis",
-                    "ocos.capability_reality"],  # AUD-F9: 引擎实例化; PW-3.1 修复重连
+                    "ocos.capability_reality",
+                    "ocos.learning",  # FIX-6: L8 元认知置信度 (CapabilityConfidence)
+                    "ocos.constitution.behavioral",  # FIX-6b: 行为宪法 (BehavioralConstitution)
+                    "ocos.interaction"],  # P0-2/P0-3: SessionManager
     # Phase L: Autonomous Goal Manager — 自主目标系统
     "ocos.autonomous": [
         "ocos.logging",

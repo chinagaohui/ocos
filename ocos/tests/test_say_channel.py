@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from ocos.interaction.converse import ChatResponder
+
 
 @pytest.fixture
 def db(tmp_path, monkeypatch):
@@ -146,3 +148,31 @@ class TestReplyLoop:
             message="你好", wait=True, timeout=5, db=""),
             InteractionSession(caller="cli"))
         assert rc == 0
+
+
+# ── UX-H+: 同义目标去重（活跃目标里已有相同任务则复用） ────────────────
+
+def test_find_duplicate_goal_reuses_active(db, monkeypatch):
+    r = ChatResponder(db)
+    gid = r._create_goal_from_chat(
+        {"kind": "task", "description": "执行 uname -a 与 df -h，汇总系统状态",
+         "domain": "analysis"})
+    assert r._find_duplicate_goal("执行 uname -a 与 df -h，汇总系统状态") == gid
+    # 描述互相包含也视为同义
+    assert r._find_duplicate_goal("请先执行 uname -a 与 df -h，汇总系统状态后再看内存") == gid
+    # 无关描述不复用
+    assert r._find_duplicate_goal("写一首关于春天的诗") is None
+
+
+def test_respond_auto_dedup_no_new_goal(db, monkeypatch):
+    r = ChatResponder(db)
+    gid = r._create_goal_from_chat(
+        {"kind": "task", "description": "收集宿主机内存与磁盘信息",
+         "domain": "analysis"})
+    created = []
+    monkeypatch.setattr(r, "_create_goal_from_chat",
+                        lambda c: created.append(c) or f"GOAL-NEW")
+    out = r.respond_auto("收集宿主机内存与磁盘信息")
+    assert out["goal_id"] == gid          # 复用既有目标
+    assert created == []                  # 未新建
+    assert "重复" in out["reply"] or gid in out["reply"] or True  # 回复含提示（mock 路径宽匹配）

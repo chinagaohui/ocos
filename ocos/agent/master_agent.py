@@ -1388,6 +1388,18 @@ class MasterAgent:
         self._pattern_store = hub.pattern
         self._memory_hub_ref = hub  # PW-1.1: wisdom 巩固需要 hub（_db_path + episode）
 
+    def attach_memory_recall(self, recall: Any) -> None:
+        """FIX-3: 绑定 MemoryRecall 检索引擎 → 认知轮记忆召回。
+
+        生产路径由 AgentRuntime 在 _init_memory_recall() 后回填;
+        此前 runtime 只把 recall 挂在自身, master_agent._memory_recall 恒为
+        None → recall_context() 首行即降级（审计 P0-1 断链之一）。
+        """
+        if recall is None:
+            return
+        self._memory_recall = recall
+        logger.info("MemoryRecall attached to MasterAgent.")
+
     def _consolidate_episodes(self) -> dict[str, Any]:
         """重放当日未巩固 Episode → Belief/Pattern 巩固 + 弱模式修剪（CLS 慢系统闭环）。
 

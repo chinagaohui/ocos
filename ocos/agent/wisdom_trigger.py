@@ -88,7 +88,7 @@ def consolidate_wisdom(hub, current_tick: int = 0,
                 PRIMARY KEY (user_id, wisdom_id)
             )""")
         connection.commit()
-    store = WisdomStore(connection=connection)
+    store = WisdomStore.load_from_db(connection)
     store.get_or_create_collection(WISDOM_USER_ID)
 
     interpreter = PatternInterpreter()
@@ -98,17 +98,24 @@ def consolidate_wisdom(hub, current_tick: int = 0,
         group = [p for p in patterns if p.category == category]
         if not group:
             continue
+        # 同一组 qualified patterns 共享同一候选对象 — 每候选只处理一次
+        seen_ids: set[str] = set()
         for result in interpreter.interpret(group, current_tick):
             if result.rejected or result.candidate_wisdom is None:
                 continue
+            wisdom = result.candidate_wisdom
+            if wisdom.wisdom_id in seen_ids:
+                continue
+            seen_ids.add(wisdom.wisdom_id)
             candidates += 1
-            before = _wisdom_count(store)
-            store.add_wisdom(WISDOM_USER_ID, result.candidate_wisdom)
-            after = _wisdom_count(store)
-            if after > before:
-                persisted += 1
-                logger.info("Wisdom candidate persisted: %s",
-                            result.candidate_wisdom.principle[:60])
+            if store.get_wisdom(WISDOM_USER_ID, wisdom.wisdom_id) is not None:
+                # 幂等跳过 — 已在库（load_from_db 保证内存即 DB 真相）
+                logger.debug("Wisdom idempotent skip: %s", wisdom.wisdom_id)
+                continue
+            store.add_wisdom(WISDOM_USER_ID, wisdom)
+            persisted += 1
+            logger.info("Wisdom candidate persisted: %s",
+                        wisdom.principle[:60])
 
     return {"patterns": len(patterns), "candidates": candidates,
             "persisted": persisted, "wisdom_total": _wisdom_count(store)}

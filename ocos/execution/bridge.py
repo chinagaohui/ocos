@@ -278,6 +278,8 @@ class DecisionBridge:
         # UX-F1: 目标由人工创建（→目标/CLI）= 隐式授权其子任务；
         # LLM 优先转换为具体动作真实执行（沙盒白名单+敏感路径拦截仍生效），
         # 转换失败/写类动作 → 待批。仅当无 LLM 时才走 ASK/echo 旧路径。
+        # 注: 目标语境由调用方前置进 description（Step6 chat 单任务 = 完整
+        # 目标描述；模板分解任务 = "目标 — 子任务名"），bridge 不反向查库。
         if self._llm_available():
             llm = self._handler_dag_task(SimpleNamespace(payload={
                 "description": description, "task_id": getattr(task, "task_id", ""),
@@ -290,8 +292,11 @@ class DecisionBridge:
                 return {"status": "completed", "result": llm}
             # UX-G: LLM 判定不可执行（描述模糊/无动作）→ 诚实 failed，
             # 落入 goal_result 摘要；不再堆无法批准的待批噪音
+            # FIX-失败遮蔽: 真实原因若藏在 blocked/stderr/exit_code 里，
+            # 会被默认兜底掩盖成 "LLM 无法执行此任务"— 用显式提取函数,
+            # 让执行者/用户看到真实失败原因而非模糊文案。
             return {"status": "failed",
-                    "reason": llm.get("error", "LLM 无法执行此任务")}
+                    "reason": self._execution_failure_reason(llm, description)}
 
         if task_type in _DAG_ASK_TYPES:
             # 写文件 / shell 执行 = 高危 → 待批 (R4-B Outbox)
@@ -322,7 +327,8 @@ class DecisionBridge:
                     return {"status": "completed", "result": llm}
                 # LLM 判定不可执行 → 诚实 failed（归档进 goal_result）
                 return {"status": "failed",
-                        "reason": llm.get("error", "LLM 无法转为只读动作")}
+                        "reason": (llm.get("error") or llm.get("block_reason")
+                                   or "LLM 无法转为只读动作")}
             if result is not None:
                 if result.get("ok"):
                     self._audit_record(
@@ -468,8 +474,12 @@ class DecisionBridge:
         # P6 (2026-09-01): 公开只读系统信息文件 — 精确放行（world-readable,
         # 无密钥无凭据）; 此前 /etc 前缀一刀切误伤 cat /etc/os-release
         # （宿主机信息收集是常见合法任务）。敏感文件仍被前缀规则拦截。
+        # UX-I+ (2026-09-04): 补 /proc 只读系统指标文件 — "分析宿主机"类
+        # 目标常编译出 cat /proc/cpuinfo|meminfo，误拦导致任务假性失败。
         PUBLIC_READONLY_PATHS = frozenset({
             "/etc/os-release",
+            "/proc/cpuinfo", "/proc/meminfo", "/proc/loadavg",
+            "/proc/uptime", "/proc/version",
         })
         try:
             from ocos.operations.sandbox_ops import SandboxOps
@@ -492,13 +502,42 @@ class DecisionBridge:
             from ocos.operations.sandbox_ops import SandboxCommand, SandboxOps
             workdir = "/tmp/ocos_sandbox"
             _os.makedirs(workdir, exist_ok=True)  # 沙盒工作目录（SandboxOps 不自建）
-            result = SandboxOps(strict=True).execute(
-                SandboxCommand(command=command, workdir=workdir, timeout=30.0))
-            return {"ok": result.success, "blocked": result.blocked,
-                    "block_reason": result.block_reason,
-                    "exit_code": result.exit_code,
-                    "stdout": (result.stdout or "")[:500],
-                    "stderr": (result.stderr or "")[:300]}
+
+            def _exec(cmd: str):
+                r = SandboxOps(strict=True).execute(
+                    SandboxCommand(command=cmd, workdir=workdir, timeout=30.0))
+                return (r.success, r.blocked, r.block_reason, r.exit_code,
+                        r.stdout or "", r.stderr or "")
+
+            def _is_crash(resp) -> bool:
+                # 崩溃特征: 栈溢出保护触发 或 进程被信号杀死(exit_code<0,如 -6 SIGABRT)
+                err = (resp[5] or "").lower()
+                return ("stack smashing" in err) or (resp[3] is not None and resp[3] < 0)
+
+            r0 = _exec(command)
+            # 崩溃兜底: 复合命令("a; b; c")在沙箱内偶发栈崩溃 → 拆分为单段
+            # 逐个执行并聚合, 规避单条大复合 shell 命令触碰栈保护; 已在上方对
+            # 各段做过白名单/敏感路径校验, 兜底仅执行合法段。
+            if _is_crash(r0) and len(segments) > 1:
+                outs: list[str] = []
+                errs: list[str] = []
+                all_ok, rc = True, 0
+                for seg in segments:
+                    rr = _exec(seg)
+                    if rr[3] not in (None, 0):
+                        rc = rr[3]; all_ok = False
+                    if rr[5]:
+                        errs.append(rr[5])
+                    if rr[4]:
+                        outs.append(rr[4])
+                return {"ok": all_ok, "blocked": r0[1],
+                        "block_reason": r0[2],
+                        "exit_code": 0 if rc == 0 and not errs else rc,
+                        "stdout": "\n".join(outs)[:1200],
+                        "stderr": "; ".join(errs)[:300]}
+            return {"ok": r0[0], "blocked": r0[1], "block_reason": r0[2],
+                    "exit_code": r0[3], "stdout": r0[4][:1200],
+                    "stderr": r0[5][:300]}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -684,8 +723,8 @@ class DecisionBridge:
     def _handler_dag_task(self, action) -> dict:
         """UX-F1: DAG 任务执行 — LLM 把任务描述转换为具体动作并真实执行。
 
-        动作格式（LLM 严格输出单行）:
-            RUN|<只读白名单命令>       → SandboxOps 真实执行
+        动作格式（LLM 严格输出，每行一个动作、最多 4 行）:
+            RUN|<只读白名单命令>       → SandboxOps 真实执行（多行逐条执行并聚合 stdout）
             FILE_WRITE|<路径>|<内容>   → digital_world file_ops
             NONE|<为什么无法执行>      → 诚实失败
         未接入语言核心（无 LLM key）→ 诚实 blocked。
@@ -710,20 +749,25 @@ class DecisionBridge:
             proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
             _saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
             try:
-                prompt = (
-                    f"任务描述：{description}\n\n"
-                    "把上述任务转换为**一条**可直接执行的动作。只输出单行，格式严格为：\n"
+                _rules = (
+                    "把上述任务转换为可直接执行的动作。每行一个动作、最多 4 行，格式严格为：\n"
                     "RUN|<命令>（优先使用只读命令: uname/df/free/uptime/ls/cat/head/"
                     "tail/grep/find/ps/whoami/date/env/hostname/id）\n"
                     "FILE_WRITE|<绝对路径>|<文件内容>\n"
                     "NONE|<一句话说明为什么无法执行>\n"
-                    "不要输出任何解释。"
+                    "单一操作只输出一行；复合任务（如同时查看系统版本/磁盘/内存）"
+                    "输出多条 RUN 行。不要输出任何解释。"
                 )
+                prompt = f"任务描述：{description}\n\n{_rules}"
+                # FIX-4: 注入同类历史任务结果 → 规划 LLM 可见历史成败经验
+                prior = self._prior_task_results(description)
+                if prior:
+                    prompt = f"{prior}\n\n{prompt}"
                 raw = asyncio.run(tg._provider.generate(
                     prompt,
-                    system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的单行动作。",
+                    system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的动作行。",
                     temperature=0.1, max_tokens=2000))
-                raw = raw.strip().splitlines()[0].strip()
+                raw = raw.strip()
             finally:
                 # 恢复代理环境变量
                 os.environ.update(_saved_proxies)
@@ -744,12 +788,11 @@ class DecisionBridge:
                 t = t.strip("`").lstrip()
             return t.splitlines()[0].strip()
 
-        if raw.startswith("RUN|"):
-            command = raw[4:].strip()
-            # UX-F1: 自主路径（auto_readonly）下命令必须只读——
-            # file_write/写类关键词强制转待批
-            if (getattr(action, "payload", {}) or {}).get("auto_readonly") and                     any(k in command.lower() for k in
-                        ("write", "echo >", ">", "tee ", "rm", "mv", "mkdir")):
+        def _run_one(command: str, auto_readonly: bool) -> dict:
+            """UX-F1: 单命令执行（含只读校验 + 沙盒拦截带反馈重试一次）。"""
+            if auto_readonly and any(
+                    k in command.lower() for k in
+                    ("write", "echo >", ">", "tee ", "rm", "mv", "mkdir")):
                 return {"ok": False,
                         "error": "自主路径仅允许只读命令——写操作需转待批"}
             run_result = self._handler_run_command(
@@ -761,6 +804,49 @@ class DecisionBridge:
                     run_result = self._handler_run_command(
                         SimpleNamespace(payload={"command": raw2[4:].strip()}))
             return run_result
+
+        # UX-I+: 多动作任务（"uname/df/free/uptime 汇总"类）— LLM 可输出
+        # 多条 RUN 行，逐条真实执行后聚合 stdout；任一命令失败即诚实失败
+        _auto_ro = bool(payload.get("auto_readonly"))
+        # FIX-5b: planning NONE| 只允许重试一次（防无限重规划烧 token）
+        _retried_none = False
+        _lines = [ln.strip().strip("`") for ln in raw.splitlines() if ln.strip()]
+        _run_cmds = [ln[4:].strip() for ln in _lines if ln.startswith("RUN|")]
+        if _run_cmds:
+            outs: list[str] = []
+            for _cmd in _run_cmds:
+                _rr = _run_one(_cmd, _auto_ro)
+                if not _rr.get("ok"):
+                    return _rr
+                outs.append(f"$ {_cmd}\n{_rr.get('stdout', '')}")
+            raw_out = "\n\n".join(outs)
+            # FIX-5: 多命令 → 一次 LLM 结论摘要（Observation→Reasoning）。
+            # 保留原始 stdout 端到端（[实验]约束 deny 丢弃真实输出），
+            # 仅在其前附结论，让 goal_result/面板呈现"分析"而非"粘贴"。
+            # 单命令不汇总（避免无谓 token）；预算不足/失败 → 回退原始输出。
+            final = raw_out[:4000]
+            if len(_run_cmds) > 1:
+                summary = self._summarize_execution(description, raw_out[:3000])
+                if summary:
+                    final = f"【结论摘要】{summary}\n\n【原始输出】\n{raw_out[:3500]}"
+            return {"ok": True, "blocked": False, "exit_code": 0,
+                    "stdout": final[:4000]}
+        raw = _lines[0] if _lines else raw
+        # FIX-5b: planning LLM 偶发输出 "NONE|"（判定无法执行）→ 带反馈重规划一次。
+        # 弱模型较易对中文多命令任务误判不可执行；复用它已输出的理由让模型
+        # 再给一次具体的 RUN 指令，显著降低偶发失败率。仍 NONE 则诚实失败。
+        if raw.startswith("NONE|") and not _retried_none:
+            _retried_none = True
+            _no = raw[5:].strip()
+            raw2 = _first_line(_convert(f"规划器判定：{_no}"))
+            if raw2.startswith("RUN|"):
+                _rr2 = _run_one(raw2[4:].strip(), _auto_ro)
+                if _rr2.get("ok"):
+                    return {"ok": True, "blocked": False, "exit_code": 0,
+                            "stdout": f"$ {raw2[4:].strip()}\n{_rr2.get('stdout','')}"[:4000]}
+                return _rr2
+            if not raw2.startswith("NONE|"):
+                raw = raw2
         if raw.startswith("FILE_WRITE|"):
             parts = raw.split("|", 2)
             if len(parts) == 3:
@@ -773,12 +859,120 @@ class DecisionBridge:
             return {"ok": False, "error": f"任务无法执行: {raw[5:].strip()}"}
         return {"ok": False, "error": f"LLM 输出格式不符: {raw[:80]}"}
 
+    def _execution_failure_reason(self, llm: dict, description: str) -> str:
+        """FIX-失败遮蔽: 提取执行失败的**真实原因**，替代模糊默认文案。
+
+        优先级: block_reason(沙盒拦截) → error(规划/NONE) → blocked+stderr/
+        exit_code 诊断 → 明确兜底（不再用含糊的 "LLM 无法执行此任务"）。
+        """
+        if llm.get("block_reason"):
+            return f"命令被沙盒拦截: {llm['block_reason']}"
+        if llm.get("error"):
+            # error == 与当前已知（可能间接）是动作/模型原因
+            return str(llm["error"])
+        parts: list[str] = []
+        if llm.get("blocked"):
+            parts.append("命令被沙盒拦截（未提供具体原因）")
+        if llm.get("stderr"):
+            parts.append(f"stderr: {str(llm['stderr'])[:160]}")
+        ec = llm.get("exit_code")
+        if ec not in (None, 0):
+            parts.append(f"exit_code={ec}")
+        if parts:
+            return "; ".join(parts)
+        return f"执行失败（任务: {description[:60]}）：命令被沙盒拦截或模型未能生成可执行动作，且无更多诊断信息"
+
     def _get_textgen(self):
         """P3-2: 复用缓存的 TextGenerator。"""
         if self._textgen is None:
             from ocos.engines.text_generator import get_text_generator
             self._textgen = get_text_generator()
         return self._textgen
+
+    def _prior_task_results(self, description: str, limit: int = 2) -> str:
+        """FIX-4: 同类任务历史结果 — 任务转换前的执行经验注入。
+
+        FIX-4v2: 仅注入**成功（✓/✅）**历史。此前把失败历史一并注入会在
+        同一任务反复失败时形成负反馈循环：规划 LLM 看到"同类历史全 ✗
+        无法执行"→ 跟随输出 NONE| → 又记为失败 → 循环自我强化。有成功
+        经验时才注入；无成功历史则空（走原始 prompt）。
+        """
+        if not self._db_path or not description:
+            return ""
+        desc = description.strip()
+        try:
+            import sqlite3
+            conn = sqlite3.connect(self._db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT decision FROM episodes "
+                "WHERE source='goal_result' AND action='goal_result' "
+                "ORDER BY created_at DESC LIMIT 40").fetchall()
+            conn.close()
+        except Exception as e:
+            logger.debug("prior task results failed: %s", e)
+            return ""
+
+        dg = {desc[i:i + 2] for i in range(len(desc) - 1)}
+        if not dg:
+            return ""
+        hits: list[str] = []
+        for r in rows:
+            d = str(r["decision"] or "").strip()
+            if not d:
+                continue
+            # FIX-4v2: 只取成功记录, 避免失败历史诱导规划器输出 NONE
+            if not d.startswith("✓") and not d.startswith("✅"):
+                continue
+            snippet = d.split("→", 1)[0] if "→" in d else d
+            sg = {snippet[i:i + 2] for i in range(len(snippet) - 1)}
+            if not sg:
+                continue
+            overlap = len(dg & sg) / max(len(dg | sg), 1)
+            if overlap >= 0.2:
+                hits.append(d[:400])
+                if len(hits) >= limit:
+                    break
+        if not hits:
+            return ""
+        return "同类历史任务结果:\n" + "\n".join(hits)
+
+    def _summarize_execution(self, task_description: str,
+                             execution_text: str) -> str:
+        """FIX-5: 多命令执行结果的结论性摘要（Observation→Reasoning 闭环）。
+
+        把聚合 stdout 喂给一次 LLM，产出中文结论摘要（关键数据/是否达成）。
+        预算不足返回 ""（回退原始输出）；LLM 异常也返回 ""（诚实降级，
+        不因摘要失败而丢弃真实 stdout）。
+        """
+        if not execution_text:
+            return ""
+        budget_ok, budget_reason = self._llm_budget_ok()
+        if not budget_ok:
+            logger.warning("summary skipped (budget): %s", budget_reason)
+            return ""
+        try:
+            import asyncio
+            tg = self._get_textgen()
+            proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
+            _saved = {k: os.environ.pop(k) for k in proxy_env_keys}
+            try:
+                prompt = (
+                    f"任务：{task_description[:200]}\n\n"
+                    f"以下是该任务多条命令的执行输出：\n{execution_text[:3000]}\n\n"
+                    "请用中文给出结论性摘要：提取关键数据/结果，判断是否达成任务。"
+                    "不要复述命令输出全文，控制在 200 字以内，只输出摘要。"
+                )
+                raw = asyncio.run(tg._provider.generate(
+                    prompt,
+                    system_prompt="你是 OCOS 的执行结果分析器。只输出结论摘要。",
+                    temperature=0.2, max_tokens=800))
+                return raw.strip()
+            finally:
+                os.environ.update(_saved)
+        except Exception as e:
+            logger.warning("execution summary failed (fallback to raw): %s", e)
+            return ""
 
     def _llm_budget_ok(self) -> tuple[bool, str]:
         """P2-2: LLM 日预算 — 默认 500 次/天（OCOS_LLM_DAILY_CAP 可调）。"""
