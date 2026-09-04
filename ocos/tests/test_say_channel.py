@@ -67,7 +67,7 @@ class TestInjectUserMessage:
         from ocos.agent.agent_runtime import AgentRuntime
         from ocos.daemon.factory import build_master_agent
 
-        rt = AgentRuntime(agent=build_master_agent("t"),
+        rt = AgentRuntime(agent=build_master_agent("t", db_path=":memory:"),
                           max_cycles=10, db_path=":memory:")
         rt.boot()
         result = rt.inject_user_message("分析系统状态", sender="test")
@@ -97,7 +97,7 @@ class TestDaemonInboxDrain:
         rt = ResidentRuntime.__new__(ResidentRuntime)
         rt._user_inbox = UserInbox(db)
         rt._responder = None  # 裸装配: 无回复器（诚实跳过回写）
-        agent = build_master_agent("t")
+        agent = build_master_agent("t", db_path=":memory:")
         rt._runtime = AgentRuntime(agent=agent, max_cycles=10,
                                    db_path=":memory:")
         rt._runtime.boot()

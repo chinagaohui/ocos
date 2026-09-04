@@ -480,6 +480,8 @@ class TestGrowthEngine:
             "ocos/personal_memory/wisdom_store.py",
             "ocos/tests/test_execution_bridge.py",
             "ocos/tests/test_say_channel.py",
+            "ocos/interaction/cli/commands/run.py",  # FIX-17
+            "ocos/daemon/factory.py",  # FIX-17: 注入 proactive_output_callback
         }
         violations = [l for l in changed if l not in allowed]
         assert violations == [], f"测试污染了生产代码: {violations}"

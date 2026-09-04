@@ -50,7 +50,7 @@ def cmd_run(args, session) -> int:
 
     from ocos.daemon.factory import build_master_agent
 
-    agent = build_master_agent(args.agent_id)
+    agent = build_master_agent(args.agent_id, db_path=db_path)
 
     from ocos.daemon import ResidentRuntime
     from ocos.daemon.factory import build_health_loop

@@ -11,7 +11,11 @@ ocos.interaction.cli.commands 只依赖 ocos.daemon 门面，
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 def _make_confidence_source(db_path: str):
@@ -43,8 +47,11 @@ def _make_confidence_source(db_path: str):
     return _source
 
 
-def build_master_agent(agent_id: str):
-    """组装真实组件 MasterAgent — 全部生产实现，零 Mock。"""
+def build_master_agent(agent_id: str, db_path: Optional[str] = None):
+    """组装真实组件 MasterAgent — 全部生产实现，零 Mock。
+
+    FIX-17: 注入 proactive_output_callback，使主动输出能进入对话流。
+    """
     from ocos.agent.capability_manager import CapabilityManager
     from ocos.agent.execution_manager import ExecutionManager
     from ocos.agent.goal_stack import GoalStack
@@ -55,9 +62,25 @@ def build_master_agent(agent_id: str):
     from ocos.constitution.behavioral import BehavioralConstitution
     from ocos.runtime.context_manager import WorkingMemory
     from ocos.self.identity_boundary import IdentityBoundary
+    from ocos.interaction.inbox import UserInbox
 
     wm = WorkingMemory()
     engines = build_cognitive_engines(working_memory=wm)
+
+    # FIX-17: 构建主动输出回调 → 写入 UserInbox outbound 通道
+    proactive_output_callback = None
+    if db_path and db_path != ":memory:":
+        try:
+            inbox = UserInbox(db_path=db_path)
+            def _send(message: str) -> None:
+                try:
+                    inbox.post_outbound(message)
+                    logger.info("Proactive output posted to inbox")
+                except Exception as e:
+                    logger.warning("Failed to post proactive output: %s", e)
+            proactive_output_callback = _send
+        except Exception as e:
+            logger.warning("UserInbox unavailable for proactive output: %s", e)
 
     return MasterAgent(
         agent_id=agent_id,
@@ -70,8 +93,9 @@ def build_master_agent(agent_id: str):
         execution_manager=ExecutionManager(),
         state=AgentState(),
         # FIX-6b: 装配行为宪法 → decide() 前置合规检查真实生效
-        # （此前工厂不装, master_agent.decide 的 constitution 检查永不执行）
         constitution=BehavioralConstitution(),
+        # FIX-17: 注入主动输出回调 → 消息写入 UserInbox
+        proactive_output_callback=proactive_output_callback,
         **engines,
     )
 
