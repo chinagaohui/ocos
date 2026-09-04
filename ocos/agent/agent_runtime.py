@@ -1302,7 +1302,10 @@ class AgentRuntime:
             self._dag_total = 0
 
         # ── Fallback: original cognitive loop (or idle if not booted) ──
-        if hasattr(self, "loop") and self.loop is not None:
+        # FIX-01: 生产默认停用 idle 兜底认知循环（空转无输出，白耗 CPU）
+        # OCOS_ENABLE_COGNITIVE_LOOP=1 可重新启用（调试/未来用途）
+        _enable_cognitive_loop = os.environ.get("OCOS_ENABLE_COGNITIVE_LOOP", "0") == "1"
+        if _enable_cognitive_loop and hasattr(self, "loop") and self.loop is not None:
             try:
                 result = self.loop.execute_single()
                 # R4-A: 缓存决策结果供 step 8 Dispatch 经 DecisionBridge 执行

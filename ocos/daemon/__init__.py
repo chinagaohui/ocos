@@ -526,7 +526,11 @@ class ResidentRuntime:
         }), encoding="utf-8")
 
     def _drain_user_inbox(self) -> int:
-        """UX-P2: 消费收件箱中的用户消息 → 感知事件（Step 1 下一 tick 摄入）。"""
+        """FIX-03: 消费收件箱中的用户消息 → respond_auto（对话即路由）。
+
+        改为与 web/TUI 一致的路由逻辑：任务类消息自动受理为目标，
+        回复中注入 goal_id 供后续追问 grounding。
+        """
         if self._user_inbox is None:
             return 0
         try:
@@ -535,8 +539,25 @@ class ResidentRuntime:
             logger.exception("UserInbox drain failed")
             return 0
         for msg in messages:
+            # FIX-03: 改用 respond_auto 以统一路由逻辑
+            if self._responder is not None:
+                try:
+                    out = self._responder.respond_auto(
+                        msg["content"], session_id=msg.get("session_id", "say"))
+                    goal_id = out.get("goal_id")
+                    if out.get("accepted", True):
+                        logger.info("User message delivered: %s (%s)",
+                                    msg["id"], msg["content"][:40])
+                        if goal_id:
+                            logger.info("Goal created: %s", goal_id)
+                    else:
+                        logger.warning("User message rejected: %s", msg["id"])
+                    continue
+                except Exception:
+                    logger.exception("respond_auto failed, falling back to inject")
+            # fallback: 旧路径（_responder 为 None 时）
             result = self._runtime.inject_user_message(
-                msg["content"], sender=msg["sender"])
+                msg["content"], sender=msg.get("sender", "say"))
             if result.get("accepted"):
                 logger.info("User message delivered: %s (%s)",
                             msg["id"], msg["content"][:40])

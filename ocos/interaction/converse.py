@@ -105,11 +105,12 @@ class ChatResponder:
         text = read_self_knowledge()
         return f"已习得自我知识:\n{text[-800:]}" if text else ""
 
-    def build_context(self, message: str = "") -> str:
+    def build_context(self, message: str = "", session_id: str = "web") -> str:
         """喂给 LLM 的自我认知 + 真实状态。
 
         message: 当前用户消息，用于触发相关记忆召回（FIX-2），
         使历史语义/用户画像/窗口外的对话片段进入本轮的 reasoning 上下文。
+        session_id: FIX-04 会话关联的目标上下文过滤键。
         """
         lines: list[str] = [f"身份: {self._identity()}",
                             f"认知引擎: {self._engines()}",
@@ -160,13 +161,29 @@ class ChatResponder:
             lines.append(sk)
 
         # UX-F2: 最近目标执行结果（问"结果呢"可直接回答）
+        # FIX-04: 注入最近 N 条 goal_result，而非仅第一条
         try:
-            for ep in hub.episode.query_by_time(limit=15):
-                if getattr(ep, "action", "") == "goal_result":
-                    lines.append(f"最近目标结果:\n{getattr(ep, 'decision', '')[:1000]}")
-                    break
+            from ocos.memory.episode.models import EpisodeStatus
+            recent_results = []
+            for ep in hub.episode.query_by_time(limit=20):
+                if getattr(ep, "action", "") == "goal_result" and getattr(ep, "status", "") != EpisodeStatus.ARCHIVED.value:
+                    recent_results.append({
+                        "decision": getattr(ep, "decision", "")[:400],
+                        "success": getattr(ep, "outcome", {}).get("success", False) if isinstance(getattr(ep, "outcome", {}), dict) else False,
+                        "agent": getattr(ep, "context", {}).get("agent", "?"),
+                    })
+            if recent_results:
+                lines.append("最近目标结果（近{} 条）:".format(len(recent_results)))
+                for i, r in enumerate(recent_results[:3]):
+                    status = "✓" if r["success"] else "✗"
+                    lines.append("  [{}] {}:{} {}".format(status, r["agent"], i+1, r["decision"][:200]))
         except Exception as e:
             logger.debug("goal result context failed: %s", e)
+
+        # FIX-04: 按 session 关联的目标上下文
+        session_goal_ctx = self._session_goal_context(session_id)
+        if session_goal_ctx:
+            lines.append("本会话目标:\n" + session_goal_ctx)
 
         # PW-1.1: 人生智慧（dream 巩固沉淀, 确定性经验而非 LLM 提案）
         try:
@@ -531,7 +548,7 @@ class ChatResponder:
         goal_note: UX-H 目标受理提示（auto 受理时注入 prompt，
                    让 LLM 确认任务已受理并说明后续流程）。
         session_id: FIX-8 会话实体，透传给对话记忆样本归属。"""
-        context = self.build_context(message)
+        context = self.build_context(message, session_id=session_id)
         if goal_note:
             context = f"{context}\n【内部提示】\n{goal_note}"
         if not self._has_real_llm():
@@ -692,6 +709,54 @@ class ChatResponder:
         except (OSError, ValueError, KeyError):
             return False
 
+    def _session_goal_context(self, session_id: str) -> str:
+        """FIX-04: 按 session 关联最近活跃目标 + 已完成目标结果。"""
+        try:
+            from ocos.goal.store import GoalStore
+            from datetime import timedelta
+            goals = GoalStore(db_path=self._db_path).load_active()
+            # 按 session 过滤 (metadata 里记录)
+            relevant = [g for g in goals
+                        if getattr(g, "session_id", None) == session_id]
+            if not relevant:
+                relevant = goals[:5]  # 退化为最近5个
+            if not relevant:
+                return ""
+            lines = []
+            for g in relevant[:3]:
+                gid = str(g.get("id", ""))
+                desc = str(g.get("description", ""))
+                status = str(g.get("status", ""))
+                lines.append(f"  [{status}] {gid}: {desc[:80]}")
+            # 查询已完成结果的 last_n 条
+            try:
+                import sqlite3
+                conn = sqlite3.connect(self._db_path)
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """SELECT decision, outcome, updated_at
+                       FROM episodes
+                       WHERE action = 'goal_result'
+                         AND created_at > datetime('now', '-7 days')
+                       ORDER BY created_at DESC LIMIT 5""",
+                ).fetchall()
+                if rows:
+                    lines.append("\n  最近完成（近7天）:")
+                    for r in rows:
+                        try:
+                            import json as _j
+                            out = _j.loads(r["outcome"]) if r["outcome"] else {}
+                            ok = "✓" if out.get("success") else "✗"
+                            lines.append(f"    {ok} {str(r['decision'])[:80]}")
+                        except Exception:
+                            lines.append(f"    ? {str(r['decision'])[:80]}")
+                conn.close()
+            except Exception:
+                pass
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
     def _find_duplicate_goal(self, description: str) -> Optional[str]:
         """UX-H+: 同义目标去重 — 活跃目标里已有相同任务则复用，不重复建。"""
         try:
@@ -735,8 +800,24 @@ class ChatResponder:
                              f"daemon {daemon_state}。"
                              "回复时确认受理并简述执行计划，不要让用户再手动操作。")
         elif compiled["kind"] in ("question", "continue"):
-            goal_note = ("用户在追问已有话题/任务 — 依据【最近对话】【最近目标结果】"
-                         "直接作答；不要新建目标，也不要反问用户指什么（除非无据可查）。")
+            # FIX-05: 结构化 goal grounding — 查询关联目标
+            try:
+                from ocos.goal.store import GoalStore
+                goals = GoalStore(db_path=self._db_path).load_active()
+                # 优先：与当前 session 关联的目标
+                by_session = [g for g in goals if getattr(g, "session_id", None) == session_id]
+                if by_session:
+                    g = by_session[0]
+                    goal_id = str(g.get("id", ""))
+                    goal_note = (f"【当前任务上下文】\ngoal_id={goal_id}  "
+                                 f"status={g.get('status', '?')}  "
+                                 f"描述={str(g.get('description', ''))[:80]}")
+                elif goals:
+                    g = goals[0]
+                    goal_id = str(g.get("id", ""))
+                    goal_note = f"【当前任务上下文】goal_id={goal_id}  status={g.get('status', '?')}"
+            except Exception:
+                pass
         out = self.respond(message, goal_note=goal_note, session_id=session_id)
         out["goal_id"] = goal_id
         out["kind"] = compiled["kind"]

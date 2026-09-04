@@ -25,22 +25,72 @@ def _make_confidence_source(db_path: str):
     用 CapabilityConfidence 评估；学习规则 best-effort 加载，失败/为空 → 返回
     "none"（安全不干预，仅当前无历史时保持默认分级）。
     """
-    def _load_rules() -> list[dict]:
+    def _load_rules(description: str) -> list[dict]:
+        """FIX-02 Option A: 从 SQLite episodes 表统计近期历史规则。
+
+        直接查 DB 替代 LearningEngine（原构造签名不兼容），返回
+        [{task_pattern, success_rate, success_count, fail_count}] 格式。
+        失败/无数据 → 返回 []（安全兜底，不干预决策）。
+        """
+        if not db_path:
+            return []
         try:
-            from ocos.engines.learning_engine import LearningEngine
-            engine = LearningEngine(db_path=db_path) if db_path else LearningEngine()
-            rules: list[dict] = []
-            for model in engine.list_models():
-                for rule in (getattr(model, "rules", None) or ()):
-                    if isinstance(rule, dict):
-                        rules.append(rule)
-            return rules
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            # 查近 30 天 goal_result episodes
+            cur.execute("""
+                SELECT outcome
+                FROM episodes
+                WHERE action = 'goal_result'
+                  AND created_at >= datetime('now', '-30 days')
+                ORDER BY created_at DESC
+                LIMIT 50
+            """)
+            rows = cur.fetchall()
+            conn.close()
+
+            # 统计与当前描述匹配的 bi-gram 成功率
+            # FIX-02: 使用本地函数替代外部依赖（避免引入新模块）
+            def tokenize_bi_grams(text: str) -> set:
+                """简单 bi-gram 分词：相邻字符对。"""
+                text = text.strip()
+                return {text[i:i+2] for i in range(len(text) - 1)} if len(text) >= 2 else set()
+
+            desc_gms = tokenize_bi_grams(description.lower())
+            if not desc_gms:
+                return []
+
+            success_count = 0
+            fail_count = 0
+            for row in rows:
+                try:
+                    out = __import__('json').loads(row["outcome"] or "{}")
+                    words = set(out.get("words", []) or [])
+                    if words & desc_gms:
+                        if out.get("success"):
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                except Exception:
+                    continue
+
+            if success_count + fail_count == 0:
+                return []
+            success_rate = success_count / (success_count + fail_count)
+            return [{
+                "task_pattern": description[:50],
+                "success_rate": success_rate,
+                "success_count": success_count,
+                "fail_count": fail_count,
+            }]
         except Exception:
             return []
 
     def _source(description: str, task_type: str = "analyze"):
         from ocos.learning.metacognition import CapabilityConfidence
-        rules = _load_rules()
+        rules = _load_rules(description)
         return CapabilityConfidence.evaluate(
             description, rules, task_type=task_type)
 
