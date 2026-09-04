@@ -482,6 +482,7 @@ class TestGrowthEngine:
             "ocos/tests/test_say_channel.py",
             "ocos/interaction/cli/commands/run.py",  # FIX-17
             "ocos/daemon/factory.py",  # FIX-17: 注入 proactive_output_callback
+            "ocos/autonomous_runtime/action_dispatcher.py",  # P2-1: 新增 QUERY_DB ActionType
             # FIX-08/09/10: interaction→learning persistence + world_model
             "ocos/memory/recall.py",
             "ocos/learning/persistence.py",

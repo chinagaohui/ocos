@@ -46,6 +46,7 @@ AUTO_ACTIONS: frozenset[ActionType] = frozenset({
     ActionType.REFLECT,              # 反思 (内部记录)
     ActionType.FEEDBACK_PROCESS,     # 反馈处理 (内部记录)
     ActionType.NOOP,                 # 空操作
+    ActionType.QUERY_DB,             # P2-1: 只读 SQLite 查询 (系统自检/数据分析)
 })
 
 ASK_ACTIONS: frozenset[ActionType] = frozenset({
@@ -169,6 +170,9 @@ class DecisionBridge:
             ActionType.RUN_COMMAND, self._handler_run_command)
         self._dispatcher.register_handler(
             ActionType.HTTP_FETCH, self._handler_http_fetch)
+        # P2-1: 只读数据库查询（系统自检、数据分析）
+        self._dispatcher.register_handler(
+            ActionType.QUERY_DB, self._handler_query_db)
         # D: 自我升级提案的人工批准执行器（字符串 action_type, 经
         # dispatch_by_name 触达 — 批准即应用, 人工 = authority）
         self._dispatcher.register_custom_handler(
@@ -554,6 +558,41 @@ class DecisionBridge:
                 params=payload.get("params", {}) or {}, timeout=10.0))
             return {"ok": result.success, "status_code": result.status_code,
                     "results": result.results[:10], "error": result.error}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _handler_query_db(self, action: DispatchedAction) -> dict:
+        """P2-1: 只读 SQLite 查询 — 系统自检、数据分析。
+
+        限制: 仅允许 SELECT 语句, 禁止写入/修改/schema 操作。
+        安全: 只读主数据库, 不暴露凭据路径。
+        """
+        from pathlib import Path
+        import sqlite3
+        query = (action.payload or {}).get("query", "")
+        if not query:
+            return {"ok": False, "error": "empty query"}
+        # 安全检查: 仅允许 SELECT, 禁止写入/修改
+        cleaned = query.strip().lower()
+        if any(kw in cleaned for kw in ("insert", "update", "delete", "drop",
+                                         "alter", "create", "replace",
+                                         "truncate", "attach", "detach")):
+            return {"ok": False, "error": "write operations not allowed"}
+        if not cleaned.startswith("select"):
+            return {"ok": False, "error": "only SELECT queries allowed"}
+        try:
+            db_path = str(Path.home() / ".ocos" / "ocos.db")
+            conn = sqlite3.connect(db_path, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute(query)
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description] if cur.description else []
+            results = [dict(r) for r in rows[:200]]  # 限制返回行数
+            conn.close()
+            return {"ok": True, "columns": cols, "rows": results, "count": len(rows)}
+        except sqlite3.Error as e:
+            return {"ok": False, "error": f"sqlite: {e}"}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
