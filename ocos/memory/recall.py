@@ -237,21 +237,64 @@ class MemoryRecall:
         union = ga | gb
         return len(intersection) / len(union) if union else 0.0
 
+    # FIX-16: 中文同义词表 — 扩大语义覆盖
+    _SYNONYM_TABLE: dict[str, list[str]] = {
+        "结果": ["outcome", "result", "成果", "成效"],
+        "失败": ["failure", "failed", "出错", "异常"],
+        "目标": ["goal", "objective", "任务"],
+        "记忆": ["memory", "memories", "记录"],
+        "对话": ["chat", "conversation", "dialogue"],
+    }
+
+    def _expand_keywords(self, context: str) -> set[str]:
+        """FIX-16: 基于同义词表扩展关键词集合."""
+        expanded = set(self._extract_keywords(context))
+        for kw in list(expanded):
+            for syn in self._SYNONYM_TABLE.get(kw, []):
+                expanded.add(syn)
+        return expanded
+
+    def _dynamic_threshold(self, hub: Any) -> float:
+        """FIX-16: 根据记忆密度动态调整阈值 — 记忆多时放宽, 少时严格."""
+        if not hub or not hasattr(hub, 'get_stats'):
+            return 0.15
+        try:
+            stats = hub.get_stats()
+            total = stats.get('episode_count', 0) + stats.get('belief_count', 0)
+            if total > 1000:
+                return 0.10  # 记忆丰富 → 放宽阈值
+            elif total < 50:
+                return 0.25  # 记忆稀疏 → 严格过滤
+            return 0.15
+        except Exception:
+            return 0.15
+
     def _filter_by_relevance(self, results: list[RecallResult],
                              context: str | None, min_score: float = 0.15
                              ) -> list[RecallResult]:
-        """FIX-09: 按 bi-gram 重叠度过滤召回结果。"""
+        """FIX-09/16: 按 bi-gram 重叠度过滤召回结果（FIX-16: 动态阈值 + 同义词扩展）."""
         if not context:
             return results
+        # FIX-16: 动态阈值 — 根据记忆密度调整
+        dynamic_min = self._dynamic_threshold(self._hub)
+        final_min = min(min_score, dynamic_min)  # 取更严格的
         filtered = []
         for r in results:
             score = self._bi_gram_overlap(context, r.content)
-            if score >= min_score:
+            # FIX-16: 同义词扩展匹配
+            if score < final_min:
+                expanded = self._expand_keywords(context)
+                for kw in expanded:
+                    if kw.lower() in r.content.lower():
+                        score = max(score, 0.15)  # 同义词命中至少 0.15
+                        break
+            if score >= final_min:
                 r.relevance = max(r.relevance, score)
                 filtered.append(r)
         return filtered
 
-    def format_for_prompt(self, context: str | None = None, limit: int = 10) -> str:
+    def format_for_prompt(self, context: str | None = None, limit: int = 10,
+                          learning_rules: list[dict] | None = None) -> str:
         """格式化为系统提示注入字符串."""
         recalls = self.recall(context, limit)
         if not recalls:
@@ -262,6 +305,21 @@ class MemoryRecall:
             icon = {"user": "👤", "semantic": "📚", "pattern": "🔁", "experience": "💡"}.get(r.source, "📝")
             lines.append(f"{icon} [{r.source}] (relevance: {r.relevance:.2f})")
             lines.append(f"   {r.content[:200]}")
+
+        # FIX-06: 注入学习规则（成功/失败冲突）
+        if learning_rules:
+            conflict_lines = []
+            for rule in learning_rules:
+                succ = int(rule.get("success_count", 0) or 0)
+                fail = int(rule.get("fail_count", 0) or 0)
+                rate = float(rule.get("success_rate", 0.0) or 0.0)
+                pattern = rule.get("task_pattern", "?")
+                if succ + fail >= 2:
+                    tag = "⚠️" if rate < 0.5 else "✅"
+                    conflict_lines.append(f"{tag} {pattern}: 成功{succ}/失败{fail} (率={rate:.0%})")
+            if conflict_lines:
+                lines.append("\n## 学习规则（历史经验）")
+                lines.extend(conflict_lines[:5])
 
         return "\n".join(lines)
 

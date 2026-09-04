@@ -8,6 +8,7 @@
 v2（2026-08-30）新增:
   - A 对话落记忆: 每轮对话写入 Episode（source=conversation）
   - B 自我认知包: 身份/引擎清单/真实能力/权限模型注入上下文
+  - FIX-13: build_context 改用 InteractionContext 统一注入内核数据
   - E 内视: build_introspection() 深度自省报告（/ocos/introspect）
   - D 自我迭代: self_improve() 分析近期对话 → 升级提案（入待批，
     人工批准后应用到 ~/.ocos/self_knowledge.md 并回注提示词）
@@ -26,6 +27,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ocos.logging import get_logger
+from ocos.interaction.context import InteractionContext
 
 logger = get_logger(__name__)
 
@@ -125,6 +127,22 @@ class ChatResponder:
             lines.append(
                 f"记忆: episodes={stats.get('episode_count', 0)}, "
                 f"beliefs={stats.get('belief_count', 0)}")
+            # FIX-13: 结构化内核数据 — 通过 InteractionContext 统一注入
+            try:
+                from ocos.interaction.context import InteractionContext
+                ic = InteractionContext(self._db_path)
+                episodes = ic.query_memory(limit=6)
+                if episodes:
+                    ep_lines = ["近期记忆:"]
+                    for e in episodes[:5]:
+                        ep_lines.append(f"  [{e.get('goal','')[:25]}] {e.get('decision','')[:50]}")
+                    lines.append("\n".join(ep_lines))
+                beliefs = ic.query_beliefs(limit=3)
+                if beliefs:
+                    bl = [f"  {b['statement'][:40]} (conf={b['confidence']:.2f})" for b in beliefs[:3]]
+                    lines.append("活跃信念:\n" + "\n".join(bl))
+            except Exception as e:
+                logger.debug("interaction context inject failed: %s", e)
         except Exception as e:
             logger.debug("memory context failed: %s", e)
 
@@ -456,8 +474,14 @@ class ChatResponder:
             from ocos.memory.recall import MemoryRecall
             hub = MemoryHub(self._db_path)
             hub.initialize()
+            # FIX-06: 注入学习规则，使 recall 能感知成功/失败冲突
+            try:
+                from ocos.learning.persistence import load_learning_rules
+                rules = load_learning_rules(self._db_path, limit=5)
+            except Exception:
+                rules = None
             prompt_block = MemoryRecall(memory_hub=hub).format_for_prompt(
-                context=message, limit=6)
+                context=message, limit=6, learning_rules=rules)
             if prompt_block:
                 sections.append(prompt_block)
         except Exception as e:
