@@ -220,6 +220,16 @@ class ChatResponder:
         except Exception:
             pass
 
+        # FIX-15: 连续性检查点（身份连续 + 知识老化）
+        try:
+            from ocos.agent.continuity_trigger import load_continuity
+            ct = load_continuity()
+            if ct and ct.get("last_tick"):
+                lines.append(f"身份连续性: 上次检查 tick={ct['last_tick']}"
+                             + (f" action={ct.get('action', '')}" if ct.get('action') else ""))
+        except Exception:
+            pass
+
         return "\n".join(lines)
 
     # ── E: 内视（深度自省报告） ──────────────────────────────────────
@@ -385,7 +395,7 @@ class ChatResponder:
 
     # ── A: 对话落记忆 ────────────────────────────────────────────────
 
-    def _recent_dialogue_from_session(self, turns: int = 6, width: int = 160) -> str:
+    def _recent_dialogue_from_session(self, turns: int = 10, width: int = 160) -> str:
         """P0-2: 从会话状态（内存）取最近对话，避免每次请求重建。
 
         退化到 MemoryHub：无 SessionManager 或会话为空时。
@@ -407,7 +417,7 @@ class ChatResponder:
             logger.debug("Session dialogue read failed: %s", e)
             return ""
 
-    def _recent_dialogue(self, turns: int = 6, width: int = 160) -> str:
+    def _recent_dialogue(self, turns: int = 10, width: int = 160) -> str:
         """UX-I2: 最近对话转录（时间正序）— LLM 连续性的最小充分上下文。
 
         没有它，"让你分析宿主机的任务""好了吗"这类指代/追问全靠猜。
@@ -753,7 +763,9 @@ class ChatResponder:
                 gid = str(g.get("id", ""))
                 desc = str(g.get("description", ""))
                 status = str(g.get("status", ""))
-                lines.append(f"  [{status}] {gid}: {desc[:80]}")
+                prog = g.get("progress")
+                prog_str = f" 进度={prog:.0%}" if isinstance(prog, (int, float)) else ""
+                lines.append(f"  [{status}]{prog_str} {gid}: {desc[:80]}")
             # 查询已完成结果的 last_n 条
             try:
                 import sqlite3
