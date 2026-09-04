@@ -194,6 +194,19 @@ class ChatResponder:
         except Exception as e:
             logger.debug("wisdom context failed: %s", e)
 
+        # FIX-08: 学习规则注入（dream 后持久化的经验）
+        try:
+            from ocos.learning.persistence import load_learning_summary
+            summary = load_learning_summary(self._db_path)
+            if summary.get("count", 0) > 0:
+                lines.append(
+                    f"习得规则: {summary['count']} 条"
+                    + (f" (最新 {summary.get('latest', '?')})"
+                       if summary.get('latest') else "")
+                )
+        except Exception as e:
+            logger.debug("learning rules summary failed: %s", e)
+
         return "\n".join(lines)
 
     # ── E: 内视（深度自省报告） ──────────────────────────────────────

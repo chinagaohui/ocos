@@ -1096,6 +1096,7 @@ class AgentRuntime:
             diag = FailureDiagnoser.diagnose(fake_ep)
             if diag is not None:
                 cause = diag.cause.value
+                self._last_failure_cause = cause
         except Exception:
             pass
 
@@ -1143,17 +1144,20 @@ class AgentRuntime:
 
     def _revise_task_description(self, base: str, reason: str,
                                  attempt: int) -> str:
-        """FIX-9: 把失败原因回注为修正后的任务描述。
+        """FIX-9/07: 把失败原因回注为修正后的任务描述。
 
         覆盖 base 保持不含历史注记的原始描述；返回带【执行反馈】的修订版，
         供重试时桥端规划 LLM 可见失败上下文，产出一套可规避该失败的方案
         （而非原样重放导致同样失败）。确定性文本拼接，无需额外 LLM。
+        FIX-07: 同时注入诊断原因，使下一次规划看到"为什么失败"。
         """
         _base = (base or "").strip()
         _reason = (reason or "").strip()[:200]
+        _cause = getattr(self, '_last_failure_cause', 'unknown')
         note = (
             f"【执行反馈】第{attempt}次尝试执行失败"
             + (f"：{_reason}" if _reason else "。")
+            + f"\n【失败诊断】原因：{_cause}"
             + "\n请据此修正或换一种可行的具体命令/方案"
               "（优先使用只读白名单命令），不要重复会失败的做法。"
         )
