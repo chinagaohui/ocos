@@ -139,6 +139,8 @@ class MemoryRecall:
                             content=entry.content if hasattr(entry, 'content') else str(entry),
                             metadata={"id": entry.id if hasattr(entry, 'id') else None},
                         ))
+                # FIX-09: bi-gram 相关性过滤
+                results = self._filter_by_relevance(results, context, min_score=0.12)
             except Exception as e:
                 import logging
                 logging.debug(f"Semantic recall failed: {e}")
@@ -160,6 +162,8 @@ class MemoryRecall:
                         content=p.description if hasattr(p, 'description') else str(p),
                         metadata={"id": p.id if hasattr(p, 'id') else None},
                     ))
+                # FIX-09: bi-gram 相关性过滤
+                results = self._filter_by_relevance(results, context, min_score=0.15)
             except Exception as e:
                 import logging
                 logging.debug(f"Pattern recall failed: {e}")
@@ -182,6 +186,8 @@ class MemoryRecall:
                             content=lesson.lesson if hasattr(lesson, 'lesson') else str(lesson),
                             metadata={"type": lesson.event_type if hasattr(lesson, 'event_type') else 'lesson'},
                         ))
+                # FIX-09: bi-gram 相关性过滤
+                results = self._filter_by_relevance(results, context, min_score=0.15)
             except Exception as e:
                 import logging
                 logging.debug(f"Experience recall failed: {e}")
@@ -214,6 +220,36 @@ class MemoryRecall:
         # 过滤短词和停用词
         stopwords = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or', 'with'}
         return [w for w in words if len(w) > 2 and w not in stopwords][:5]
+
+    @staticmethod
+    def _bi_gram_overlap(text_a: str, text_b: str) -> float:
+        """计算两个文本的字符 bi-gram 重叠度 (0.0-1.0)。
+
+        用于中文相关性过滤：相邻字符对集合的 Jaccard 相似度。
+        """
+        def _grams(s: str) -> set:
+            s = s.lower().strip()
+            return set(s[i:i+2] for i in range(len(s) - 1) if s[i:i+2].strip())
+        ga, gb = _grams(text_a), _grams(text_b)
+        if not ga or not gb:
+            return 0.0
+        intersection = ga & gb
+        union = ga | gb
+        return len(intersection) / len(union) if union else 0.0
+
+    def _filter_by_relevance(self, results: list[RecallResult],
+                             context: str | None, min_score: float = 0.15
+                             ) -> list[RecallResult]:
+        """FIX-09: 按 bi-gram 重叠度过滤召回结果。"""
+        if not context:
+            return results
+        filtered = []
+        for r in results:
+            score = self._bi_gram_overlap(context, r.content)
+            if score >= min_score:
+                r.relevance = max(r.relevance, score)
+                filtered.append(r)
+        return filtered
 
     def format_for_prompt(self, context: str | None = None, limit: int = 10) -> str:
         """格式化为系统提示注入字符串."""

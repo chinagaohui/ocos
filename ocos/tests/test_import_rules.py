@@ -169,7 +169,8 @@ ALLOWED_IMPORTS = {
                          "ocos.engines",
                          "ocos.capability_reality", "ocos.event_memory",
                          "ocos.event", "ocos.personal_intelligence",
-                         "ocos.learning"],  # FIX-08: Learning persistence (load_learning_summary)
+                         "ocos.learning",  # FIX-08: Learning persistence
+                         "ocos.world_model"],  # FIX-10: World state in context
                          # UX 自我认知 + PW-1.2 风格画像 + PW-1.4 内视执行史
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",

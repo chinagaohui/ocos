@@ -207,6 +207,19 @@ class ChatResponder:
         except Exception as e:
             logger.debug("learning rules summary failed: %s", e)
 
+        # FIX-10: 世界状态 + 自我模型摘要
+        try:
+            from ocos.world_model.world_store import WorldStore
+            ws = WorldStore()
+            wstate = ws.cognitive_world_state()
+            if wstate.get("available"):
+                lines.append(
+                    f"世界状态: {wstate.get('entity_count', 0)} 实体, "
+                    f"{wstate.get('relation_count', 0)} 关系"
+                )
+        except Exception:
+            pass
+
         return "\n".join(lines)
 
     # ── E: 内视（深度自省报告） ──────────────────────────────────────
