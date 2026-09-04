@@ -829,10 +829,17 @@ class MasterAgent:
 
             task_id = f"task-{uuid.uuid4().hex[:8]}"
             goal_id = f"goal-{self.agent_id}"
+            base_description = str(decision.get("based_on", decision))
+
+            # writer 任务前置校验：拒绝模糊描述
+            if agent_type == "writer" and self._is_vague_writer_task(base_description):
+                logger.debug(f"Phase D: writer task rejected as vague: {base_description[:80]}")
+                return None
+
             task = Task(
                 id=task_id,
                 goal_id=goal_id,
-                description=str(decision.get("based_on", decision)),
+                description=base_description,
                 task_type="execute",
                 agent_type=agent_type,
                 inputs=(),
@@ -848,6 +855,26 @@ class MasterAgent:
         except Exception as e:
             logger.debug(f"Phase D: orchestration dispatch failed (non-blocking): {e}")
             return None
+
+    @staticmethod
+    def _is_vague_writer_task(description: str) -> bool:
+        """判断 writer 任务描述是否过于模糊。
+
+        模糊描述特征：
+          - 纯指令无上下文（如"生成报告"、"写一章"）
+          - 字数 < 5 且不含具体主题
+        """
+        desc = description.strip()
+        if len(desc) < 3:
+            return True
+        # 常见模糊模板：仅动词+名词，无具体上下文
+        vague_patterns = ["生成报告", "写一章", "撰写", "创作", "生成章节"]
+        if any(p in desc for p in vague_patterns):
+            # 如果没有任何具体上下文信息，判定为模糊
+            contextual_keywords = ["oc", "chapter", "剧情", "设定", "大纲", "第", "关于", "基于", "分析", "总结"]
+            if not any(kw in desc.lower() for kw in contextual_keywords):
+                return True
+        return False
 
     def _recall_and_record(self, decision: Any) -> None:
         """Phase H: 召回相关记忆并记录当前决策到用户记忆."""
