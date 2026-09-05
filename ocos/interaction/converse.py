@@ -26,6 +26,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from ocos.logging import get_logger
@@ -186,10 +187,14 @@ class ChatResponder:
     """
 
     def __init__(self, db_path: str, session_manager: Any = None,
-                 tool_executor: Any = None) -> None:
+                 tool_executor: Any = None,
+                 permission_gateway: Any = None) -> None:
         self._db_path = db_path
         self._session_manager = session_manager
         self._tool_executor = tool_executor
+        # S1.3 (白皮书 P1-2b): USE| 动作执行前的权限网关；
+        # 未注入时在 _gateway_check 惰性创建默认 PermissionGateway
+        self._permission_gateway = permission_gateway
 
     # ── B: 自我认知包 ────────────────────────────────────────────────
 
@@ -852,17 +857,59 @@ class ChatResponder:
                 logger.debug("Session append failed: %s", e)
         return out
 
+    def _gateway_check(self, capability: str, params: dict) -> str | None:
+        """S1.3 (白皮书 P1-2b): USE| 动作执行前的权限网关裁决（fail-closed）。
+
+        返回 None = 放行；否则返回拦截原因（回注观察块）。
+        网关组件不可导入时不放大故障（沙盒白名单仍兜底），但记录日志。
+        """
+        try:
+            from ocos.capability.permission_gateway import PermissionGateway
+        except Exception as e:
+            logger.warning("permission gateway unavailable, skip pre-check: %s", e)
+            return None
+        if self._permission_gateway is None:
+            self._permission_gateway = PermissionGateway()
+        action_map = {"shell": "run_command", "fs_read": "fs_read"}
+        action = action_map.get(capability, capability)
+        if capability == "shell":
+            input_spec = {"command": str(params.get("command", ""))}
+        else:
+            input_spec = {"path": str(params.get("path", ""))}
+        contract = SimpleNamespace(
+            contract_id=f"converse-{capability}",
+            agent_id="converse",
+            action=action,
+            input_spec=input_spec)
+        try:
+            result = self._permission_gateway.validate(contract)
+        except Exception as e:
+            # 网关自身故障 → fail-closed（拒执行），与 GAP-P0-3 语义一致
+            logger.warning("gateway check error (fail-closed): %s", e)
+            return f"gateway error: {e}"
+        if getattr(result, "allowed", True):
+            return None
+        violations = getattr(result, "violations", None) or []
+        reason = "; ".join(str(v) for v in violations[:3]) or getattr(
+            result, "reason", "") or "denied by permission gateway"
+        return reason[:200]
+
     def _run_use_actions(self, use_lines: list) -> str:
         """FIX-T1/T3: 执行对话层动作行 — 只读白名单 + 沙盒护栏，产出观察块。
 
         写类/未知能力一律拒绝（对话层不开写权限，写操作仍走目标管线）；
         沙盒拦截/失败也如实回注观察，让 LLM 据实作答而非编造。
+        S1.3: 每个动作执行前先过权限网关（反向控制/危险模式拦截）。
         """
         blocks: list[str] = []
         for name, params in use_lines:
             if name not in _USE_ALLOWED:
                 blocks.append(f"[{name}] 拒绝: 对话层仅开放只读动作 "
                               f"{list(_USE_ALLOWED)}")
+                continue
+            deny_reason = self._gateway_check(name, params)
+            if deny_reason is not None:
+                blocks.append(f"[{name}] 被权限网关拦截: {deny_reason}")
                 continue
             try:
                 res = self._tool_executor(name, params) or {}

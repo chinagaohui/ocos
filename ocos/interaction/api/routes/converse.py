@@ -21,6 +21,21 @@ from ocos.interaction.cli.paths import resolve_db_path
 router = APIRouter()
 
 
+
+def _guard_or_403(action: str) -> None:
+    """S1.3 (白皮书 P1-2b): API 写面端点统一过 PermissionGuard。
+
+    与 S1.2 Bearer Token 认证叠加为两层；拒绝 → 403。
+    """
+    from ocos.interaction.base import PermissionGuard
+    result = PermissionGuard().check(action)
+    if not getattr(result, "allowed", False):
+        violations = getattr(result, "violations", None) or [action]
+        raise HTTPException(
+            status_code=403,
+            detail=f"permission guard denied: {'; '.join(str(v) for v in violations)[:200]}")
+
+
 def _db() -> str:
     return resolve_db_path()
 
@@ -34,6 +49,7 @@ async def converse(body: dict[str, Any]) -> APIResponse:
     请求: {"message": "..."}
     响应: {reply, provider, mock}
     """
+    _guard_or_403("create_goal")
     message = str(body.get("message", "")).strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
@@ -149,6 +165,7 @@ async def self_improve() -> APIResponse:
     提案入待批队列（action_type=self_upgrade），人工批准后应用到
     ~/.ocos/self_knowledge.md 并回注对话提示词。
     """
+    _guard_or_403("self_improve")
     from ocos.interaction.converse import ChatResponder
     out = await asyncio.to_thread(ChatResponder(db_path=_db()).self_improve)
     return APIResponse(success=True, message="ok", data=out)
@@ -212,6 +229,7 @@ async def deny(pid: str) -> APIResponse:
 
 
 def _decide(pid: str, approved: bool) -> APIResponse:
+    _guard_or_403("approve_action")
     from ocos.execution.pending import PendingStore
     from ocos.execution.bridge import DecisionBridge
 

@@ -41,6 +41,11 @@ ALLOWED_ACTIONS: frozenset[str] = frozenset({
     # 2026-08-23: OCOS 智脑质量分析/趋势检测（OpenTale 生成流程调用）
     "analyze_quality",
     "analyze_trend",
+    # S1.3 (白皮书 P1-2b): API 写面显式白名单
+    # self_improve = 产出"提案"入待批队列（应用仍需人工批准，非直接改写）
+    "self_improve",
+    # approve_action = 对待批队列的人工审批决策（执行侧另有 S1.1 溯源校验）
+    "approve_action",
 })
 
 # 入口层禁止的操作
