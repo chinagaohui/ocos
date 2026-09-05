@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import time
 
@@ -26,6 +27,48 @@ _DEFAULT_WORKDIR = "/tmp/ocos-sandbox"
 
 # 输出限制
 _MAX_OUTPUT_BYTES = 50_000
+
+# S1.7 (白皮书 P1-12): 默认只读白名单 — 黑名单仅作第二层兜底。
+# OCOS_DW_SHELL_WHITELIST 可覆盖（逗号分隔命令前缀）。
+_DEFAULT_DW_WHITELIST: tuple[str, ...] = (
+    "cat", "ls", "echo", "grep", "head", "tail", "wc", "find", "uname",
+    "df", "free", "uptime", "ps", "whoami", "date", "hostname", "id",
+)
+
+# shell 元字符 — 命中即拒（默认路径 shell=False 列表执行，无需 shell 语法）
+_DW_METACHARS: tuple[str, ...] = (";", "|", "&", "`", "$", ">", "<",
+                                  "\n", "\r")
+
+_DW_SENSITIVE_TOKENS = ("/etc/", "/boot/", "/dev/sd", "~/.ssh",
+                        "shadow", "id_rsa")
+
+
+def _load_dw_whitelist() -> tuple[str, ...]:
+    raw = os.environ.get("OCOS_DW_SHELL_WHITELIST", "")
+    if raw.strip():
+        return tuple(w.strip() for w in raw.split(",") if w.strip())
+    return _DEFAULT_DW_WHITELIST
+
+
+def _validate_dw_command(command: str) -> list[str]:
+    """S1.7: 白名单 + 元字符 + 敏感路径三重校验，返回安全 token 列表。"""
+    metachars = _DW_METACHARS
+    for ch in metachars:
+        if ch in command:
+            raise PermissionError(f"blocked command metacharacter: {ch!r}")
+    tokens = shlex.split(command)
+    if not tokens:
+        raise ValueError("empty command")
+    whitelist = _load_dw_whitelist()
+    if tokens[0] not in {w.split()[0] for w in whitelist}:
+        raise PermissionError(
+            f"blocked: command not in whitelist: {tokens[0]} "
+            f"(OCOS_DW_SHELL_WHITELIST 可配置)")
+    joined = " ".join(tokens).lower()
+    for marker in _DW_SENSITIVE_TOKENS:
+        if marker.lower() in joined:
+            raise PermissionError(f"blocked: sensitive path: {marker}")
+    return tokens
 
 # 危险命令黑名单（冻结基线）
 BLOCKED_COMMANDS: tuple[str, ...] = (
@@ -57,16 +100,21 @@ def _is_blocked(command: str) -> str | None:
 # ── 真实执行 ─────────────────────────────────────────────────────
 
 
-def _real_exec(command: str, workdir: str, timeout: int) -> tuple[bool, str, int]:
+def _real_exec(command: "str | list[str]", workdir: str,
+               timeout: int) -> tuple[bool, str, int]:
     """使用 subprocess.run 执行命令。
+
+    S1.7: sandbox_exec 校验路径传入 token 列表（shell=False）；
+    保留 str 入口兼容（内部测试/直调，仍 shell=True）。
 
     Returns:
         (success, output_or_error, exit_code)
     """
+    use_shell = isinstance(command, str)
     try:
         result = subprocess.run(
             command,
-            shell=True,
+            shell=use_shell,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -116,6 +164,14 @@ def sandbox_exec(op: DigitalOperation) -> OperationResult:
             f"blocked command pattern: {blocked}",
         )
 
+    # S1.7: 白名单 + 元字符 + 敏感路径校验（dry_run 与真实模式一致，
+    # 让模拟结果如实反映"该命令会被拒"）
+    try:
+        tokens = _validate_dw_command(command)
+    except (PermissionError, ValueError) as e:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return OperationResult.rejected(op.op_id, str(e))
+
     # dry_run
     if _DRY_RUN:
         duration_ms = int((time.monotonic() - start) * 1000)
@@ -132,7 +188,7 @@ def sandbox_exec(op: DigitalOperation) -> OperationResult:
     # 确保工作目录存在
     os.makedirs(workdir, exist_ok=True)
 
-    ok, output, exit_code = _real_exec(command, workdir, timeout)
+    ok, output, exit_code = _real_exec(tokens, workdir, timeout)
     duration_ms = int((time.monotonic() - start) * 1000)
 
     if ok:

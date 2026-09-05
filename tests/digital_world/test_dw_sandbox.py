@@ -39,7 +39,9 @@ def test_sandbox_blocks_curl():
 
 
 def test_sandbox_allowed_command():
-    op = _op("python3 script.py")
+    # S1.7 语义变更: 默认白名单制 — "python3 script.py"（任意代码执行）
+    # 不再默认放行，改用白名单内命令
+    op = _op("uname -a")
     result = sandbox_exec(op)
     assert result.status == "success"
 
