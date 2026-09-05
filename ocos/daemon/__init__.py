@@ -245,6 +245,21 @@ class ResidentRuntime:
             self._state = DaemonState.STARTING
             self._stop_event.clear()
             self._runtime.boot()
+            # S2.2 (修复方案评审 R3): auto 模式下 ASK 类动作自动执行——
+            # 启动时显著警告，生产环境建议 OCOS_APPROVAL_MODE=ask。
+            # 全局默认值切换按评审版 Sprint 3 收尾统一执行。
+            try:
+                from ocos.execution.pending import approval_disabled
+                if approval_disabled():
+                    print("⚠ OCOS_APPROVAL_MODE=auto：写类/命令类动作将"
+                          "自动执行（无人工审批）。生产环境建议设 "
+                          "OCOS_APPROVAL_MODE=ask")
+                    logger.warning(
+                        "OCOS_APPROVAL_MODE=auto — ASK-class actions will "
+                        "be auto-executed without human approval; "
+                        "production should set OCOS_APPROVAL_MODE=ask")
+            except Exception:
+                logger.debug("approval mode banner skipped")
             # FIX-VAL3: 启动时回收 stale-ACTIVE 孤儿目标（上进程认领后崩溃遗留）。
             # 必须在 tick 线程启动前执行：运行期调用会错误回收本进程正在执行的目标。
             if self._domain_goal_store is not None:
