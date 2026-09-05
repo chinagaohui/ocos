@@ -56,31 +56,36 @@ class OrganDef:
 
 
 # P39-P50 器官清单
+# S2.12 (白皮书 P1-9): 原注册表与真实模块失配——3 个模块路径不存在
+# (ocos.self_model/ocos.continuity/ocos.os)、12 器官的 required_exports
+# 在对应包顶层全部缺失，结构体检对健康系统报大面积 MISSING。
+# 现按 2026-09-05 实测的各包真实导出修正（每项经 importlib 核验）。
+# 免责：结构体检仅校验"模块可导入 + 导出符号存在"，不代表运行时健康。
 OCOS_ORGANS: list[OrganDef] = [
     OrganDef("Runtime", "P39", "ocos.runtime",
-             ["CognitiveArchitecture"]),
-    OrganDef("SelfModel", "P40", "ocos.self_model",
-             ["SelfModel"]),
+             ["RuntimeKernel", "LifecycleManager"]),
+    OrganDef("SelfModel", "P40", "ocos.self",
+             ["SelfModel", "ExperienceProfile"]),
     OrganDef("Memory", "P41", "ocos.memory",
-             ["MemoryStore", "Memory"]),
+             ["MemoryRecall", "RecallResult"]),
     OrganDef("WorldModel", "P42", "ocos.world_model",
-             ["WorldModel"]),
+             ["WorldStore", "WorldValidator"]),
     OrganDef("Decision", "P43", "ocos.decision",
-             ["DecisionEngine"]),
+             ["DecisionProposal", "DecisionValidator"]),
     OrganDef("Extension", "P44", "ocos.extension",
-             ["ExtensionManager"]),
+             ["DiscoveryEngine"]),
     OrganDef("Capability", "P45", "ocos.capability",
-             ["CapabilityManager"]),
+             ["CapabilityRegistry"]),
     OrganDef("CognitiveLoop", "P46", "ocos.cognitive_loop",
-             ["CognitiveLoop"]),
+             ["LoopOrchestrator"]),
     OrganDef("Evolution", "P47", "ocos.evolution",
-             ["EvolutionEngine"]),
+             ["EvolutionProposer", "ImprovementDetector"]),
     OrganDef("PersonalIntelligence", "P48", "ocos.personal_intelligence",
-             ["PersonalIntelligence"]),
-    OrganDef("Continuity", "P49", "ocos.continuity",
-             ["ContinuityManager"]),
-    OrganDef("OS", "P50", "ocos.os",
-             ["CognitiveOS"]),
+             ["PersonalizationEngine", "CognitiveSignature"]),
+    OrganDef("Continuity", "P49", "ocos.cognitive_continuity",
+             ["ContinuityCheckpoint", "LifeMemoryEngine"]),
+    OrganDef("OS", "P50", "ocos.os_v1",
+             ["PersonalCognitiveOS", "OSFreeze"]),
 ]
 
 
