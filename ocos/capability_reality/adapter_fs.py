@@ -70,14 +70,22 @@ class FilesystemAdapter(CapabilityAdapter):
             raise ValueError(f"unknown fs operation: {op}")
 
     def _resolve(self, path: str) -> str:
-        """将路径解析为绝对路径，验证在安全根内。"""
+        """将路径解析为绝对路径，验证在安全根内。
+
+        S1.5 (白皮书 P1-3): realpath 归一（解 symlink）+
+        ``Path.is_relative_to`` 严格判属 — 替换原先的 ``startswith``
+        前缀检查（"/home/u/docs" 可被 "/home/u/docs-evil" 绕过）。
+        """
         if not path:
             raise ValueError("empty path")
-        resolved = os.path.abspath(os.path.expanduser(path))
+        resolved = os.path.realpath(os.path.expanduser(path))
         # 沙盒检查
         if self.config.sandboxed:
-            if not any(resolved.startswith(root) for root in self.safe_roots):
-                raise PermissionError(f"path outside safe roots: {resolved}")
+            for root in self.safe_roots:
+                real_root = os.path.realpath(root)
+                if pathlib.Path(resolved).is_relative_to(pathlib.Path(real_root)):
+                    return resolved
+            raise PermissionError(f"path outside safe roots: {resolved}")
         return resolved
 
     def _read(self, path: str) -> dict:
