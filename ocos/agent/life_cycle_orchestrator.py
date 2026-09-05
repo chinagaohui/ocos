@@ -13,11 +13,14 @@
 
 from __future__ import annotations
 
+import logging
 from enum import Enum, auto
 from typing import Any, Optional
 
 from ocos.agent.state import AgentState, AgentStatus
 from ocos.agent.master_agent import MasterAgent
+
+logger = logging.getLogger(__name__)
 
 
 class TickResult(Enum):
@@ -83,15 +86,67 @@ class LifeCycleOrchestrator:
         except Exception:
             return TickResult.ERROR
 
+    # ── S2.13 (白皮书 P1-10): 注意力接口兼容层 ────────────────────────
+    # 生产注入的 CognitiveAttentionController 无 needs_sleep/reset
+    # （ fatigue 属性 + reset_fatigue()），旧 Attention（agent/attention.py）
+    # 才有 needs_sleep/tick/reset。此前 _tick_idle/_tick_sleep 无守卫直调
+    # → AttributeError 被 tick() 吞为 TickResult.ERROR（"疲劳自动睡眠"
+    # 生产路径从未运转）。现按能力探测适配，并在无能力时 warning 留痕。
+
+    def _attention_fatigued(self) -> bool:
+        """注意力疲劳判定：优先 needs_sleep()，回退 fatigue 属性阈值。"""
+        attention = self.agent.attention
+        if hasattr(attention, "needs_sleep"):
+            try:
+                return bool(attention.needs_sleep())
+            except Exception as e:
+                logger.warning("attention.needs_sleep failed: %s", e)
+                return False
+        fatigue = getattr(attention, "fatigue", None)
+        if callable(fatigue):
+            fatigue = fatigue()
+        if isinstance(fatigue, (int, float)):
+            return fatigue > 0.9
+        logger.warning(
+            "attention 对象无疲劳判定能力（needs_sleep/fatigue 均缺失）"
+            " — 跳过疲劳检查")
+        return False
+
+    def _attention_reset(self) -> None:
+        """注意力重置：优先 reset()，回退 reset_fatigue()。"""
+        attention = self.agent.attention
+        if hasattr(attention, "reset"):
+            try:
+                attention.reset()
+                return
+            except Exception as e:
+                logger.warning("attention.reset failed: %s", e)
+                return
+        if hasattr(attention, "reset_fatigue"):
+            try:
+                attention.reset_fatigue()
+                return
+            except Exception as e:
+                logger.warning("attention.reset_fatigue failed: %s", e)
+
+    def _attention_tick(self) -> None:
+        """注意力 tick（带守卫；无 tick 能力时跳过）。"""
+        attention = self.agent.attention
+        if hasattr(attention, "tick"):
+            try:
+                attention.tick(self.tick_seconds)
+            except Exception as e:
+                logger.warning("attention.tick failed: %s", e)
+
     def _tick_idle(self) -> TickResult:
         """IDLE 状态下执行完整认知循环。"""
-        # 检查注意力疲劳
-        if self.agent.attention.needs_sleep():
+        # 检查注意力疲劳（S2.13: 兼容层）
+        if self._attention_fatigued():
             self.agent.sleep()
             return TickResult.SLEEP_NEEDED
 
-        # 更新注意力 Tick
-        self.agent.attention.tick(self.tick_seconds)
+        # 更新注意力 Tick（S2.13: 兼容层）
+        self._attention_tick()
 
         # 执行认知循环
         self.agent.observe()
@@ -113,8 +168,8 @@ class LifeCycleOrchestrator:
 
     def _tick_sleep(self) -> TickResult:
         """SLEEP 状态下执行睡眠周期。"""
-        # 模拟睡眠时间（重置注意力）
-        self.agent.attention.reset()
+        # 模拟睡眠时间（重置注意力 — S2.13: 兼容层）
+        self._attention_reset()
         self.agent.dream()
         return TickResult.SLEEP_CYCLE_DONE
 
