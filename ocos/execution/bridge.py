@@ -643,7 +643,9 @@ class DecisionBridge:
         if not cleaned.startswith("select"):
             return {"ok": False, "error": "only SELECT queries allowed"}
         try:
-            db_path = str(Path.home() / ".ocos" / "ocos.db")
+            # S3.8 (白皮书 P3): 使用实例 db_path（原硬编码 ~/.ocos/ocos.db
+            # ——daemon 用自定义 db_path 时 QUERY_DB 查错库）
+            db_path = self._db_path or str(Path.home() / ".ocos" / "ocos.db")
             conn = sqlite3.connect(db_path, timeout=5.0)
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()

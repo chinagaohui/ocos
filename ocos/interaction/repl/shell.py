@@ -31,7 +31,10 @@ class OcosShell(cmd.Cmd):
         self.session = InteractionSession(caller="repl")
 
         # REPL 持有持久化上下文（长连接）
-        db_path = os.environ.get("OCOS_DB_PATH", "ocos.db")
+        # S3.6 (白皮书 P3): 走 cli/paths 单一来源（原相对路径 "ocos.db"
+        # 依赖 cwd——任意目录启动 REPL 会读写 ./ocos.db，与 CLI/daemon 分裂）
+        from ocos.interaction.cli.paths import resolve_db_path
+        db_path = resolve_db_path()
         self.ctx = InteractionContext(db_path=db_path)
 
         self._init_commands()
