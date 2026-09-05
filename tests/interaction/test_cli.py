@@ -148,7 +148,8 @@ def test_cli_self_identity():
     assert main(["self", "identity"]) == 0
 
 def test_cli_trace_show():
-    assert main(["trace", "show", "TRACE-001"]) == 0
+    # S4.2: 决策追踪存储未接线 → 明确"未实现"退出码 2（原 0 误导脚本）
+    assert main(["trace", "show", "TRACE-001"]) == 2
 
 def test_cli_goal_status():
     # FIX-VAL2: 不存在的 goal 必须返回非零（脚本化语义），而非静默 0

@@ -6,7 +6,11 @@ from ocos.interaction.base import InteractionSession, PermissionGuard
 
 
 def cmd_trace_show(args, session: InteractionSession) -> int:
-    """ocos trace show <trace_id>"""
+    """ocos trace show <trace_id>
+
+    S4.2: 决策追踪存储未接线 — 明确返回"未实现"（退出码 2），
+    不再打印 200 空结果误导脚本调用方。
+    """
     guard = PermissionGuard()
     result = guard.check("view_trace")
     if not result.allowed:
@@ -14,6 +18,6 @@ def cmd_trace_show(args, session: InteractionSession) -> int:
         return 1
 
     print(f"Decision Trace: {args.trace_id}")
-    print(f"  Note: DecisionTrace store integration TBD.")
+    print("  未实现：决策追踪存储未接线（S4.2 占位端点 501 化）")
     session.record_query()
-    return 0
+    return 2
