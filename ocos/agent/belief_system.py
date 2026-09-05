@@ -215,6 +215,33 @@ class BeliefSystem:
                 removed += 1
             return removed
 
+    def prune_stale(self, max_age_days: float = 30.0,
+                    min_confidence: float = 0.4) -> int:
+        """P1.4 (AGI 计划): 淘汰低置信且长期未被检索的信念。
+
+        判定：confidence < min_confidence 且 access_count == 0（从未被
+        query/get_held 之外的检索触碰）且 last_updated 超过 max_age_days。
+        仅控制内存注入面（持久化层 active 状态由 L6 门控管理），避免
+        陈旧低质经验污染决策注入（P1.2 通道）。返回淘汰数。
+        """
+        cutoff = time.time() - max_age_days * 86400
+        with self._lock:
+            to_remove = [
+                key for key, b in self._beliefs.items()
+                if b.confidence < min_confidence
+                and b.access_count == 0
+                and b.last_updated < cutoff
+            ]
+            for key in to_remove:
+                del self._beliefs[key]
+        if to_remove:
+            try:
+                from ocos.monitoring.manager import record_global
+                record_global("belief_pruned", float(len(to_remove)))
+            except Exception:
+                pass
+        return len(to_remove)
+
     def clear(self) -> None:
         """清空所有信念。"""
         with self._lock:

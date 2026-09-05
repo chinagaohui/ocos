@@ -258,3 +258,106 @@ def test_prior_knowledge_empty_without_source():
     # 注入源但无匹配 → 空
     b.attach_learning_source(lambda desc: [])
     assert b._prior_knowledge("检查磁盘使用率") == ""
+
+
+# ── P1.3: ER-2 Behavioral Delta（学习前后同类任务行为可归因变化）─────────
+
+
+def _mock_planner(prompt: str) -> str:
+    """模拟规划 LLM：注入块含 df -h 经验 → 走 df -h 路径；否则走 free 次优。"""
+    if "df -h" in prompt:
+        return "RUN|df -h\n"
+    return "RUN|free -h\n"
+
+
+def test_er2_behavioral_delta_attributable():
+    """ER-2 门：沉淀经验 → 注入 → 同类任务行为变化可归因于该 artifact。"""
+    from ocos.agent.agent_runtime import AgentRuntime
+    from ocos.agent.belief_system import BeliefSystem
+    from ocos.agent.knowledge_base import KnowledgeBase
+    from ocos.execution.bridge import DecisionBridge
+    from ocos.behavior.trajectory import (
+        compare_trajectories, record_trajectory,
+    )
+
+    # ── Episode1: 无学习产物（基线）→ 次优路径 free ──
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt._recent_results = []
+    rt.beliefs = BeliefSystem()
+    rt.knowledge = KnowledgeBase()
+    b1 = DecisionBridge()
+    b1.attach_learning_source(rt.learning_artifacts)
+    prompt1 = "任务描述：检查磁盘使用率"
+    action1 = _mock_planner(prompt1).strip()
+    record_trajectory("er2-demo", prompt1,
+                      {"executed": [action1], "pending": [], "denied": [],
+                       "total": 1},
+                      "completed")
+
+    # ── 学习：成功经验沉淀信念（Episode1 的教训）──
+    rt.beliefs.add(
+        statement="当磁盘使用率高时, 使用 df -h 查看分区占用有效",
+        confidence=0.8)
+    rt.knowledge.add("磁盘使用率高", "effective_action", "df -h 查看分区占用",
+                     confidence=0.7)
+
+    # ── Episode2: 同类任务 X' → 注入命中 → 行为走 df -h ──
+    b2 = DecisionBridge()
+    b2.attach_learning_source(rt.learning_artifacts)
+    desc2 = "检查根分区磁盘使用率"
+    prompt2 = "任务描述：" + desc2
+    knowledge = b2._prior_knowledge(desc2)
+    assert "df -h" in knowledge, "方法论经验应被检索注入"
+    assert "artifact" in knowledge, "注入块应带 artifact_id（ER-2 归因）"
+    action2 = _mock_planner(prompt2 + "\n\n" + knowledge).strip()
+    assert action2 == "RUN|df -h", "行为应从 free 次优路径变为 df -h 经验路径"
+    record_trajectory("er2-demo", desc2,
+                      {"executed": [action2], "pending": [], "denied": [],
+                       "total": 1},
+                      "completed")
+
+    # ── 归因判定：路径变化可归因（added=df -h, removed=free -h）──
+    from ocos.behavior.trajectory import load_trajectories
+    rows = load_trajectories("er2-demo")
+    delta = compare_trajectories(rows[0], rows[1])
+    assert delta["path_changed"]["added"] == ["RUN|df -h"]
+    assert delta["path_changed"]["removed"] == ["RUN|free -h"]
+    # P1.2 实际链路中 attributable_to 由注入块中的 artifact_id 提供
+    assert "artifact" in knowledge
+
+
+# ── P1.4: 学习产物治理（陈旧淘汰 + 边界衔接）─────────────────────────────
+
+
+def test_prune_stale_removes_old_low_confidence_beliefs():
+    """低置信 + 从未被检索 + 超期 → 淘汰；高置信/新信念保留。"""
+    import time
+    from ocos.agent.belief_system import BeliefSystem
+
+    bs = BeliefSystem()
+    bs.add("陈旧低质经验 a", confidence=0.3)
+    bs.add("陈旧低质经验 b", confidence=0.2)
+    bs.add("高置信有效经验", confidence=0.8)
+    # 人为把低置信信念的 last_updated 推回 40 天前
+    old = time.time() - 40 * 86400
+    for key, b in bs._beliefs.items():
+        if "陈旧低质" in key:
+            b.last_updated = old
+    pruned = bs.prune_stale(max_age_days=30, min_confidence=0.4)
+    assert pruned == 2
+    remaining = {b.statement for b in bs.get_all()}
+    assert "高置信有效经验" in remaining
+    assert "陈旧低质经验 a" not in remaining
+    # 再跑一次无新淘汰
+    assert bs.prune_stale() == 0
+
+
+def test_prune_keeps_recently_accessed_beliefs():
+    """曾被检索（access_count>0）的低置信信念不被误杀。"""
+    from ocos.agent.belief_system import BeliefSystem
+
+    bs = BeliefSystem()
+    bs.add("近期被用过的经验", confidence=0.3)
+    for b in bs._beliefs.values():
+        b.access_count = 1
+    assert bs.prune_stale() == 0

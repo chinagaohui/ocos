@@ -1548,6 +1548,11 @@ class AgentRuntime:
         """休眠周期 — 巩固记忆、信念衰减、持久化工作记忆。"""
         self.memory.consolidate_to_long_term()
         self.beliefs.decay_all(rate=0.02)
+        # P1.4 (AGI 计划): 陈旧低质信念淘汰（低置信 + 长期未检索）
+        try:
+            self.beliefs.prune_stale()
+        except Exception:
+            pass
         self.experiences.replay_important(count=2)
         # Phase 21: Persist working memory during sleep
         self._persist_working_memory()
