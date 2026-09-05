@@ -56,6 +56,24 @@ async def create_goal(req: GoalCreateRequest):
         )
         goal = goal_req.to_user_goal()
 
+        # S2.8 (白皮书 P2): 目标持久化到 GoalStore（原实现仅构造内存对象
+        # 不落库——API 建的目标即丢失，与 CLI goal create 行为漂移）。
+        # PENDING + HUMAN 语义与 CLI 一致，daemon 认领后执行。
+        from ocos.interaction.cli.paths import resolve_db_path
+        from ocos.goal.store import GoalStore
+        store = GoalStore(db_path=resolve_db_path())
+        store.save(
+            goal_id=goal.id, level="USER", status="PENDING",
+            description=goal.objective,
+            priority=float(goal.priority),
+            source="api",
+            origin_level="HUMAN",
+            authority="AUTONOMOUS",
+            metadata={"caller": "api",
+                      "domain": goal.domain.value,
+                      "constraints": list(req.constraints or [])},
+        )
+
         return APIResponse(
             success=True,
             message=f"Goal created: {goal.id}",
@@ -79,9 +97,19 @@ async def get_goal(goal_id: str):
     if not result.allowed:
         raise HTTPException(status_code=403, detail=result.violations)
 
-    # Note: GoalStore integration TBD
+    # S2.8: 真实查询 GoalStore（原为 TBD 占位空结果）
+    from ocos.interaction.cli.paths import resolve_db_path
+    from ocos.goal.store import GoalStore
+    store = GoalStore(db_path=resolve_db_path())
+    row = store.load(goal_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"goal not found: {goal_id}")
     return APIResponse(
         success=True,
         message=f"Goal {goal_id} queried",
-        data={"goal_id": goal_id, "note": "GoalStore integration TBD"},
+        data={"goal_id": goal_id,
+              "status": row.get("status"),
+              "description": (row.get("description") or "")[:200],
+              "origin_level": row.get("origin_level"),
+              "priority": row.get("priority")},
     )
