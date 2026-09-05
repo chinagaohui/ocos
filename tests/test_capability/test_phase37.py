@@ -270,12 +270,18 @@ class TestCalibrationStore:
         assert result.reason == "INSUFFICIENT_SAMPLES"
 
     def test_enough_samples_applied(self):
-        """样本达到门槛 → 应用。"""
+        """样本达到门槛 → 本地校准累计（S2.14: 后端未接线，诚实降级）。
+
+        原断言 applied=True 依赖对不存在方法的调用假成功——
+        修复后 applied=False 如实上报，delta 仍在本地累计。
+        """
         store = CalibrationStore()
         for _ in range(CALIBRATION_MIN_SAMPLES - 1):
             store.record_calibration("code_gen", "gpt4", 0.05)
         result = store.record_calibration("code_gen", "gpt4", 0.05)
-        assert result.applied is True
+        assert result.applied is False
+        assert "CALIBRATED" in result.reason
+        assert result.samples >= CALIBRATION_MIN_SAMPLES
 
     def test_cumulative_delta(self):
         """累计 delta 反映所有样本的平均。"""
@@ -285,7 +291,7 @@ class TestCalibrationStore:
         store.record_calibration("code_gen", "gpt4", 0.0)
         store.record_calibration("code_gen", "gpt4", 0.0)
         result = store.record_calibration("code_gen", "gpt4", 0.0)
-        assert result.applied
+        assert result.applied is False  # S2.14: 诚实降级
         assert abs(result.cumulative_delta) < 0.001  # 总和为 0
 
     def test_get_status(self):

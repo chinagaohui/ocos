@@ -219,7 +219,14 @@ class EventBus:
         with self._lock:
             self._pending.append(ce)
             self._total_received += 1
-        logger.debug("[EVENT] type=%s source=%s summary=%s", ce.event_type, ce.source.name, ce.summary)
+        # S2.9: push 的 DEBUG 日志同样脱敏（原打全文 summary——用户消息明文）
+        try:
+            from ocos.logging.formatter import redact_text
+            _push_summary = redact_text(str(ce.summary), limit=50)
+        except Exception:
+            _push_summary = str(ce.summary)[:50]
+        logger.debug("[EVENT] type=%s source=%s summary=%s",
+                     ce.event_type, ce.source.name, _push_summary)
         return ce
 
     def push_file_change(self, path: str, operation: str = "modified") -> CognitiveEvent:

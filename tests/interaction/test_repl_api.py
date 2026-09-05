@@ -255,10 +255,10 @@ def test_get_trace_api(client):
 
 
 def test_get_goal_api(client):
-    resp = client.get("/ocos/goal/GOAL-abc12345")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is True
+    # S2.8: GET /ocos/goal/{id} 已接 GoalStore 真实查询——
+    # 不存在的目标返回 404（原 TBD 占位恒 200）
+    resp = client.get("/ocos/goal/GOAL-nonexistent-xyz")
+    assert resp.status_code == 404
 
 
 # ── IFACE-16: API 权限边界 ───────────────────────────────────────
@@ -329,8 +329,9 @@ def test_shared_permission_rules():
     # 6 条禁止规则
     assert len(forbidden) == 6
 
-    # 8 条允许规则（2026-08-23 增 analyze_quality/analyze_trend，OpenTale 生成流程调用）
-    assert len(allowed) == 8
+    # 10 条允许规则（2026-08-23 增 analyze_quality/analyze_trend；
+    # S1.3 增 self_improve/approve_action——API 写面显式白名单）
+    assert len(allowed) == 10
 
 
 # ── IFACE-20: 跨包导入规则 ───────────────────────────────────────
