@@ -20,10 +20,33 @@ from dataclasses import dataclass, field
 from collections import OrderedDict
 from typing import Any, Iterator
 import time as _time
+import datetime as _dt
 
 from ocos.event_memory.event_types import (
     CognitiveEvent, EventHeader, EventLifecyclePhase,
 )
+
+
+def _parse_created_at(created_at: str) -> float:
+    """S2.5: 兼容解析 created_at 的三种历史格式为 Epoch 秒。
+
+    1. "%Y-%m-%dT%H:%M:%S.%fZ"（S2.5 起的统一 UTC 格式）
+    2. "%Y-%m-%dT%H:%M:%S"（S2.5 前的本地 ISO 格式，按 UTC 解释兜底）
+    3. "YYYY-MM-DD HH:MM:SS"（表默认 datetime('now') 的 UTC 空格式）
+    解析失败返回 0.0（与原行为一致）。
+    """
+    import calendar as _cal
+    fmts_utc = ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%S.%f",
+                "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d %H:%M:%S")
+    for fmt in fmts_utc:
+        try:
+            return _cal.timegm(_time.strptime(created_at, fmt))
+        except ValueError:
+            continue
+    return 0.0
+
+
 
 
 @dataclass
@@ -97,7 +120,9 @@ class EventStore:
                 event.event_type.value,
                 payload,
                 event.source,
-                _time.strftime("%Y-%m-%dT%H:%M:%S", _time.localtime(event.timestamp)),
+                _dt.datetime.fromtimestamp(
+                    event.timestamp, _dt.timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             ),
         )
         self.connection.commit()
@@ -117,12 +142,7 @@ class EventStore:
             "ORDER BY sequence"
         ).fetchall()
         for event_id, event_type, payload, source, created_at in rows:
-            ts = 0.0
-            if created_at:
-                try:
-                    ts = _time.mktime(_time.strptime(created_at, "%Y-%m-%dT%H:%M:%S"))
-                except ValueError:
-                    ts = 0.0
+            ts = _parse_created_at(created_at) if created_at else 0.0
             ev = CognitiveEvent(
                 event_id=event_id,
                 event_type=CognitiveEventType(event_type),
@@ -134,13 +154,25 @@ class EventStore:
         return store
 
     def mark_archived(self, event_id: str) -> bool:
-        """GAP-P2-3: 标记事件已归档（header.lifecycle=ARCHIVED）。
+        """GAP-P2-3: 标记事件已归档。
 
-        不改事件本体（EM54-01 append-only），仅更新头摘要。
+        S2.5 (白皮书 P2): 原实现只改 header、事件本体不变，与
+        event_archive.apply_lifecycle（只改本体/索引）两条路径状态
+        不一致——headers() 与 find() 结果矛盾。现统一：header 与
+        本体（经 with_lifecycle 不可变副本）同步推进。
         """
         header = self._headers.get(event_id)
-        if header is None:
+        event = self._by_id.get(event_id)
+        if header is None or event is None:
             return False
+        archived = event.with_lifecycle(EventLifecyclePhase.ARCHIVED)
+        self._by_id[event_id] = archived
+        bucket_key = next((ts for ts, evs in self._events.items()
+                           if any(e.event_id == event_id for e in evs)), None)
+        if bucket_key is not None:
+            self._events[bucket_key] = [
+                archived if e.event_id == event_id else e
+                for e in self._events[bucket_key]]
         header.lifecycle = EventLifecyclePhase.ARCHIVED
         return True
 
