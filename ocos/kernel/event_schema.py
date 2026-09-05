@@ -177,18 +177,6 @@ EVENT_SCHEMA_REGISTRY: dict[EventType, dict[str, Any]] = {
         "description": "Process 失败",
         "required_payload_fields": ["process_id", "error"],
     },
-    EventType.GOAL_SET: {
-        "description": "新目标已设定",
-        "required_payload_fields": ["goal_id", "description", "priority"],
-    },
-    EventType.GOAL_UPDATED: {
-        "description": "目标状态已更新",
-        "required_payload_fields": ["goal_id", "status"],
-    },
-    EventType.GOAL_COMPLETED: {
-        "description": "目标已完成",
-        "required_payload_fields": ["goal_id", "outcome"],
-    },
     EventType.DECISION_FORMED: {
         "description": "决策已形成",
         "required_payload_fields": ["decision_id", "goal_id", "reasoning"],

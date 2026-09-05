@@ -14,6 +14,7 @@ recovery/crash_recovery 消费）；ocos/events/event_store.py = 进程内总线
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -24,11 +25,20 @@ from ocos.storage.schema import TABLE_EVENT_STORE
 
 
 class SQLiteEventStore:
+    """SQLite 持久化事件存储（恢复链专用）。
+
+    S3.12: 写路径进程内串行化——storage 连接池为同 db 单共享连接，
+    多线程并发 execute 会交错产生 InterfaceError；跨进程由 WAL+timeout
+    保证。
+    """
+
     """基于 SQLite 的 EventStore 实现。
 
     Args:
         db_path: SQLite 数据库文件路径。
     """
+
+    _write_lock = threading.Lock()
 
     def __init__(self, db_path: str):
         self._db_path = db_path
@@ -55,14 +65,17 @@ class SQLiteEventStore:
             事件 ID。
         """
         eid = event_id or str(uuid.uuid4())
-        sequence = self._next_sequence()
-
-        with transaction(self._db_path) as conn:
+        with self._write_lock, transaction(self._db_path) as conn:
+            # S3.12 (白皮书 P2): sequence 用原子子查询取号——原 SELECT MAX
+            # 与 INSERT 分离，多连接并发下撞号（后写者被 INSERT OR IGNORE
+            # 静默丢弃）。子查询与 INSERT 同语句，天然原子。
             conn.execute(
                 f"INSERT OR IGNORE INTO {TABLE_EVENT_STORE} "
                 "(event_id, event_type, payload, source, sequence) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (eid, event_type, json.dumps(payload, default=str), source, sequence),
+                "VALUES (?, ?, ?, ?, "
+                "(SELECT COALESCE(MAX(sequence), 0) + 1 FROM "
+                f"{TABLE_EVENT_STORE}))",
+                (eid, event_type, json.dumps(payload, default=str), source),
             )
         return eid
 
@@ -81,22 +94,23 @@ class SQLiteEventStore:
         if not events:
             return []
 
-        with transaction(self._db_path) as conn:
-            base_sequence = self._next_sequence()
+        with self._write_lock, transaction(self._db_path) as conn:
             ids: list[str] = []
-            for i, evt in enumerate(events):
+            # S3.12: 每行用原子子查询取号（同一事务内单调递增）
+            for evt in events:
                 eid = evt.get("event_id") or str(uuid.uuid4())
                 ids.append(eid)
                 conn.execute(
                     f"INSERT OR IGNORE INTO {TABLE_EVENT_STORE} "
                     "(event_id, event_type, payload, source, sequence) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, "
+                    "(SELECT COALESCE(MAX(sequence), 0) + 1 FROM "
+                    f"{TABLE_EVENT_STORE}))",
                     (
                         eid,
                         evt["event_type"],
                         json.dumps(evt.get("payload", {}), default=str),
                         evt.get("source"),
-                        base_sequence + i,
                     ),
                 )
         return ids
