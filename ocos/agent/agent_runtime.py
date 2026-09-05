@@ -1667,6 +1667,66 @@ class AgentRuntime:
         except Exception:
             pass
 
+    # ── P1.1 (AGI 计划): 学习产物检索 ────────────────────────────────────
+
+    def learning_artifacts(
+        self,
+        description: str,
+        limit: int = 5,
+        min_confidence: float = 0.6,
+    ) -> list[dict[str, Any]]:
+        """聚合检索决策可用学习产物（beliefs + knowledge）。
+
+        检索策略（中文短召回约束下的轻量方案）:
+          - beliefs: 置信度 >= min_confidence 的已持有信念，按与描述的关键
+            词重叠度排序（重叠越多越相关），取 top-k。
+          - knowledge: 全文 search(描述) 命中 + 置信度过滤。
+        每项含 artifact_id（belief.statement 或 triple.id）——ER-2 归因用。
+        无匹配时返回空列表（决策侧据此走"无经验注入"基线路径）。
+        """
+        artifacts: list[dict[str, Any]] = []
+
+        def _overlap(statement: str, desc: str) -> int:
+            # 描述 2-gram 与语句的包含重叠计数（中文可用；英文按词）
+            if not desc:
+                return 0
+            grams = {desc[i:i + 2] for i in range(len(desc) - 1)}
+            grams = {g for g in grams if g.strip()}  # 去除含空白的 gram
+            return sum(1 for g in grams if g in statement)
+
+        try:
+            for b in self.beliefs.get_held(threshold=min_confidence):
+                statement = getattr(b, "statement", "") or ""
+                score = _overlap(statement, description)
+                if score > 0:
+                    artifacts.append({
+                        "artifact_id": getattr(b, "id", None) or statement,
+                        "type": "belief",
+                        "text": statement,
+                        "confidence": float(getattr(b, "confidence", 0.0)),
+                        "score": score,
+                    })
+        except Exception:
+            pass
+
+        try:
+            for t in self.knowledge.search(description[:30]):
+                if t.confidence < min_confidence:
+                    continue
+                artifacts.append({
+                    "artifact_id": t.id or f"{t.subject}:{t.predicate}",
+                    "type": "knowledge",
+                    "text": f"{t.subject} {t.predicate} {t.object}",
+                    "confidence": float(t.confidence),
+                    "score": 1,
+                })
+        except Exception:
+            pass
+
+        artifacts.sort(key=lambda a: (a["score"], a["confidence"]),
+                       reverse=True)
+        return artifacts[:limit]
+
     def get_stability_report(self) -> dict[str, Any]:
         """Phase 34D: 运行稳定性报告。
 

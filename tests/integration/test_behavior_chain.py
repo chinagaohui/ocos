@@ -173,3 +173,50 @@ def test_belief_created_metric_tracks_extraction():
     assert reg._counters.get(key, 0.0) >= produced
 
     set_global_metrics(None)
+
+
+# ── P1.1: 学习产物检索（learning_artifacts）──────────────────────────────
+
+
+def test_learning_artifacts_retrieves_relevant_beliefs():
+    """同域经验沉淀的信念可被检索，带 artifact_id（ER-2 归因）。"""
+    from ocos.agent.agent_runtime import AgentRuntime
+    from ocos.agent.belief_system import BeliefSystem
+    from ocos.agent.knowledge_base import KnowledgeBase
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt._recent_results = []
+    rt.beliefs = BeliefSystem()
+    rt.knowledge = KnowledgeBase()
+
+    # 沉淀一条与"磁盘"相关的成功经验信念
+    rt.beliefs.add(
+        statement="当磁盘使用率高时, 使用 df -h 查看分区占用有效",
+        confidence=0.8,
+    )
+    rt.knowledge.add("磁盘使用率高", "effective_action", "df -h 查看分区占用",
+                     confidence=0.7)
+
+    artifacts = rt.learning_artifacts("检查磁盘使用率", limit=5)
+    assert artifacts, "应检索到磁盘相关学习产物"
+    texts = [a["text"] for a in artifacts]
+    assert any("df -h" in t or "磁盘" in t for t in texts), artifacts
+    for a in artifacts:
+        assert a["artifact_id"], a
+        assert a["type"] in ("belief", "knowledge")
+        assert a["confidence"] >= 0.6
+
+
+def test_learning_artifacts_empty_without_match():
+    """无关描述 → 空产物（决策侧走无经验注入基线）。"""
+    from ocos.agent.agent_runtime import AgentRuntime
+    from ocos.agent.belief_system import BeliefSystem
+    from ocos.agent.knowledge_base import KnowledgeBase
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt._recent_results = []
+    rt.beliefs = BeliefSystem()
+    rt.knowledge = KnowledgeBase()
+    rt.beliefs.add("当股票市场波动时, 降低仓位有效", confidence=0.9)
+
+    assert rt.learning_artifacts("查看天气情况") == []
