@@ -79,6 +79,15 @@ class ExperienceBuilder:
                 "rejection_reason",
                 existing + suffix,
             )
+            # S2.3 (白皮书 P2, Boundary 门): 严格模式下 Self 污染候选
+            # 置 REJECTED —— SignificanceGate 对非 COMPLETE 一律 FAIL，
+            # 从而真正阻断入库。默认（false）保持原行为仅记录。
+            import os as _os
+            if _os.environ.get(
+                    "OCOS_EXPERIENCE_BOUNDARY_STRICT",
+                    "").strip().lower() == "true":
+                object.__setattr__(
+                    candidate, "status", ExperienceStatus.REJECTED)
 
         # 5. 存储
         self._candidates.append(candidate)
