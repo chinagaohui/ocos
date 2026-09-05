@@ -316,7 +316,12 @@ class PluginSandbox:
         pool = self._get_pool()  # noqa: F841
 
         # 安装 import hook 到 sys.meta_path
+        # S1.4 (白皮书 P1-8): 修复 hook 创建后从未安装的缺陷 —
+        # 之前只在此处取引用、finally 里 remove，meta_path 全程无 hook，
+        # 插件可 import 任意模块（隔离为虚假安全边界）。
         blocker = slot.blocker
+        if blocker not in sys.meta_path:
+            sys.meta_path.insert(0, blocker)
 
         try:
             result = self._run_in_thread(

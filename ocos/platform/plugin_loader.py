@@ -36,6 +36,7 @@ class LoaderErrorCode(str):
 
     LOAD_OK = "load.ok"
     LOAD_FAILED = "load.failed"
+    LOAD_FORBIDDEN_IMPORT = "load.forbidden_import"  # S1.4: AST 静态门拒绝
     LOAD_DUPLICATE = "load.duplicate"
     EXEC_OK = "exec.ok"
     EXEC_FAILED = "exec.failed"
@@ -43,6 +44,51 @@ class LoaderErrorCode(str):
     KILLED = "exec.killed"
     UNLOAD_OK = "unload.ok"
     UNLOAD_FAILED = "unload.failed"
+
+
+# S1.4 (白皮书 P1-8): 插件静态门 — 沙箱 import hook 只能在"执行期"拦截
+# 新 import，而 load 期的 importlib.import_module 会把插件模块完整加载进
+# 宿主进程。因此在加载前对插件源码做 AST 扫描，高危模块一律拒绝。
+FORBIDDEN_IMPORT_MODULES: frozenset[str] = frozenset({
+    "os", "subprocess", "socket", "shutil", "ctypes", "signal",
+    "multiprocessing", "importlib", "pickle",
+})
+
+
+def ast_forbidden_import_check(source: str) -> list[str]:
+    """AST 扫描插件源码中的高危 import，返回违规列表（空 = 通过）。
+
+    覆盖三种形态：`import X` / `from X import ...` /
+    `__import__("X")`；`import a.b` 与 `from a.b import c` 按**顶层
+    包名**判定（os.path 归 os）。
+    """
+    import ast
+    violations: list[str] = []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        return [f"SYNTAX_ERROR: {e}"]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".")[0]
+                if top in FORBIDDEN_IMPORT_MODULES:
+                    violations.append(f"IMPORT: {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                top = node.module.split(".")[0]
+                if node.level == 0 and top in FORBIDDEN_IMPORT_MODULES:
+                    violations.append(f"FROM_IMPORT: {node.module}")
+        elif isinstance(node, ast.Call):
+            fn = node.func
+            if (isinstance(fn, ast.Name) and fn.id == "__import__"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)):
+                top = node.args[0].value.split(".")[0]
+                if top in FORBIDDEN_IMPORT_MODULES:
+                    violations.append(f"DYNAMIC_IMPORT: {node.args[0].value}")
+    return violations
 
 
 # ── 加载结果 ──────────────────────────────────────────────────────────────────
@@ -219,6 +265,27 @@ class PluginLoader:
 
         # 3. 动态加载入口模块
         module_path, _, class_name = manifest.entry_point.rpartition(":")
+        # S1.4: AST 静态门 — 高危 import 在进入宿主进程前拒绝
+        try:
+            spec = importlib.util.find_spec(module_path)
+            if spec is not None and spec.origin and spec.origin != "builtins":
+                source = Path(spec.origin).read_text(encoding="utf-8")
+                violations = ast_forbidden_import_check(source)
+                if violations:
+                    logger.error(
+                        "插件静态门拒绝加载: %s 违规 import %s",
+                        module_path, violations[:5],
+                    )
+                    return LoadResult(
+                        success=False,
+                        code=LoaderErrorCode.LOAD_FORBIDDEN_IMPORT,
+                        message=(f"禁止的 import（高危模块静态门）: "
+                                 f"{violations[:5]}"),
+                    )
+        except (ImportError, OSError, AttributeError) as exc:
+            # 源码定位失败不放大故障 — 交给后续 import 步骤诚实报错
+            logger.debug("静态门跳过（无法定位源码）: %s (%s)",
+                         module_path, exc)
         try:
             module = importlib.import_module(module_path)
         except ImportError as exc:
