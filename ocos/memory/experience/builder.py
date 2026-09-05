@@ -83,9 +83,11 @@ class ExperienceBuilder:
             # 置 REJECTED —— SignificanceGate 对非 COMPLETE 一律 FAIL，
             # 从而真正阻断入库。默认（false）保持原行为仅记录。
             import os as _os
+            # S3.13: 默认严格（true）——Self 污染候选入库被阻断；
+            # OCOS_EXPERIENCE_BOUNDARY_STRICT=false 可回退旧行为
             if _os.environ.get(
-                    "OCOS_EXPERIENCE_BOUNDARY_STRICT",
-                    "").strip().lower() == "true":
+                    "OCOS_EXPERIENCE_BOUNDARY_STRICT", "true"
+            ).strip().lower() != "false":
                 object.__setattr__(
                     candidate, "status", ExperienceStatus.REJECTED)
 

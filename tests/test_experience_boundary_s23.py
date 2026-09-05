@@ -39,13 +39,22 @@ class TestBoundaryStrict:
             outcome={"result": "success"},
         )
 
-    def test_default_mode_records_only(self, monkeypatch):
-        monkeypatch.delenv("OCOS_EXPERIENCE_BOUNDARY_STRICT", raising=False)
+    def test_explicit_false_records_only(self, monkeypatch):
+        """OCOS_EXPERIENCE_BOUNDARY_STRICT=false（S3.13 后的回退开关）。"""
+        monkeypatch.setenv("OCOS_EXPERIENCE_BOUNDARY_STRICT", "false")
         builder = _builder()
         candidate = builder.build(trace_bundle=self._self_polluted_bundle(),
                                   source="decision", context={})
         assert candidate.status == ExperienceStatus.COMPLETE
         assert "self_violations" in (candidate.rejection_reason or "")
+
+    def test_default_mode_strict(self, monkeypatch):
+        """S3.13: 未设置环境变量时默认严格（阻断）。"""
+        monkeypatch.delenv("OCOS_EXPERIENCE_BOUNDARY_STRICT", raising=False)
+        builder = _builder()
+        candidate = builder.build(trace_bundle=self._self_polluted_bundle(),
+                                  source="decision", context={})
+        assert candidate.status == ExperienceStatus.REJECTED
 
     def test_strict_mode_rejects(self, monkeypatch):
         monkeypatch.setenv("OCOS_EXPERIENCE_BOUNDARY_STRICT", "true")

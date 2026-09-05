@@ -235,6 +235,7 @@ ALLOWED_IMPORTS = {
                     "ocos.perception", "ocos.world_model", "ocos.knowledge",
                     "ocos.execution", "ocos.engines", "ocos.events", "ocos.diagnosis",
                     "ocos.capability_reality",
+                    "ocos.monitoring",  # S3.5: Prometheus 指标接入生产
                     "ocos.learning",  # FIX-6: L8 元认知置信度 (CapabilityConfidence)
                     "ocos.constitution.behavioral",  # FIX-6b: 行为宪法 (BehavioralConstitution)
                     "ocos.interaction"],  # P0-2/P0-3: SessionManager
@@ -317,6 +318,9 @@ def _is_import_allowed(source_package: str, target_package: str) -> bool:
         return True
     # ocos.logging 是横切关注点，全局允许
     if target_package == "ocos.logging" or target_package.startswith("ocos.logging."):
+        return True
+    # S3.3: ocos.config 同为横切基础设施（统一配置单例），全局允许
+    if target_package == "ocos.config" or target_package.startswith("ocos.config."):
         return True
     # 自身引用允许
     if source_package == target_package:

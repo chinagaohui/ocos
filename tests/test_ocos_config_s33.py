@@ -39,6 +39,8 @@ class TestOCOSConfig:
         monkeypatch.setenv("OCOS_DB_PATH", str(tmp_path / "t.db"))
         monkeypatch.delenv("OCOS_APPROVAL_MODE", raising=False)
         from ocos.execution.pending import approval_disabled
-        assert approval_disabled() is True  # 默认 auto
+        assert approval_disabled() is False  # S3.13: 默认已切 ask
         monkeypatch.setenv("OCOS_APPROVAL_MODE", "ask")
         assert approval_disabled() is False
+        monkeypatch.setenv("OCOS_APPROVAL_MODE", "auto")
+        assert approval_disabled() is True

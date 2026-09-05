@@ -32,14 +32,16 @@ logger = logging.getLogger(__name__)
 
 
 def approval_disabled() -> bool:
-    """R4-B 审批开关：OCOS_APPROVAL_MODE=auto（默认）关闭人工审批。
+    """R4-B 审批开关（S3.13: 默认值切换 auto → ask）。
 
-    auto → ASK 类动作直接执行或诚实失败，不进待批队列；
-    ask  → 恢复人工审批（动作入 pending_actions 等 /approve）。
-    S3.3: 配置统一走 OCOSConfig（env > config.json > 默认）。
+    ask  → 恢复人工审批（动作入 pending_actions 等 /approve）【新默认】；
+    auto → ASK 类动作直接执行或诚实失败，不进待批队列
+           （需显式设置，启动时 daemon 打印警告横幅）。
+    FILE_WRITE 类动作在两种模式下均强制审批（S1.1）。
+    配置统一走 OCOSConfig（env > config.json > 默认）。
     """
     from ocos.config import get_str
-    return get_str("OCOS_APPROVAL_MODE", "auto").strip().lower() != "ask"
+    return get_str("OCOS_APPROVAL_MODE", "ask").strip().lower() != "ask"
 
 
 _DDL = """

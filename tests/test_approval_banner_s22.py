@@ -26,7 +26,7 @@ def runtime(tmp_path, monkeypatch):
 
 
 def test_auto_mode_prints_warning(runtime, monkeypatch, capsys):
-    monkeypatch.delenv("OCOS_APPROVAL_MODE", raising=False)  # 默认 auto
+    monkeypatch.setenv("OCOS_APPROVAL_MODE", "auto")  # S3.13: 默认已切 ask，auto 需显式设置
     monkeypatch.setattr(runtime, "_kernel", None)
     # kernel None 会在后续 getattr 崩溃——只验证横幅，捕获异常
     try:

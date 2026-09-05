@@ -27,7 +27,7 @@
 | 项 | 状态 |
 |---|---|
 | ocos-server.service / ocos-daemon.service / hermes-gateway.service | 全部 active，ExecStart/Environment 与上轮一致 |
-| 审批模式 | daemon 无 `OCOS_APPROVAL_MODE` 环境变量 → 默认 auto（审批关闭），与上轮一致 |
+| 审批模式 | daemon 无 `OCOS_APPROVAL_MODE` 环境变量 → 默认 **ask**（人工审批，S3.13 一次性切换），与上轮 auto 不一致，见 §八 行为变更说明 |
 | 数据库 | `~/.ocos/ocos.db`（统一 `OCOS_DB_PATH`），验证前待批队列 0 |
 | 代码增量 | 工作区 6 文件（本轮待验证的 FIX-VAL1/VAL2 + SIGUSR1 诊断基建），属预期变更 |
 
@@ -82,3 +82,14 @@
 | 已知缺陷 | 无 P0/P1 | 0 项（上轮 2 项已修复并回归） | ✅ |
 
 **结论: 通过生产部署标准。** 上轮发现的 2 项缺陷（say 回复丢失、goal status 退出码）已修复并经真机回归验证；本轮唯一新发现为 P2 级 stale-ACTIVE 回收缺失，不影响当前部署，建议纳入下一迭代。
+
+## 八、行为变更说明（S3.13，2026-09-06 补录）
+
+> 本报告验证时审批默认值为 auto（上轮配置）。S3.13 已按《修复方案评审与落地执行版 v1.0》R3 收尾执行一次性默认值切换，与上轮差异如下（详细说明见 [RUNTIME_BEHAVIOR_CHANGES_S313.md](RUNTIME_BEHAVIOR_CHANGES_S313.md)）：
+
+| 项 | 上轮（auto 默认） | S3.13 后（新默认） | 回滚开关 |
+|---|---|---|---|
+| `OCOS_APPROVAL_MODE` 未设置 | ASK 类动作（WRITE_CHAPTER/SEARCH_WEB/RUN_COMMAND/HTTP_FETCH）与低置信 DAG 写任务**自动执行** | **进入待批队列等待人工批准**（`ocos approvals approve`）；只读 AUTO 类照常自动执行；FILE_WRITE 两种模式下均强制审批（S1.1） | `OCOS_APPROVAL_MODE=auto`（daemon 启动打印警告横幅） |
+| `OCOS_EXPERIENCE_BOUNDARY_STRICT` 未设置 | Self 污染候选仅记 rejection_reason | **状态置 REJECTED，SignificanceGate 直接 FAIL，不写入 Episode** | `OCOS_EXPERIENCE_BOUNDARY_STRICT=false` |
+
+**对生产部署的影响**：需人工消化 pending_actions 队列，或明确设置 `OCOS_APPROVAL_MODE=auto` 并接受无人工审批风险（生产环境建议 `ask`）。上述 e2e/生产验证脚本经核查无审批模式依赖，预期不受影响。
