@@ -171,7 +171,10 @@ ALLOWED_IMPORTS = {
                          "ocos.event", "ocos.personal_intelligence",
                          "ocos.learning",  # FIX-08: Learning persistence
                          "ocos.world_model",  # FIX-10: World state in context
-                         "ocos.autonomous_runtime"],  # PW-2.1: ActionType for sandbox
+                         "ocos.autonomous_runtime",  # PW-2.1: ActionType for sandbox
+                         # S1.3 (白皮书 P1-2b): USE| 动作执行前过权限网关
+                         # （仅限 permission_gateway 安全组件，fail-closed）
+                         "ocos.capability.permission_gateway"],
                          # UX 自我认知 + PW-1.2 风格画像 + PW-1.4 内视执行史
     "ocos.interaction.cli": ["ocos.interaction"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
