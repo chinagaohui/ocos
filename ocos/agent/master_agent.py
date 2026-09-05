@@ -33,6 +33,7 @@ from ocos.agent.control_loop import ControlLoop
 from ocos.agent.cognitive_bridge import CognitiveBridge, BridgeResult
 from ocos.agent.goal_types import Goal, GoalLevel, GoalOriginLevel
 from ocos.goal.factory import ConstitutionViolationError
+from ocos.security.manager import AccessDecision  # S2.11: 顶部导入（原分支内引用未导入名→NameError）
 from ocos.goal.enforcer import GoalOriginEnforcer
 from ocos.kernel.abi import Observation
 from ocos.memory.belief.models import Belief, BeliefStatus
@@ -2084,9 +2085,11 @@ class MasterAgent:
     ) -> tuple[Any, str, dict[str, Any]]:
         """检查访问权限（Phase X）。"""
         if self._security_manager is None:
-            return AccessDecision.ALLOW, "security not injected", {}
+            # S2.11 (白皮书 P1-5): 未注入=fail-closed（与下方异常分支
+            # DENY 对齐；原 fail-open 且引用未导入的 AccessDecision→NameError）
+            logger.warning("check_access: security_manager not injected — DENY (fail-closed)")
+            return AccessDecision.DENY, "security not injected", {}
         try:
-            from ocos.security.manager import AccessDecision
             return self._security_manager.check_access(
                 source, action, policy_name=policy_name, metadata=metadata
             )
@@ -2097,9 +2100,10 @@ class MasterAgent:
     def sanitize_input(self, text: str, source: str = "unknown") -> tuple[str, list[str], Any]:
         """清洗并检查输入（Phase X）。"""
         if self._security_manager is None:
-            return text, [], AccessDecision.ALLOW
+            # S2.11: 未注入=fail-closed（原引用未导入名 → NameError）
+            logger.warning("sanitize_input: security_manager not injected — DENY")
+            return text, ["security not injected"], AccessDecision.DENY
         try:
-            from ocos.security.manager import AccessDecision
             return self._security_manager.sanitize_input(text, source=source)
         except Exception as e:
             logger.warning("Sanitize input failed: %s", e)
