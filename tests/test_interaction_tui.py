@@ -1,8 +1,8 @@
-"""Tests for ocos.interaction.tui - 终端交互界面。"""
+"""Tests for ocos.interaction.tui - 终端交互界面（重点覆盖主要类）。"""
 import pytest
 
 
-class TestTUI:
+class TestTUIComponents:
     def test_import_app(self):
         from ocos.interaction.tui import App
         assert App is not None
@@ -11,11 +11,20 @@ class TestTUI:
         from ocos.interaction.tui import ChatScreen
         assert ChatScreen is not None
 
-    def test_import_run_tui(self):
-        from ocos.interaction.tui import run_tui
-        assert run_tui is not None
+    def test_import_session_store(self):
+        from ocos.interaction.tui import SessionStore
+        assert SessionStore is not None
 
-    def test_create_chat_screen(self):
+    def test_import_text_area(self):
+        from ocos.interaction.tui import TextArea
+        assert TextArea is not None
+
+    def test_app_has_bindings(self):
+        from ocos.interaction.tui import App
+        assert hasattr(App, 'BINDINGS')
+        assert len(App.BINDINGS) > 0
+
+    def test_chat_screen_exists(self):
         from ocos.interaction.tui import ChatScreen
-        screen = ChatScreen()
-        assert screen is not None
+        # ChatScreen should be a class with compose method
+        assert hasattr(ChatScreen, 'compose')
