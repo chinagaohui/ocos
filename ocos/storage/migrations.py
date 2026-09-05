@@ -66,6 +66,15 @@ MIGRATIONS: dict[int, tuple[str, list[str]]] = {
         "UX-P2: user_messages（用户消息收件箱 — ocos say 对话通道）",
         [*CREATE_USER_MESSAGES],
     ),
+    6: (
+        # S2.6 (白皮书 P2): goal 双表并存治理 —— schema v3 建的 goal 表
+        # 全程无生产读写（生产走 goal/store.py 自建的 goals 表），
+        # 重命名为 goal_legacy 留一个版本周期后由 v7 删除。
+        "S2.6: goal → goal_legacy（双目标表并存治理）",
+        [
+            "ALTER TABLE goal RENAME TO goal_legacy",
+        ],
+    ),
 }
 
 
