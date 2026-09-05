@@ -171,26 +171,39 @@ class MemoryRecall:
         return results
 
     def _recall_experience(self, context: str | None, limit: int) -> list[RecallResult]:
-        """从经验记忆中召回."""
-        results = []
-        if self._hub and hasattr(self._hub, 'experience'):
-            try:
-                exp_store = self._hub.experience
-                # 尝试获取 lessons
-                if hasattr(exp_store, 'get_recent'):
-                    lessons = exp_store.get_recent(limit=limit)
-                    for lesson in lessons:
-                        results.append(RecallResult(
-                            source="experience",
-                            relevance=0.8,
-                            content=lesson.lesson if hasattr(lesson, 'lesson') else str(lesson),
-                            metadata={"type": lesson.event_type if hasattr(lesson, 'event_type') else 'lesson'},
-                        ))
-                # FIX-09: bi-gram 相关性过滤
-                results = self._filter_by_relevance(results, context, min_score=0.15)
-            except Exception as e:
-                import logging
-                logging.debug(f"Experience recall failed: {e}")
+        """从经验记忆中召回经验教训（lesson）。
+
+        S2.4 (白皮书 P2): 原实现引用不存在的 hub.experience 属性——
+        MemoryHub 只有 episode/belief/semantic/pattern 四库，本召回恒空。
+        经验教训（LessonsLearned）落库形态为 episodes 表 source='lesson'，
+        故经 hub.episode.query_by_source 召回。
+        """
+        results: list[RecallResult] = []
+        episode_store = getattr(self._hub, "episode", None) if self._hub else None
+        if episode_store is None:
+            return results
+        try:
+            lessons = episode_store.query_by_source("lesson", limit=limit)
+            for lesson in lessons:
+                # lesson 落库: condition=适用条件, decision=教训描述
+                content = (getattr(lesson, "decision", None)
+                           or getattr(lesson, "condition", None)
+                           or getattr(lesson, "outcome", None))
+                if not isinstance(content, str) or not content:
+                    content = str(lesson.decision or lesson.condition or "")
+                if not content:
+                    continue
+                results.append(RecallResult(
+                    source="experience",
+                    relevance=0.8,
+                    content=content,
+                    metadata={"type": "lesson"},
+                ))
+            # FIX-09: bi-gram 相关性过滤
+            results = self._filter_by_relevance(results, context, min_score=0.15)
+        except Exception as e:
+            import logging
+            logging.debug(f"Experience recall failed: {e}")
 
         return results
 

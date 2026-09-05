@@ -182,6 +182,22 @@ class EpisodeStore:
         rows = self.connection.execute(query, params).fetchall()
         return [self._row_to_episode(r) for r in rows if r]
 
+    def query_by_source(
+        self,
+        source: str,
+        limit: int = 10,
+    ) -> list[Episode]:
+        """按来源查询（S2.4: lesson 召回通道）。
+
+        LessonsLearned 落库形态为 source='lesson'，recall 经此召回。
+        """
+        rows = self.connection.execute(
+            "SELECT * FROM episodes WHERE source = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (source, limit),
+        ).fetchall()
+        return [self._row_to_episode(r) for r in rows if r]
+
     def query_by_tag(
         self,
         tag: str,
