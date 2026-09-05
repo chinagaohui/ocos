@@ -157,7 +157,7 @@ class GoalStore:
             SELECT id, level, status, progress, description,
                    priority, parent_id, source, deadline,
                    created_at, updated_at,
-                   origin_level, authority
+                   origin_level, authority, metadata
             FROM goals
             WHERE status NOT IN ('COMPLETED', 'CANCELLED', 'FAILED',
                                  'SUPERSEDED', 'EXPIRED')
@@ -172,6 +172,7 @@ class GoalStore:
                 "source": r[7], "deadline": r[8],
                 "created_at": r[9], "updated_at": r[10],
                 "origin_level": r[11], "authority": r[12],
+                "metadata": r[13],
             }
             for r in rows
         ]

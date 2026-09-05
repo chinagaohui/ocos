@@ -94,6 +94,34 @@ def load_learning_rules(
         return []
 
 
+def persist_latest_rules(agent_obj: Any, db_path: str) -> int:
+    """FIX-20: 从 agent 学习引擎取最新模型并持久化其规则。
+
+    daemon dream 后调用。返回保存的规则数
+    （0 = 无引擎/无模型/无规则/保存失败）。
+    """
+    engine = getattr(agent_obj, "_learning_engine", None)
+    if engine is None:
+        return 0
+    try:
+        models = engine.list_models()
+    except Exception:
+        return 0
+    if not models:
+        return 0
+    model = models[-1]
+    rules = list(getattr(model, "rules", None) or [])
+    if not rules:
+        return 0
+    ok = save_learning_rules(
+        db_path,
+        model_id=str(getattr(model, "model_id", "default")),
+        strategy=str(getattr(model, "strategy", "SUPERVISED")),
+        rules=rules,
+    )
+    return len(rules) if ok else 0
+
+
 def load_learning_summary(db_path: str) -> dict[str, Any]:
     """快速摘要（供 build_context 注入）。"""
     if not db_path or db_path == ":memory:":

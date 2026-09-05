@@ -297,16 +297,15 @@ class MemoryRecall:
                           learning_rules: list[dict] | None = None) -> str:
         """格式化为系统提示注入字符串."""
         recalls = self.recall(context, limit)
-        if not recalls:
-            return ""
+        lines: list[str] = []
+        if recalls:
+            lines.append("## Relevant Memories")
+            for r in recalls:
+                icon = {"user": "👤", "semantic": "📚", "pattern": "🔁", "experience": "💡"}.get(r.source, "📝")
+                lines.append(f"{icon} [{r.source}] (relevance: {r.relevance:.2f})")
+                lines.append(f"   {r.content[:200]}")
 
-        lines = ["## Relevant Memories"]
-        for r in recalls:
-            icon = {"user": "👤", "semantic": "📚", "pattern": "🔁", "experience": "💡"}.get(r.source, "📝")
-            lines.append(f"{icon} [{r.source}] (relevance: {r.relevance:.2f})")
-            lines.append(f"   {r.content[:200]}")
-
-        # FIX-06: 注入学习规则（成功/失败冲突）
+        # FIX-06/FIX-20: 注入学习规则（成功/失败冲突）；无召回时规则仍注入
         if learning_rules:
             conflict_lines = []
             for rule in learning_rules:

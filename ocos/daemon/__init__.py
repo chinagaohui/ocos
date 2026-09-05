@@ -530,19 +530,14 @@ class ResidentRuntime:
                 lc.transition_to_phase(LifecyclePhase.ACTIVE)
         agent_obj.sleep()    # ACTIVE → SLEEPING（WM 巩固 + 持久化）
         out = agent_obj.dream()   # SLEEPING → DREAMING → 巩固 → wake
-        # FIX-08: dream 后持久化 learning rules
+        # FIX-08/FIX-20: dream 后持久化 learning rules
+        # 原实现读 agent_obj.learning —— 属性不存在（实际为 _learning_engine），
+        # 持久化从未生效；改由 persist_latest_rules 从真实引擎取最新模型落库
         try:
-            from ocos.learning.persistence import save_learning_rules
-            lm = getattr(agent_obj, 'learning', None)
-            if lm is not None and hasattr(lm, 'model') and lm.model:
-                rules = list(lm.model.rules) if lm.model.rules else []
-                if rules:
-                    save_learning_rules(
-                        self._db_path,
-                        model_id=getattr(lm.model, 'model_id', 'default'),
-                        strategy=str(getattr(lm.model, 'strategy', '')),
-                        rules=rules,
-                    )
+            from ocos.learning.persistence import persist_latest_rules
+            saved = persist_latest_rules(agent_obj, self._db_path)
+            if saved:
+                logger.info("Persisted %d learning rule(s) after dream", saved)
         except Exception:
             logger.debug("dream rules persistence skipped")
         logger.info("Dream consolidation: wisdom_total=%s consolidation=%s",

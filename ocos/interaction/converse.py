@@ -72,7 +72,8 @@ _SYSTEM_PROMPT = (\
 # 回复 LLM 可输出 USE|<能力>|<参数JSON> 动作行主动获取机器实时数据；
 # 仅开放只读能力（shell 白名单命令 / fs 读），写类操作仍走目标管线。
 
-_USE_LINE_LIMIT = 2   # 每回复最多 USE| 动作行数（预算护栏）
+_USE_LINE_LIMIT = 2   # 每轮最多 USE| 动作行数（预算护栏）
+_MAX_TOOL_ROUNDS = 2  # FIX-22: 多步主循环每回复最多工具轮数（总 LLM 调用 ≤3）
 
 _USE_ALLOWED = ("shell", "fs_read")
 
@@ -756,8 +757,9 @@ class ChatResponder:
         goal_note: UX-H 目标受理提示（auto 受理时注入 prompt，
                    让 LLM 确认任务已受理并说明后续流程）。
         session_id: FIX-8 会话实体，透传给对话记忆样本归属。
-        FIX-T1: 注入 tool_executor 后支持 USE| 动作循环 —
-        第一轮输出动作行 → 沙盒执行观察 → 第二轮据真实观察作答。"""
+        FIX-22 多步主循环: 注入 tool_executor 后，LLM 可连续多轮输出
+        USE| 动作行 → 沙盒执行观察 → 观察累积回注 → 再推理，
+        直到给出最终回答或工具预算（_MAX_TOOL_ROUNDS）耗尽。"""
         context = self.build_context(message, session_id=session_id)
         if goal_note:
             context = f"{context}\n【内部提示】\n{goal_note}"
@@ -780,24 +782,45 @@ class ChatResponder:
                 if self._tool_executor is not None \
                         and _REALTIME_HINT.search(message):
                     styled += _REALTIME_DIRECTIVE
-                reply = asyncio.run(tg._provider.generate(
-                    styled,
-                    system_prompt=_SYSTEM_PROMPT,
-                    temperature=0.6, max_tokens=2000))
-                reply = reply.strip()
-
-                # FIX-T1: USE| 动作循环 — LLM 请求实时数据时执行并回注观察，
-                # 每回复最多 1 轮（预算护栏），写类/未知能力在 _run_use_actions 拒绝
-                use_lines = _parse_use_lines(reply)
-                if use_lines and self._tool_executor is not None:
+                # FIX-22: 多步主循环 — act→observe→reason 一般化为受预算
+                # 约束的多轮循环：每轮可输出 USE| 行取观察，观察累积回注，
+                # 直到 LLM 给出最终回答或预算耗尽（强制收尾作答）。
+                # 直接回答零额外调用（无动作行即终答，行为与从前一致）。
+                # 注: 循环第 0 轮即首轮生成（prompt=styled），不再单独调用。
+                observations: list[str] = []
+                max_rounds = (_MAX_TOOL_ROUNDS
+                              if self._tool_executor is not None else 0)
+                for round_i in range(max_rounds + 1):
+                    if observations:
+                        if round_i < max_rounds:
+                            guidance = ("请基于以上真实观察以 OCOS 身份回答用户；"
+                                        "若仍需补充数据可再输出 USE| 动作行"
+                                        "（每轮最多2条）；信息足够则直接给出"
+                                        "最终回答，不要再输出动作行。")
+                        else:
+                            guidance = ("工具预算已用尽 — 请立即基于以上真实观察"
+                                        "给出最终回答，不要再输出 USE| 动作行。")
+                        prompt_i = (styled + "\n\n【工具观察】\n"
+                                    + "\n\n".join(observations)
+                                    + "\n\n" + guidance)
+                    else:
+                        prompt_i = styled
+                    reply = asyncio.run(tg._provider.generate(
+                        prompt_i,
+                        system_prompt=_SYSTEM_PROMPT,
+                        temperature=0.6, max_tokens=2000)).strip()
+                    if round_i >= max_rounds:
+                        break  # 预算耗尽（或无执行器）→ 本轮即最终回答
+                    use_lines = _parse_use_lines(reply)
+                    if not use_lines:
+                        break  # 无动作行 = 最终回答
                     observation = self._run_use_actions(use_lines)
-                    if observation:
-                        reply = asyncio.run(tg._provider.generate(
-                            styled + f"\n\n【工具观察】\n{observation}\n\n"
-                            "请基于以上真实观察以 OCOS 身份回答用户；"
-                            "不要重复输出 USE| 动作行。",
-                            system_prompt=_SYSTEM_PROMPT,
-                            temperature=0.6, max_tokens=2000)).strip()
+                    logger.debug("USE| round %d: %d action(s)", round_i + 1,
+                                 len(use_lines))
+                    # 拒绝也如实回注（_run_use_actions 产出拒绝块），
+                    # 防止 LLM 对同一动作无限重试
+                    observations.append(observation
+                                        or "（动作被拒绝：对话层仅允许只读查询）")
 
                 # 协议行不进对话流
                 reply = _strip_use_lines(reply)
@@ -944,7 +967,8 @@ class ChatResponder:
 
     # ── UX-H: 对话即执行 — 任务类消息自动受理为目标 ────────────────────
 
-    def _create_goal_from_chat(self, compiled: dict) -> str:
+    def _create_goal_from_chat(self, compiled: dict,
+                               session_id: str = "web") -> str:
         from ocos.goal.store import GoalStore
         store = GoalStore(db_path=self._db_path)
         goal_id = f"GOAL-{uuid.uuid4().hex[:12]}"
@@ -953,9 +977,91 @@ class ChatResponder:
             description=compiled["description"][:200], priority=3.0,
             source="chat", origin_level="HUMAN", authority="FRAMEWORK",
             metadata={"domain": compiled.get("domain", "development"),
-                      "original": compiled.get("_original", "")},
+                      "original": compiled.get("_original", ""),
+                      "session_id": session_id},
         )
         return goal_id
+
+    @staticmethod
+    def _goal_session_id(g: dict) -> str:
+        """FIX-21: 从 goal metadata 解析来源会话（metadata 为 JSON 字符串）。"""
+        meta = g.get("metadata") or {}
+        if isinstance(meta, str):
+            try:
+                import json as _j
+                meta = _j.loads(meta)
+            except Exception:
+                meta = {}
+        try:
+            return str(meta.get("session_id", "") or "")
+        except Exception:
+            return ""
+
+    def _latest_goal_result_text(self, g: dict, within_hours: int = 48) -> str:
+        """FIX-21: 取与目标完成时刻最接近的执行结果 episode（时间窗关联）。"""
+        try:
+            import json as _j
+            import sqlite3
+            from datetime import datetime as _dt
+            conn = sqlite3.connect(self._db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """SELECT decision, outcome, created_at FROM episodes
+                   WHERE tags LIKE '%goal_result%'
+                     AND created_at > datetime('now', ?)
+                   ORDER BY created_at DESC LIMIT 8""",
+                (f"-{int(within_hours)} hours",),
+            ).fetchall()
+            conn.close()
+            anchor = None
+            try:
+                raw = str(g.get("updated_at") or "").replace(
+                    "T", " ").replace("+00:00", "").replace("Z", "")
+                anchor = _dt.fromisoformat(raw)
+            except Exception:
+                anchor = None
+            for r in rows:
+                if anchor is not None:
+                    try:
+                        t_raw = str(r["created_at"]).replace(
+                            "T", " ").replace("+00:00", "").replace("Z", "")
+                        t = _dt.fromisoformat(t_raw)
+                    except Exception:
+                        continue
+                    if abs((t - anchor).total_seconds()) > 120:
+                        continue
+                try:
+                    out = _j.loads(r["outcome"]) if r["outcome"] else {}
+                except Exception:
+                    out = {}
+                ok = "✓" if out.get("success") else "✗"
+                rate = out.get("task_success_rate")
+                rate_str = (f"  任务成功率={rate:.0%}"
+                            if isinstance(rate, (int, float)) else "")
+                decision = str(r["decision"] or "").strip()
+                return f"{ok}{rate_str}\n{decision[:1500]}"
+            return ""
+        except Exception:
+            return ""
+
+    def _goal_note_from_goal(self, g: dict) -> str:
+        """FIX-21: 结构化任务上下文注记 — 状态/进度/真实结果，不再靠 LLM 猜。"""
+        status = str(g.get("status", "?"))
+        prog = g.get("progress")
+        prog_str = f"  进度={prog:.0%}" if isinstance(prog, (int, float)) else ""
+        lines = ["【当前任务上下文】",
+                 f"goal_id={g.get('id')}  status={status}{prog_str}",
+                 f"描述={str(g.get('description', ''))[:100]}"]
+        if status == "COMPLETED":
+            result = self._latest_goal_result_text(g)
+            if result:
+                lines.append("【执行结果】")
+                lines.append(result)
+            lines.append("该目标已完成 — 回答时引用真实结果；"
+                         "若用户要开始新任务，请说明可继续下达。")
+        else:
+            lines.append("回答需围绕该目标当前状态；进展未知时不要编造执行结果。")
+        return "\n".join(lines)
 
     def _daemon_alive(self) -> bool:
         """心跳判断 daemon 是否在执行状态。"""
@@ -977,7 +1083,7 @@ class ChatResponder:
             goals = GoalStore(db_path=self._db_path).load_active()
             # 按 session 过滤 (metadata 里记录)
             relevant = [g for g in goals
-                        if getattr(g, "session_id", None) == session_id]
+                        if self._goal_session_id(g) == session_id]
             if not relevant:
                 relevant = goals[:5]  # 退化为最近5个
             if not relevant:
@@ -1055,29 +1161,51 @@ class ChatResponder:
                              "不要重复创建目标；简要告知该目标正在进行，"
                              "完成后结果会自动出现在这个对话里。")
             else:
-                goal_id = self._create_goal_from_chat(compiled)
+                goal_id = self._create_goal_from_chat(compiled, session_id=session_id)
                 daemon_state = "在线，将自动认领执行" if self._daemon_alive()                     else "离线 — 目标已排队，启动 ocos run 后执行"
                 goal_note = (f"用户的这条消息已自动受理为目标 {goal_id}"
                              f"（编译后描述：{compiled['description'][:120]}）。"
                              f"daemon {daemon_state}。"
                              "回复时确认受理并简述执行计划，不要让用户再手动操作。")
+            # FIX-21: 对话状态机 — 任务受理写入 current_goal_id（跨重启可恢复）
+            if goal_id:
+                try:
+                    from ocos.interaction.conversation_state import ConversationStateStore
+                    ConversationStateStore(self._db_path).update(
+                        session_id, current_goal_id=goal_id,
+                        last_intent="task",
+                        active_topic=compiled["description"][:60])
+                except Exception:
+                    pass
         elif compiled["kind"] in ("question", "continue"):
-            # FIX-05: 结构化 goal grounding — 查询关联目标
+            # FIX-05/FIX-21: 结构化 goal grounding — 状态机精确恢复优先
             try:
+                from ocos.interaction.conversation_state import ConversationStateStore
                 from ocos.goal.store import GoalStore
-                goals = GoalStore(db_path=self._db_path).load_active()
-                # 优先：与当前 session 关联的目标
-                by_session = [g for g in goals if getattr(g, "session_id", None) == session_id]
-                if by_session:
-                    g = by_session[0]
+                cur_gid = ConversationStateStore(self._db_path).get(
+                    session_id).get("current_goal_id")
+                g = GoalStore(db_path=self._db_path).load(cur_gid) if cur_gid else None
+                if g:
                     goal_id = str(g.get("id", ""))
-                    goal_note = (f"【当前任务上下文】\ngoal_id={goal_id}  "
-                                 f"status={g.get('status', '?')}  "
-                                 f"描述={str(g.get('description', ''))[:80]}")
-                elif goals:
-                    g = goals[0]
-                    goal_id = str(g.get("id", ""))
-                    goal_note = f"【当前任务上下文】goal_id={goal_id}  status={g.get('status', '?')}"
+                    goal_note = self._goal_note_from_goal(g)
+                    if str(g.get("status", "")) == "COMPLETED":
+                        # 结果已交付 → 状态机推进（current → last）
+                        ConversationStateStore(self._db_path).update(
+                            session_id, clear_current=True,
+                            last_intent=compiled["kind"])
+                else:
+                    goals = GoalStore(db_path=self._db_path).load_active()
+                    # 兜底：与当前 session 关联的目标
+                    # （FIX-21: metadata.session_id；原 getattr-dict 恒 None 死代码）
+                    by_session = [x for x in goals
+                                  if self._goal_session_id(x) == session_id]
+                    if by_session:
+                        goal_id = str(by_session[0].get("id", ""))
+                        goal_note = self._goal_note_from_goal(by_session[0])
+                    elif goals:
+                        goal_id = str(goals[0].get("id", ""))
+                        goal_note = (f"【当前任务上下文】goal_id={goal_id}  "
+                                     f"status={goals[0].get('status', '?')}")
             except Exception:
                 pass
             # FIX-T4: 实时查询交给 USE| 动作协议 — 不再单向引导"依据记忆作答"
