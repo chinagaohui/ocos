@@ -182,7 +182,11 @@ class TestTextGenerator:
             assert gen.provider.name == "anthropic"
 
     def test_auto_provider_openai_when_key_set(self):
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-openai-test"}, clear=True):
+        # 隔离宿主机 ~/.ocos/config.json 的 llm_fallback 段（否则 FailoverProvider
+        # 包装后 name 为 failover(openai->openai)，本测试只验证 env 自动选择）
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-openai-test"}, clear=True), \
+                patch("ocos.engines.text_generator._read_llm_fallback_config",
+                      return_value={}):
             gen = TextGenerator()
             assert gen.provider.name == "openai"
 

@@ -106,7 +106,8 @@ class TestRepairExecution:
 class TestResilienceDrill:
     def test_drill_scores_full(self):
         import subprocess
+        import sys
         r = subprocess.run(
-            ["python", "scripts/resilience_drill.py"],
+            [sys.executable, "scripts/resilience_drill.py"],
             capture_output=True, text=True, timeout=120)
         assert "resilience score: 10/10" in (r.stdout + r.stderr)
