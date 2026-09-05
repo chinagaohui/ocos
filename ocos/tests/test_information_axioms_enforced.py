@@ -167,6 +167,8 @@ def test_axiom_5_execution_only_via_plugins():
 
     外部 I/O（文件、网络、数据库）的操作应限制在 Plugin 层。
     """
+    import re
+
     from ocos.tests.test_import_rules import ALLOWED_IMPORTS
 
     engine_dir = ENGINES_DIR
@@ -184,11 +186,19 @@ def test_axiom_5_execution_only_via_plugins():
         "io.FileIO",
     }
 
+    # S4.5: 朴素子串扫描会误报 SDK 客户端类名（如 DefaultHttpxClient 含
+    # "http"）——Axiom 5 的意图是禁止"直接 import 外部 I/O 库"，故按
+    # import/from 语句模式匹配；os.open/io.FileIO 是调用点引用，保留子串。
     for fpath in engine_files:
         if fpath.name == "__init__.py":
             continue
         content = fpath.read_text(encoding="utf-8")
         for mod in external_io_modules:
-            if mod in content:
-                fname = str(fpath.relative_to(OCOS_DIR.parent))
-                pytest.fail(f"Axiom 5 违反: {fname} 引用了外部 I/O 模块 '{mod}'")
+            fname = str(fpath.relative_to(OCOS_DIR.parent))
+            if mod in ("os.open", "io.FileIO"):
+                if mod in content:
+                    pytest.fail(f"Axiom 5 违反: {fname} 引用了外部 I/O 模块 '{mod}'")
+                continue
+            if re.search(
+                rf"(?:^|\n)\s*(?:import|from)\s+{re.escape(mod)}\b", content):
+                pytest.fail(f"Axiom 5 违反: {fname} 直接 import 外部 I/O 库 '{mod}'")

@@ -13,6 +13,8 @@ import pytest
 def db(tmp_path, monkeypatch):
     path = str(tmp_path / "diag.db")
     monkeypatch.setenv("OCOS_DB_PATH", path)
+    # S3.13: 默认已切 ask — 白名单修复直接执行路径需显式 auto
+    monkeypatch.setenv("OCOS_APPROVAL_MODE", "auto")
     return path
 
 

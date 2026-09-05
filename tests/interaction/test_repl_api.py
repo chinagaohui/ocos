@@ -231,27 +231,27 @@ def test_request_plan_api(client):
 
 
 def test_query_memory_api(client):
+    # S4.2: 占位端点 501 化 — EpisodeStore 未接线不再 200 空结果
     resp = client.post("/ocos/memory/query", json={
         "query": "科幻",
         "limit": 5,
     })
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is True
+    assert resp.status_code == 501
+    assert "not implemented" in str(resp.json()["detail"])
 
 
 def test_query_beliefs_api(client):
+    # S4.2: 占位端点 501 化
     resp = client.get("/ocos/belief?domain=self&min_confidence=0.5&limit=10")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is True
+    assert resp.status_code == 501
+    assert "not implemented" in str(resp.json()["detail"])
 
 
 def test_get_trace_api(client):
+    # S4.2: 占位端点 501 化
     resp = client.get("/ocos/trace/TRACE-001")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is True
+    assert resp.status_code == 501
+    assert "not implemented" in str(resp.json()["detail"])
 
 
 def test_get_goal_api(client):
