@@ -36,6 +36,7 @@ from ocos.autonomous_runtime.action_dispatcher import (
 )
 from ocos.agent_orchestration.audit import ExecutionAudit
 from ocos.interaction.base import PermissionGuard, ALLOWED_ACTIONS
+from ocos.execution.pending import approval_disabled
 
 logger = logging.getLogger(__name__)
 
