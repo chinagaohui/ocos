@@ -275,10 +275,17 @@ class EventBus:
         with self._lock:
             self._traces.append(trace)
         # Log in canonical format
+        # S2.9 (白皮书 P2): 用户消息摘要脱敏——不再明文进日志
+        try:
+            from ocos.logging.formatter import redact_text
+            _trace_summary = redact_text(
+                str(event.metadata.get("path", event.summary)), limit=50)
+        except Exception:
+            _trace_summary = str(event.metadata.get("path", event.summary))[:50]
         logger.info(
             "[EVENT] type=%s source=%s | [ATTENTION] candidate_score=%.2f | [DECISION] %s: %s",
             event.event_type,
-            event.metadata.get("path", event.summary),
+            _trace_summary,
             score,
             decision.name.lower(),
             reason,

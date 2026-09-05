@@ -10,6 +10,38 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 from collections import OrderedDict
+import os
+
+# ── S2.9 (白皮书 P2): 日志脱敏 ─────────────────────────────────────────
+# 默认开启；OCOS_LOG_REDACT=false 关闭（仅限本地开发）。
+_REDACT_ENABLED = os.environ.get("OCOS_LOG_REDACT", "true").strip().lower() != "false"
+_REDACT_FIELD_MARKERS = ("content", "payload", "user_message", "message")
+_REDACT_LIMIT = 50
+_MESSAGE_LIMIT = 200
+
+
+def redact_enabled() -> bool:
+    """脱敏开关（进程内首次读取环境变量后固定）。"""
+    return _REDACT_ENABLED
+
+
+def redact_text(value: str, limit: int = _REDACT_LIMIT) -> str:
+    """超长文本截断并追加 [REDACTED:{len}]，防用户内容明文进日志。"""
+    if not _REDACT_ENABLED or not isinstance(value, str):
+        return value
+    if len(value) <= limit:
+        return value
+    return value[:limit] + f"...[REDACTED:{len(value)}]"
+
+
+def _maybe_redact_extra(key: str, value: Any) -> Any:
+    """extra 字段按键名匹配脱敏（content/payload/user_message/message）。"""
+    if not _REDACT_ENABLED:
+        return value
+    k = key.lower()
+    if any(m in k for m in _REDACT_FIELD_MARKERS) and isinstance(value, str):
+        return redact_text(value)
+    return value
 
 
 class JSONFormatter(logging.Formatter):
@@ -20,7 +52,8 @@ class JSONFormatter(logging.Formatter):
         log_entry["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")
         log_entry["level"] = record.levelname
         log_entry["logger"] = record.name
-        log_entry["message"] = record.getMessage()
+        log_entry["message"] = redact_text(
+            record.getMessage(), limit=_MESSAGE_LIMIT)
 
         # 提取结构化字段（component, process_id）
         component = getattr(record, "component", None)
@@ -48,7 +81,7 @@ class JSONFormatter(logging.Formatter):
                 "component", "process_id", "exception",
             ):
                 continue
-            extra[key] = value
+            extra[key] = _maybe_redact_extra(key, value)
         if extra:
             log_entry["extra"] = extra
 
