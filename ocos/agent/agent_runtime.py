@@ -413,6 +413,15 @@ class AgentRuntime:
         """Phase G: 用户记忆中枢访问器."""
         return self._user_memory
 
+    def _record_step_result(self, step_log: list, result: Any) -> None:
+        """S3.9 (白皮书 P2): step 结果统一记账——含 error 字段时
+        _tick_errors 自增（原无自增点，稳定性报告 error_rate 恒 0、
+        high_error_rate 漂移旗标死逻辑）。
+        """
+        step_log.append(result)
+        if isinstance(result, dict) and result.get("error"):
+            self._tick_errors += 1
+
     def tick(self) -> dict[str, Any]:
         """Phase 22-C: 10 步持久化认知 Tick 循环。
 
@@ -437,37 +446,37 @@ class AgentRuntime:
             step_log: list[dict[str, Any]] = []
 
             # ── Step 1: Event Ingestion ──────────────────────────────
-            step_log.append(self._tick_step_event_ingestion())
+            self._record_step_result(step_log, self._tick_step_event_ingestion())
 
             # ── Step 2: Attention Update ─────────────────────────────
-            step_log.append(self._tick_step_attention_update())
+            self._record_step_result(step_log, self._tick_step_attention_update())
 
             # ── Step 3: WM Sync ──────────────────────────────────────
-            step_log.append(self._tick_step_wm_sync())
+            self._record_step_result(step_log, self._tick_step_wm_sync())
 
             # ── Step 4: Goal Maintenance ─────────────────────────────
-            step_log.append(self._tick_step_goal_maintenance())
+            self._record_step_result(step_log, self._tick_step_goal_maintenance())
 
             # ── Step 4.5: Homeostasis Regulation（P2-A 内生目标）────────
-            step_log.append(self._tick_step_homeostasis_regulation())
+            self._record_step_result(step_log, self._tick_step_homeostasis_regulation())
 
             # ── Step 5: Execution Check ──────────────────────────────
-            step_log.append(self._tick_step_execution_check())
+            self._record_step_result(step_log, self._tick_step_execution_check())
 
             # ── Step 6: Planning Trigger ─────────────────────────────
-            step_log.append(self._tick_step_planning_trigger())
+            self._record_step_result(step_log, self._tick_step_planning_trigger())
 
             # ── Step 7: Core Loop (observe→think→decide→act→reflect→learn) ──
-            step_log.append(self._tick_step_core_loop())
+            self._record_step_result(step_log, self._tick_step_core_loop())
 
             # ── Step 8: Dispatch (Bridge + Gateway) ───────────────────
-            step_log.append(self._tick_step_dispatch())
+            self._record_step_result(step_log, self._tick_step_dispatch())
 
             # ── Step 9: Result Ingest ────────────────────────────────
-            step_log.append(self._tick_step_result_ingest())
+            self._record_step_result(step_log, self._tick_step_result_ingest())
 
             # ── Step 10: Learning Consolidation ──────────────────────
-            step_log.append(self._tick_step_learning_consolidation())
+            self._record_step_result(step_log, self._tick_step_learning_consolidation())
 
             # ── Budget & Graceful Degradation ────────────────────────
             tick_elapsed = time.monotonic() - tick_start
