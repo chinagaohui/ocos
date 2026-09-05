@@ -50,7 +50,7 @@ multidict==6.7.1
 networkx==3.6.1
 numpy==2.5.1
 oauthlib==3.3.1
-# Editable Git install with no remote (ocos==0.2.0)
+# Editable Git install with no remote (ocos==1.0.0)
 -e /home/laogao/Documents/trae_projects/ocos
 ollama==0.6.2
 onnxruntime==1.27.0

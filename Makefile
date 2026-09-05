@@ -6,6 +6,7 @@ test:
 
 # 完整 Gate 检查
 gate:
+	python3 scripts/check_version_consistency.py
 	python3 scripts/phase24_gate.py
 	python3 scripts/phase25_gate.py
 	python3 scripts/phase27_28_gate.py
