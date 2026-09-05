@@ -64,7 +64,10 @@ class SessionManager:
         self._db_path = db_path
         self._pid = daemon_pid or os.getpid()
         self._state: Optional[SessionState] = None
-        self._lock = threading.Lock()
+        # FIX-VAL1: RLock（可重入）— append_turn 持锁期间调用 ensure_session
+        # 会对同一把锁二次加锁；threading.Lock 非重入 → daemon tick 线程自死锁
+        # （首条 say 消息触发会话初始化时必现，现场由 SIGUSR1 栈转储定位）
+        self._lock = threading.RLock()
         # 文件锁路径（防多实例）
         self._lock_path = Path(db_path).parent / f".daemon_lock_{self._pid}.lock"
 

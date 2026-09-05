@@ -30,6 +30,15 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# OPS: SIGUSR1 → 全线程栈转储到 stderr（journal）— 挂起/卡死时的生产诊断手段，
+# 无需 ptrace/root（py-spy 在受限环境不可用时仍可定位卡点）
+try:
+    import faulthandler
+    import signal as _signal
+    faulthandler.register(_signal.SIGUSR1, all_threads=True)
+except (ImportError, ValueError, OSError):   # 非主线程注册等场景静默跳过
+    pass
+
 
 class DaemonState(Enum):
     STOPPED = auto()
@@ -236,6 +245,15 @@ class ResidentRuntime:
             self._state = DaemonState.STARTING
             self._stop_event.clear()
             self._runtime.boot()
+            # FIX-VAL3: 启动时回收 stale-ACTIVE 孤儿目标（上进程认领后崩溃遗留）。
+            # 必须在 tick 线程启动前执行：运行期调用会错误回收本进程正在执行的目标。
+            if self._domain_goal_store is not None:
+                try:
+                    requeued = self._domain_goal_store.requeue_stale_active()
+                    if requeued:
+                        logger.info("Requeued %d stale-ACTIVE goal(s) for re-execution.", requeued)
+                except Exception:
+                    logger.exception("Stale-ACTIVE goal requeue failed")
             # P1-C: kernel boot + agent driver 注入（每 tick 驱动 AgentRuntime.tick）。
             # restart 场景下 kernel 保持 RUNNING，start() 幂等跳过。
             if self._kernel.state.name != "RUNNING":
@@ -570,9 +588,25 @@ class ResidentRuntime:
                             logger.info("Goal created: %s", goal_id)
                     else:
                         logger.warning("User message rejected: %s", msg["id"])
+                    # FIX-VAL1: 回复写回收件箱（ocos say --wait 的轮询源），
+                    # 并投递 outbound 供 TUI /outbox 可见 — 修复 FIX-03 回复丢失回归
+                    reply_text = str(out.get("reply", "") or "")
+                    if not reply_text:
+                        reply_text = "（daemon 已处理该消息，但未生成文本回复）"
+                    try:
+                        self._user_inbox.reply(msg["id"], reply_text)
+                        self._user_inbox.post_outbound(reply_text)
+                    except Exception:
+                        logger.exception("Inbox reply write-back failed: %s", msg["id"])
                     continue
-                except Exception:
+                except Exception as exc:
                     logger.exception("respond_auto failed, falling back to inject")
+                    # FIX-VAL1: 失败也要写回诚实错误 — --wait 不应无限悬挂
+                    try:
+                        self._user_inbox.reply(
+                            msg["id"], f"（消息处理失败：{type(exc).__name__} — 详见 daemon 日志）")
+                    except Exception:
+                        logger.exception("Inbox failure reply write-back failed: %s", msg["id"])
             # fallback: 旧路径（_responder 为 None 时）
             result = self._runtime.inject_user_message(
                 msg["content"], sender=msg.get("sender", "say"))

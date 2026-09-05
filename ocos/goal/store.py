@@ -204,6 +204,25 @@ class GoalStore:
         conn.commit()
         return claimed
 
+    def requeue_stale_active(self) -> int:
+        """FIX-VAL3: 启动时回收 stale-ACTIVE 目标（崩溃恢复语义）。
+
+        目标执行完全发生在 daemon 进程内 —— daemon 启动瞬间存在的任何
+        ACTIVE 目标必然是上一次进程崩溃/被杀前认领后遗留的孤儿
+        （认领后、执行中死亡 → 永久滞留 ACTIVE，claim 只认 PENDING）。
+        仅应在 daemon start() 调用一次；运行期调用会把本进程正在执行的
+        目标错误回收造成双重执行。
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._conn()
+        cur = conn.execute(
+            """UPDATE goals SET status = 'PENDING', updated_at = ?
+               WHERE status = 'ACTIVE'""",
+            (now,),
+        )
+        conn.commit()
+        return cur.rowcount
+
     def mark_completed(self, goal_id: str) -> bool:
         """P1 (2026-09-01): 域层 goals 表状态推进 ACTIVE → COMPLETED。
 

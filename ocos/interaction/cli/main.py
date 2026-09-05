@@ -97,6 +97,14 @@ def main(argv: list[str] | None = None) -> int:
             from ocos.interaction.cli.commands.status import cmd_status
             return cmd_status(args, session)
 
+        elif args.command == "restart":
+            from ocos.interaction.cli.commands.restart import cmd_restart
+            return cmd_restart(args, session)
+
+        elif args.command == "gateway":
+            from ocos.interaction.cli.commands.restart import cmd_gateway
+            return cmd_gateway(args, session)
+
         elif args.command == "approvals":
             from ocos.interaction.cli.commands.approvals import (
                 cmd_approvals_list, cmd_approvals_approve, cmd_approvals_deny,

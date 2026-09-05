@@ -128,6 +128,8 @@ def cmd_goal_status(args, session: InteractionSession) -> int:
     if row is None:
         print("  Not found in persistent store.")
         print(f"  Goal ID format validated: {'GOAL-' in args.goal_id}")
+        session.record_query()
+        return 1   # FIX-VAL2: 未找到 = 非零退出码（脚本化使用语义）
     else:
         print(f"  Level:    {row.get('level')}")
         print(f"  Status:   {row.get('status')}")
@@ -136,7 +138,6 @@ def cmd_goal_status(args, session: InteractionSession) -> int:
         print(f"  Created:  {row.get('created_at')}")
     session.record_query()
     return 0
-
 
 def cmd_goal_list(args, session: InteractionSession) -> int:
     """ocos goal list"""

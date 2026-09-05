@@ -101,6 +101,23 @@ Examples:
     chat.add_argument("--mouse", action="store_true",
                       help="启用程序内鼠标（默认关闭以保留终端原生选中/复制/粘贴）")
 
+    # ── restart（整合重启 OCOS 系统 + 网关） ─────────────────────
+    rst = subparsers.add_parser(
+        "restart", help="整合重启 OCOS 系统（server/daemon/gateway）并记录操作日志")
+    rst.add_argument("--env", choices=["dev", "test", "prod"], default="prod",
+                     help="环境: dev=server+daemon, test/prod=全部组件 (default: prod)")
+    rst.add_argument("--only", choices=["server", "daemon", "gateway"],
+                     action="append", metavar="NAME",
+                     help="仅重启指定组件（可重复, 覆盖 --env 默认集）")
+
+    # ── gateway（消息网关管理） ──────────────────────────────────
+    gw = subparsers.add_parser("gateway", help="OCOS 消息网关（hermes-gateway）管理")
+    gw_sub = gw.add_subparsers(dest="gateway_action")
+    gw_rst = gw_sub.add_parser("restart", help="重启消息网关")
+    gw_rst.add_argument("--env", choices=["dev", "test", "prod"], default="prod",
+                        help="记录到操作日志的环境标签 (default: prod)")
+
+
     # ── growth（Phase 50：成长模块 — 外部信号→自我优化） ──────────────
     _add_growth_parser(subparsers)
 

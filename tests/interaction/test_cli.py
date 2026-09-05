@@ -151,7 +151,8 @@ def test_cli_trace_show():
     assert main(["trace", "show", "TRACE-001"]) == 0
 
 def test_cli_goal_status():
-    assert main(["goal", "status", "GOAL-abc12345"]) == 0
+    # FIX-VAL2: 不存在的 goal 必须返回非零（脚本化语义），而非静默 0
+    assert main(["goal", "status", "GOAL-nonexistent00"]) == 1
 
 def test_cli_goal_list():
     assert main(["goal", "list"]) == 0
