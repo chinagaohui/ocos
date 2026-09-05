@@ -219,6 +219,33 @@ class TestTextGenerator:
         assert p.available is False
 
 
+class TestOpenaiProviderHttpClient:
+    """S3.13 回归（生产冒烟发现）: http_client 必须是 httpx.AsyncClient 实例。
+
+    openai>=3.8 的 DefaultHttpxClient 实例不被 http_client 参数校验接受
+    （报 Invalid http_client argument ... got <class 'openai._DefaultHttpxClient'>），
+    必须传显式 httpx.AsyncClient（trust_env=False 即代理隔离）。
+    """
+
+    @pytest.mark.asyncio
+    async def test_generate_constructs_valid_http_client(self):
+        import httpx
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+
+        with patch("openai.AsyncOpenAI") as mock_cls:
+            instance = mock_cls.return_value
+            instance.chat.completions.create = AsyncMock(return_value=SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="ok"))]))
+            p = OpenaiProvider(api_key="sk-test")
+            out = await p.generate("hi", max_tokens=5)
+            assert out == "ok"
+            kwargs = mock_cls.call_args.kwargs
+            assert isinstance(kwargs["http_client"], httpx.AsyncClient)
+            assert kwargs["http_client"]._trust_env is False
+
+
 # ═══════════════════════════════════════════════════════════════
 # AnthropicProvider / OpenaiProvider（仅静态检查，不调用 API）
 # ═══════════════════════════════════════════════════════════════

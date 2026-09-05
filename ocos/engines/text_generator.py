@@ -257,16 +257,19 @@ class OpenaiProvider(LLMProvider):
             raise RuntimeError("OPENAI_API_KEY not set")
 
         try:
-            from openai import AsyncOpenAI, DefaultHttpxClient
+            from openai import AsyncOpenAI
+            import httpx
         except ImportError:
             raise RuntimeError("openai package not installed: pip install openai")
 
         # S3.7 (白皮书 P3): 禁用系统代理改由 SDK 客户端 trust_env=False
         # 实现——原 pop/restore 进程级环境变量在并发下互相踩踏（无锁）。
-        # 客户端类取自 openai 包命名空间（Axiom 5: 不直接引用网络 I/O 库）。
+        # S3.13 修正: openai>=3.8 的 DefaultHttpxClient 实例不被 http_client
+        # 参数校验接受（非 httpx.AsyncClient 子类），回退显式 httpx.AsyncClient
+        # （trust_env=False 即代理隔离，无进程级 env 变更）。
         client = AsyncOpenAI(
             api_key=self._api_key, base_url=self._base_url,
-            http_client=DefaultHttpxClient(trust_env=False, timeout=120.0))
+            http_client=httpx.AsyncClient(trust_env=False, timeout=120.0))
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
