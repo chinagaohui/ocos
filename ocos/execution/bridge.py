@@ -852,10 +852,9 @@ class DecisionBridge:
         try:
             import asyncio
             tg = self._get_textgen()
-            # 清除代理环境变量，避免 socks 代理导致 OpenAI SDK 报错
-            proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
-            _saved_proxies = {k: os.environ.pop(k) for k in proxy_env_keys}
-            try:
+            # S3.7: 代理隔离已下沉到 provider（trust_env=False）——
+            # 删除进程级 env pop/restore（并发竞态）
+            if True:
                 _rules = (
                     "把上述任务转换为可直接执行的动作。每行一个动作、最多 4 行，格式严格为：\n"
                     "RUN|<命令>（优先使用只读命令: uname/df/free/uptime/ls/cat/head/"
@@ -875,9 +874,6 @@ class DecisionBridge:
                     system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的动作行。",
                     temperature=0.1, max_tokens=2000))
                 raw = raw.strip()
-            finally:
-                # 恢复代理环境变量
-                os.environ.update(_saved_proxies)
         except Exception as e:
             return {"ok": False, "error": f"LLM 规划失败: {e}"}
 
@@ -1077,9 +1073,7 @@ class DecisionBridge:
         try:
             import asyncio
             tg = self._get_textgen()
-            proxy_env_keys = [k for k in os.environ if 'proxy' in k.lower()]
-            _saved = {k: os.environ.pop(k) for k in proxy_env_keys}
-            try:
+            if True:  # S3.7: 代理隔离已下沉到 provider
                 prompt = (
                     f"任务：{task_description[:200]}\n\n"
                     f"以下是该任务多条命令的执行输出：\n{execution_text[:3000]}\n\n"
@@ -1091,8 +1085,6 @@ class DecisionBridge:
                     system_prompt="你是 OCOS 的执行结果分析器。只输出结论摘要。",
                     temperature=0.2, max_tokens=800))
                 return raw.strip()
-            finally:
-                os.environ.update(_saved)
         except Exception as e:
             logger.warning("execution summary failed (fallback to raw): %s", e)
             return ""
