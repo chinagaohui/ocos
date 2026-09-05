@@ -225,7 +225,8 @@ ALLOWED_IMPORTS = {
                        "ocos.capability.permission_gateway",  # S3.2: 入口网关前检
                        "ocos.storage",
                        "ocos.operations", "ocos.event_memory", "ocos.digital_world",
-                       "ocos.agent", "ocos.daemon", "ocos.engines"],
+                       "ocos.agent", "ocos.daemon", "ocos.engines",
+                       "ocos.monitoring"],  # S3.5: LLM 调用计数器（record_global 进程级埋点）
                        # PW-2.1 治理化应用 + PW-3.1 系统修复 + UX-F1 LLM 执行器
                        # PW-2.1 治理化应用 + PW-3.1 系统修复执行
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
