@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from ocos.world_model.world_types import Observation, Entity, Relation
+from ocos.world_model.world_types import (Observation, Entity, Relation,
+                                          EntityType)
 
 
 class ValidationDecision(Enum):
@@ -115,9 +116,16 @@ class WorldValidator:
         # 实体冲突检查
         if observation.entity_id and observation.claimed_state:
             existing = existing_entities.get(observation.entity_id)
-            if existing and existing.entity_type != existing.entity_type:
-                # 同一个 ID 但不同类型 → 冲突
-                issues.append(ValidationIssue.CONFLICT_WITH_EXISTING)
+            if existing:
+                # S2.1 (白皮书 P1-4): 原为 `existing.entity_type !=
+                # existing.entity_type` 自比较恒 False — 冲突检查从未触发。
+                # 观察侧类型取 claimed_state.attributes["entity_type"]，
+                # 与 world_store._extract_entity_type 同语义。
+                observed_type = self._observed_entity_type(observation)
+                if (observed_type is not None
+                        and existing.entity_type != observed_type):
+                    # 同一个 ID 但不同类型 → 冲突
+                    issues.append(ValidationIssue.CONFLICT_WITH_EXISTING)
 
         if issues:
             return ValidationResult(
@@ -129,6 +137,24 @@ class WorldValidator:
         return ValidationResult(decision=ValidationDecision.ACCEPT)
 
     # ── 置信度阈值 ──
+
+    @staticmethod
+    def _observed_entity_type(observation):
+        """从观察的 claimed_state 提取声称的实体类型（无声称返回 None）。
+
+        S2.1: 与 world_store._extract_entity_type 同语义，但此处对
+        非法值返回 None（无法判定 → 不产生冲突），并避免
+        validator → store 反向依赖。
+        """
+        if observation.claimed_state is None:
+            return None
+        raw = observation.claimed_state.attributes.get("entity_type")
+        if isinstance(raw, str):
+            try:
+                return EntityType(raw)
+            except ValueError:
+                return None
+        return None
 
     def clamp_confidence(self, value: float) -> float:
         """将置信度限制在 [min_confidence, max_confidence] 范围内。"""
