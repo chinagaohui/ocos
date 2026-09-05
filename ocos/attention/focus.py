@@ -128,9 +128,14 @@ class AttentionFocus:
 
         # 更新焦点
         if score.composite >= self._focus_threshold:
+            # S2.15 (白皮书 P2): 原调用 _update_focus(focus_target=...)
+            # 关键字名错误且缺必需实参 score → TypeError（主入口即坏）
             self._update_focus(
                 focus_type=FocusType.EXTERNAL,
-                focus_target=observation.content[:80] if hasattr(observation, 'content') else str(observation)[:80],
+                target=(observation.content[:80]
+                        if hasattr(observation, 'content')
+                        else str(observation)[:80]),
+                score=score.composite,
                 attention_scores=(
                     score.novelty,
                     score.goal_relevance,
