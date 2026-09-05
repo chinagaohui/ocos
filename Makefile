@@ -16,6 +16,11 @@ gate:
 full-gate: gate test
 	@echo "All gates + tests passed"
 
+# Behavioral Delta（AGI 落地计划 P0/ER-2 基座）
+behavior-delta:
+	python3 scripts/behavior_delta.py --task host-analysis --json
+	python3 scripts/behavior_delta.py --task file-write --json
+
 # E2E 端到端测试
 e2e:
 	python3 -m pytest tests/test_e2e/ -v

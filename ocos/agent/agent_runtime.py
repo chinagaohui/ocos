@@ -1569,6 +1569,7 @@ class AgentRuntime:
     def _extract_beliefs(self) -> None:
         """从经验中提炼信念。"""
         important = self.experiences.replay_important(count=3)
+        count = 0
         for exp in important:
             # S2.14 (白皮书 P2): ExperienceStore.record 写入的 outcome
             # 恒为 "completed"（:1411），原判定集合不含它 → 每 10 tick 的
@@ -1585,6 +1586,10 @@ class AgentRuntime:
                     confidence=exp.importance,
                     source="experience",
                 )
+                count += 1
+        # P0.3 (AGI 计划): 学习产物可观测 — 产出打点（未装配监控时静默 no-op）
+        if count:
+            self._record_belief_metric(count, "experience")
 
     def _extract_beliefs_from_results(self) -> int:
         """Phase 32-B: 从 _recent_results 模式提取 Belief。
@@ -1648,7 +1653,19 @@ class AgentRuntime:
                 )
                 count += 1
 
+        # P0.3 (AGI 计划): 学习产物可观测 — consolidation 来源打点
+        if count:
+            self._record_belief_metric(count, "consolidation")
         return count
+
+    def _record_belief_metric(self, count: int, source: str) -> None:
+        """P0.3: 信念产出计数打点（S3.5 全局指标钩子；未装配时静默 no-op）。"""
+        try:
+            from ocos.monitoring.manager import record_global
+            record_global("belief_created", float(count),
+                          labels={"source": source})
+        except Exception:
+            pass
 
     def get_stability_report(self) -> dict[str, Any]:
         """Phase 34D: 运行稳定性报告。

@@ -1,0 +1,175 @@
+"""P0.1: 行为黄金链路测试（AGI 落地计划）。
+
+5 类代表性任务的决策轨迹捕获与对比：
+  1. host-analysis   只读复合（宿主机分析）
+  2. file-write      文件写入（强制审批）
+  3. vague-task      模糊任务（诚实失败）
+  4. sensitive-path  敏感路径（沙盒拦截）
+  5. destructive     破坏性命令（沙盒拦截）
+
+每类任务确定性驱动 DecisionBridge（无 LLM 依赖），轨迹写入临时
+behavior 目录；断言 JSONL 结构完整 + 确定性任务二次执行轨迹一致
+（similarity=1.0, success_delta=0）——为 ER-2 对比建立机制基座。
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+
+@pytest.fixture
+def behavior_dir(tmp_path):
+    """隔离行为轨迹目录（不污染 ~/.ocos/behavior）。"""
+    return tmp_path / "behavior"
+
+
+def _bridge(store=None, mode="auto"):
+    import os
+    os.environ["OCOS_APPROVAL_MODE"] = mode
+    from ocos.execution.bridge import DecisionBridge
+    b = DecisionBridge(pending_store=store)
+    b.attach_default_handlers()
+    return b
+
+
+def _record(bridge, task_id, input_text, outcome, behavior_dir):
+    """驱动 bridge → 取轨迹 → 写入。"""
+    from ocos.behavior.trajectory import record_trajectory
+    rep = bridge.process({"status": "completed",
+                          "action_result": {"based_on": {"message": input_text}}})
+    actions = rep.summary() if rep.verdicts else {
+        "total": 0, "by_verdict": {}, "executed": [],
+        "pending": [], "denied": [], "source": "dag_task"}
+    return record_trajectory(task_id, input_text, actions, outcome,
+                             base_dir=behavior_dir)
+
+
+# ── 1. 只读复合（宿主机分析）───────────────────────────────────────────
+
+
+def test_host_analysis_trajectory(behavior_dir):
+    b = _bridge()
+    _record(b, "host-analysis", "run command df -h", "completed", behavior_dir)
+    from ocos.behavior.trajectory import load_trajectories
+    rows = load_trajectories("host-analysis", base_dir=behavior_dir)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["task_id"] == "host-analysis"
+    assert row["outcome"] == "completed"
+    assert "RUN_COMMAND" in row["actions"]["executed"]
+    assert row["input"].startswith("run command")
+
+
+# ── 2. 文件写入（强制审批）──────────────────────────────────────────────
+
+
+def test_file_write_pending_trajectory(behavior_dir, tmp_path):
+    from ocos.execution.pending import PendingStore
+    store = PendingStore(str(tmp_path / "b.db"))
+    b = _bridge(store, mode="ask")
+    from types import SimpleNamespace
+    r = b.execute_dag_task(SimpleNamespace(
+        task_type="create", task_id="FW-1",
+        description="写入文件 /tmp/x.txt"))
+    assert r["status"] == "pending_approval"
+    from ocos.behavior.trajectory import record_trajectory, load_trajectories
+    record_trajectory("file-write", "写入文件 /tmp/x.txt",
+                      {"executed": [], "pending": ["dag_create"],
+                       "denied": [], "total": 1},
+                      "pending_approval", base_dir=behavior_dir)
+    row = load_trajectories("file-write", base_dir=behavior_dir)[0]
+    assert row["outcome"] == "pending_approval"
+    assert "dag_create" in row["actions"]["pending"]
+
+
+# ── 3. 模糊任务（诚实失败）──────────────────────────────────────────────
+
+
+def test_vague_task_failed_trajectory(behavior_dir):
+    b = _bridge()
+    from types import SimpleNamespace
+    r = b.execute_dag_task(SimpleNamespace(
+        task_type="execute", task_id="VAGUE-1", description=""))
+    assert r["status"] == "failed"
+    from ocos.behavior.trajectory import record_trajectory, load_trajectories
+    record_trajectory("vague-task", "分析数据",
+                      {"executed": [], "pending": [], "denied": [],
+                       "total": 0},
+                      "failed", base_dir=behavior_dir)
+    row = load_trajectories("vague-task", base_dir=behavior_dir)[0]
+    assert row["outcome"] == "failed"
+
+
+# ── 4/5. 沙盒拦截（敏感路径 + 破坏性命令）───────────────────────────────
+
+
+@pytest.mark.parametrize("task_id,input_text", [
+    ("sensitive-path", "run command cat /etc/shadow"),
+    ("destructive", "run command rm -rf /"),
+])
+def test_sandbox_blocked_trajectory(behavior_dir, task_id, input_text):
+    b = _bridge()
+    _record(b, task_id, input_text, "blocked", behavior_dir)
+    from ocos.behavior.trajectory import load_trajectories
+    row = load_trajectories(task_id, base_dir=behavior_dir)[0]
+    assert row["outcome"] in ("blocked", "failed")
+    assert row["input"].startswith("run command")
+
+
+# ── 对比机制：确定性任务二次执行应一致 ──────────────────────────────────
+
+
+def test_deterministic_task_identical_on_rerun(behavior_dir):
+    """同任务同输入二次执行 → similarity=1.0, success_delta=0（基线可重复）。"""
+    from ocos.behavior.trajectory import (
+        compare_trajectories, load_trajectories, record_trajectory,
+    )
+    for _ in range(2):
+        b = _bridge()
+        _record(b, "host-analysis", "run command df -h", "completed",
+                behavior_dir)
+    rows = load_trajectories("host-analysis", base_dir=behavior_dir)
+    assert len(rows) == 2
+    delta = compare_trajectories(rows[0], rows[1])
+    assert delta["similarity"] == 1.0
+    assert delta["success_delta"] == 0.0
+    assert delta["path_changed"]["added"] == []
+    assert delta["path_changed"]["removed"] == []
+
+
+# ── P0.3: 学习产物可观测（belief_created 打点与产出一致）─────────────────
+
+
+def test_belief_created_metric_tracks_extraction():
+    """consolidation 信念提取产出 → belief_created 打点计数一致。"""
+    from ocos.monitoring.manager import (
+        MetricsRegistry, record_global, set_global_metrics,
+    )
+    reg = MetricsRegistry()
+    set_global_metrics(reg)
+
+    from ocos.agent.agent_runtime import AgentRuntime
+    from ocos.agent.belief_system import BeliefSystem
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt._recent_results = [
+        {"success": True, "agent": "writer", "description": "写一篇文章"},
+        {"success": True, "agent": "writer", "description": "写一篇博客"},
+        {"success": True, "agent": "writer", "description": "写一段文案"},
+        {"success": True, "agent": "writer", "description": "写一份报告"},
+    ]
+    rt.beliefs = BeliefSystem()
+
+    produced = rt._extract_beliefs_from_results()
+    assert produced > 0
+    # 打点必须在 metrics 中可见（S3.5 全局钩子）
+    out = reg.to_prometheus()
+    assert "belief_created" in out, out
+    assert f"belief_created_source_consolidation" in out, out
+    # 打点累计值 ≥ 本次产出（与返回 count 同源）
+    key = "belief_created_source_consolidation"
+    assert reg._counters.get(key, 0.0) >= produced
+
+    set_global_metrics(None)
