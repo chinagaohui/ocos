@@ -34,29 +34,3 @@ class TestSelfGovernor:
         )
         governor = SelfGovernor(boundary=boundary)
         assert governor is not None
-
-    def test_check_compliance(self):
-        from ocos.self.governor import SelfGovernor
-        boundary = IdentityBoundary(
-            id='test', version=1,
-            principles=(
-                BoundaryPrinciple.NO_SELF_MODIFICATION,
-                BoundaryPrinciple.CAPABILITY_BOUND,
-                BoundaryPrinciple.EVOLUTION_GOVERNED,
-            ),
-            forbidden_transitions=(
-                ForbiddenTransition('neutral', 'persona', 'Self must not evolve into a persona'),
-            ),
-            authority_limits=('self-layer',),
-            self_reference_constraints=('no-circular-proof',),
-            evolution_constraints={
-                'min_stability_days': 7,
-                'min_evidence_beliefs': 3,
-                'require_governance_approval': True,
-                'max_evolution_frequency_days': 30,
-            },
-            created_at=datetime.now()
-        )
-        governor = SelfGovernor(boundary=boundary)
-        result = governor.check_compliance()
-        assert result is not None

@@ -1,6 +1,6 @@
-"""Tests for ocos.agent.agent_runtime."""
+"""Deep tests for ocos.agent.agent_runtime."""
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 
 class TestAgentRuntime:
@@ -34,3 +34,19 @@ class TestAgentRuntime:
         runtime = AgentRuntime(agent=agent)
         report = runtime.get_stability_report()
         assert isinstance(report, dict)
+
+    def test_attach_decision_bridge(self):
+        from ocos.agent.agent_runtime import AgentRuntime
+        from ocos.execution.bridge import DecisionBridge
+        agent = MagicMock()
+        runtime = AgentRuntime(agent=agent)
+        bridge = DecisionBridge()
+        runtime.attach_decision_bridge(bridge)
+        assert runtime is not None
+
+    def test_shutdown(self):
+        from ocos.agent.agent_runtime import AgentRuntime
+        agent = MagicMock()
+        runtime = AgentRuntime(agent=agent)
+        runtime.shutdown()
+        assert runtime is not None
