@@ -220,3 +220,41 @@ def test_learning_artifacts_empty_without_match():
     rt.beliefs.add("当股票市场波动时, 降低仓位有效", confidence=0.9)
 
     assert rt.learning_artifacts("查看天气情况") == []
+
+
+# ── P1.2: 决策注入（_prior_knowledge）───────────────────────────────────
+
+
+def test_prior_knowledge_injects_artifacts():
+    """learning_source 命中 → 注入块含 artifact_id + knowledge_injected 打点。"""
+    from ocos.monitoring.manager import (
+        MetricsRegistry, set_global_metrics,
+    )
+    reg = MetricsRegistry()
+    set_global_metrics(reg)
+
+    from ocos.execution.bridge import DecisionBridge
+    b = DecisionBridge()
+    b.attach_learning_source(lambda desc: [
+        {"artifact_id": "b-1", "type": "belief",
+         "text": "当磁盘使用率高时 df -h 有效", "confidence": 0.8},
+    ])
+    block = b._prior_knowledge("检查磁盘使用率")
+    assert "【历史经验（方法论）】" in block
+    assert "b-1" in block
+    assert "df -h" in block
+    # 打点可见
+    out = reg.to_prometheus()
+    assert "knowledge_injected" in out, out
+    assert "b-1" in out, out
+    set_global_metrics(None)
+
+
+def test_prior_knowledge_empty_without_source():
+    """未注入 learning_source → 空注入块（基线路径行为不变）。"""
+    from ocos.execution.bridge import DecisionBridge
+    b = DecisionBridge()
+    assert b._prior_knowledge("检查磁盘使用率") == ""
+    # 注入源但无匹配 → 空
+    b.attach_learning_source(lambda desc: [])
+    assert b._prior_knowledge("检查磁盘使用率") == ""

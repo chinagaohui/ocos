@@ -327,6 +327,16 @@ def build_execution_bridge(agent: Any = None, agent_id: str = "decision_bridge",
         import logging
         logging.getLogger(__name__).debug(
             "confidence source attach skipped: %s", e)
+    # P1.2 (AGI 计划): 学习产物检索源 — 绑定 AgentRuntime.learning_artifacts，
+    # 让决策 prompt 注入历史信念/知识（方法论级经验复用）。agent 未装配或
+    # 无该接口时跳过（基线路径，行为不变）。
+    try:
+        if agent is not None and hasattr(agent, "learning_artifacts"):
+            bridge.attach_learning_source(agent.learning_artifacts)
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).debug(
+            "learning source attach skipped: %s", e)
     if agent is not None:
         attach = getattr(agent, "attach_decision_bridge", None)
         if attach is not None:

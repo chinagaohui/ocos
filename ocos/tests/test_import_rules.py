@@ -59,6 +59,7 @@ ALLOWED_IMPORTS = {
     "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.perception_bus",  # S4.1: 原 ocos.event
                          "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity",
                          "ocos.evolution", "ocos.extension", "ocos.task", "ocos.initiative", "ocos.collaboration", "ocos.autonomous",
+                         "ocos.monitoring",  # P0.3: 学习产物 belief_created 打点（record_global）
                          # Phase R: Continuous Learning
                          "ocos.learning",
                          # Phase AD: Human-AI

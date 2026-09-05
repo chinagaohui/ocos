@@ -126,6 +126,7 @@ class DecisionBridge:
         pending_store: Optional[Any] = None,    # AUD-F12: PendingStore (SQLite 持久化)
         db_path: Optional[str] = None,          # PW-1.4: 执行留痕 event_memory
         permission_gateway: Optional[Any] = None,  # S3.2: 入口网关前检（None→惰性默认）
+        learning_source: Optional[Any] = None,  # P1.2: 学习产物检索源（None→无注入）
     ) -> None:
         self._dispatcher = dispatcher or ActionDispatcher()
         self._guard = guard or PermissionGuard()
@@ -136,6 +137,9 @@ class DecisionBridge:
         self._db_path = db_path
         self._permission_gateway = permission_gateway  # S3.2（None→惰性默认实例）
         self._lifecycle_store: Any = None       # PW-1.4: event_memory EventStore（惰性）
+        # P1.2 (AGI 计划): 学习产物检索源 — fn(description) -> artifacts 列表
+        # （None=无注入，走原始 prompt 基线路径）
+        self._learning_source: Any = learning_source
         # P2-2: LLM 日预算 — 超限后任务转待批（诚实降级，不烧 token）
         self._llm_calls_today: int = 0
         self._llm_calls_date: str = ""
@@ -200,6 +204,16 @@ class DecisionBridge:
         返回 verdict.should_escalate=True 时, 写类任务升级 ASK (治理增强)。
         """
         self._confidence_source = source
+        return self
+
+    def attach_learning_source(self, source: Any) -> "DecisionBridge":
+        """P1.2 (AGI 计划): 注入学习产物检索源。
+
+        source 为可调用对象: fn(description) -> list[dict]，每项含
+        {artifact_id, type, text, confidence}（见 learning_artifacts）。
+        None/未注入 = 决策 prompt 无学习产物注入（基线路径）。
+        """
+        self._learning_source = source
         return self
 
     # ── 决策执行入口 ──────────────────────────────────────────────────────
@@ -869,6 +883,10 @@ class DecisionBridge:
                 prior = self._prior_task_results(description)
                 if prior:
                     prompt = f"{prior}\n\n{prompt}"
+                # P1.2 (AGI 计划): 注入方法论级学习产物（信念/知识，带归因 id）
+                knowledge = self._prior_knowledge(description)
+                if knowledge:
+                    prompt = f"{knowledge}\n\n{prompt}"
                 raw = asyncio.run(tg._provider.generate(
                     prompt,
                     system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的动作行。",
@@ -1007,6 +1025,41 @@ class DecisionBridge:
             from ocos.engines.text_generator import get_text_generator
             self._textgen = get_text_generator()
         return self._textgen
+
+    def _prior_knowledge(self, description: str, limit: int = 3) -> str:
+        """P1.2 (AGI 计划): 学习产物（方法论级）注入决策 prompt。
+
+        与 _prior_task_results（结果级）互补：本方法注入沉淀的信念/知识
+        （如"当磁盘使用率高时 df -h 有效"），使规划 LLM 在动作选择上
+        复用历史经验而非仅看到摘要结果。带 artifact_id 供 ER-2 归因。
+
+        未注入 learning_source 时返回 ""（基线路径，行为不变）。
+        """
+        if self._learning_source is None:
+            return ""
+        try:
+            artifacts = self._learning_source(description) or []
+        except Exception as e:
+            logger.debug("prior knowledge retrieval failed: %s", e)
+            return ""
+        if not artifacts:
+            return ""
+        lines = ["【历史经验（方法论）】"]
+        for a in artifacts[:limit]:
+            aid = str(a.get("artifact_id", ""))[:40]
+            text = str(a.get("text", ""))[:120]
+            conf = float(a.get("confidence", 0.0))
+            lines.append(
+                f"- [{a.get('type', 'belief')}] {text} "
+                f"(conf={conf:.2f}, artifact={aid})")
+            # P0.3/P1.2: 注入可观测 — 每次真实注入打点（未装配时静默）
+            try:
+                from ocos.monitoring.manager import record_global
+                record_global("knowledge_injected", 1.0,
+                              labels={"artifact_id": aid})
+            except Exception:
+                pass
+        return "\n".join(lines)
 
     def _prior_task_results(self, description: str, limit: int = 2) -> str:
         """FIX-4: 同类任务历史结果 — 任务转换前的执行经验注入。
