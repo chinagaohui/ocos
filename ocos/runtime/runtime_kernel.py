@@ -59,8 +59,19 @@ class RuntimeKernel:
     def __init__(
         self,
         runtime_id: str | None = None,
-        checkpoint_dir: str | Path = "/tmp/ocos_checkpoints",
+        checkpoint_dir: str | Path | None = None,
     ):
+        # S2.7 (白皮书 P2): 恢复数据（快照/事件/账本/审批）默认落
+        # ~/.ocos/recovery/（持久目录），替换原 /tmp/ocos_checkpoints
+        # ——/tmp 重启即失，恢复子系统形同虚设。OCOS_RECOVERY_DIR 可覆盖。
+        import os as _os
+        from pathlib import Path as _Path
+        if checkpoint_dir is None:
+            checkpoint_dir = _os.environ.get(
+                "OCOS_RECOVERY_DIR",
+                str(_Path.home() / ".ocos" / "recovery"))
+        checkpoint_dir = _Path(checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self._runtime_id = runtime_id or str(uuid.uuid4())
         self._checkpoint_engine = CheckpointEngine(checkpoint_dir)
         self._recovery_engine = RecoveryEngine(

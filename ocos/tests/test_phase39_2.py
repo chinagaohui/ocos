@@ -115,7 +115,10 @@ class TestR39202EmptySystemEndurance:
         k.shutdown()
 
         from ocos.runtime.checkpoint import CheckpointEngine
-        cp = CheckpointEngine()
+        # S2.7: kernel 默认恢复目录已从 /tmp 迁至 ~/.ocos/recovery，
+        # 读取端使用 kernel 实际写盘的目录（跨进程持久性由 OCOS_RECOVERY_DIR
+        # 稳定路径保证）
+        cp = CheckpointEngine(k._checkpoint_engine._dir)
         record = cp.latest_checkpoint(uid)
         assert record is not None, "checkpoint not found after 100 ticks"
         assert record.tick_id >= 100
