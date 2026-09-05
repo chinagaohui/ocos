@@ -125,7 +125,9 @@ class OutcomeEvaluator:
             return 0.5
         try:
             stats = self._experience.get_stats(capability_id, provider_id)
-            if stats and stats.get("count", 0) > 0:
+            # S2.14 (白皮书 P2): get_stats 返回键为 total（原查 count
+            # 恒不存在 → 即使有历史 reliability 恒 0.5 兜底）
+            if stats and stats.get("total", 0) > 0:
                 return stats.get("success_rate", 0.5)
         except Exception:
             logger.debug(

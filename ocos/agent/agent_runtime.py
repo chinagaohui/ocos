@@ -1561,7 +1561,10 @@ class AgentRuntime:
         """从经验中提炼信念。"""
         important = self.experiences.replay_important(count=3)
         for exp in important:
-            if exp.outcome in ("success", "great", "good"):
+            # S2.14 (白皮书 P2): ExperienceStore.record 写入的 outcome
+            # 恒为 "completed"（:1411），原判定集合不含它 → 每 10 tick 的
+            # 信念提取恒空转。补齐成功语义的等价值。
+            if exp.outcome in ("success", "great", "good", "completed"):
                 self.beliefs.add(
                     statement=f"当{exp.situation}时, {exp.action}有效",
                     confidence=0.6 + exp.importance * 0.3,

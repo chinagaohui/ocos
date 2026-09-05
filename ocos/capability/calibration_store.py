@@ -69,22 +69,17 @@ class CalibrationStore:
         # 计算应用后的 reliability_adjustment
         avg_delta = self._delta_accumulators[key] / count
 
-        # 写入 CapabilityExperienceMemory（如果可用）
-        if self._experience:
-            try:
-                self._experience.update_reliability(
-                    capability_id, provider_id, avg_delta,
-                )
-            except Exception:
-                logger.debug(
-                    "reliability update failed: %s/%s", capability_id, provider_id,
-                )
+        # S2.14 (白皮书 P2): CapabilityExperienceMemory 无 update_reliability
+        # 方法（原调用 AttributeError 被吞 + 假报 applied=True）。现诚实
+        # 降级：delta 只累计在本地校准表，applied=False 如实上报。
+        applied = False
+        reason = "CALIBRATED_LOCAL_ONLY（reliability 后端未接线）"
 
         return CalibrationResult(
             delta=calibration_delta,
             cumulative_delta=avg_delta,
-            applied=True,
-            reason="CALIBRATED",
+            applied=applied,
+            reason=reason,
             samples=count,
             required_samples=CALIBRATION_MIN_SAMPLES,
         )
