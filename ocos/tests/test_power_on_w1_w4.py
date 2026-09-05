@@ -11,6 +11,7 @@ import pytest
 def db(tmp_path, monkeypatch):
     path = str(tmp_path / "power.db")
     monkeypatch.setenv("OCOS_DB_PATH", path)
+    monkeypatch.setenv("OCOS_APPROVAL_MODE", "ask")
     return path
 
 

@@ -29,6 +29,23 @@ logger = get_logger(__name__)
 
 _REPAIR_CHECKPOINT_DIR = Path.home() / ".ocos" / "repair_checkpoints"
 
+# 审批关闭时同一修复自动重执行的最小间隔（防诊断循环重复执行 REINDEX 类步骤）
+_AUTO_REPAIR_COOLDOWN = 3600.0
+_auto_repair_last: dict[str, float] = {}
+
+
+def _step_whitelisted(step: str) -> bool:
+    """判定单个修复步骤可否真实执行 — 与 _execute_step 白名单逐字对齐。
+
+    用于入队/自动执行前的守门: 任一步骤不可执行的提案批准后必然
+    整体回滚（纯噪音）, 一律拦截。
+    """
+    s = step.upper()
+    return (("索引" in step and "重建" in step) or "REINDEX" in s
+            or "清理缓存" in step or "CLEAR_CACHE" in s
+            or "重新连接" in step or "RECONNECT" in s
+            or "归档" in step or "修剪" in step)
+
 
 # ── 诊断循环（health_loop 每 N 次体检调用一次） ────────────────────────
 
@@ -45,7 +62,7 @@ def run_diagnosis_cycle(db_path: str) -> dict:
     signals = detector.feed(snapshot)
 
     proposer = RepairProposer()
-    queued, diagnostics = [], []
+    queued, diagnostics, executed = [], [], []
     for signal in signals:
         report = DiagnosisReport(
             report_id=f"diag-{uuid.uuid4().hex[:10]}",
@@ -62,32 +79,45 @@ def run_diagnosis_cycle(db_path: str) -> dict:
         diagnostics.append({"problem": report.problem,
                             "severity": signal.severity.value,
                             "category": signal.category.value})
-        WHITELIST_STEP_KEYWORDS = ("索引", "缓存", "重新连接", "归档", "修剪")
         proposals = proposer.propose(report, signal)
         for proposal in proposals:
             if not proposal.reversible:
                 continue  # 不可逆修复不自动入队（诚实保守）
-            # 步骤未白名单的修复不入队（批准了也只会诚实回滚——纯噪音）
-            if not any(any(k in s for k in WHITELIST_STEP_KEYWORDS)
-                       for s in proposal.steps):
+            # 步骤未全部白名单的修复不入队（批准/自动执行都只会诚实
+            # 回滚——纯噪音; 例: REINDEX 提案含"锁住写入"步骤必回滚）
+            if not all(_step_whitelisted(s) for s in proposal.steps):
                 logger.info("Repair proposal skipped (steps not whitelisted): %s",
                             proposal.description[:50])
                 continue
+            from ocos.execution.pending import PendingStore, approval_disabled
+            store = PendingStore(db_path=db_path)
             # UX: 相同描述的修复提案已在待批 → 跳过（防诊断循环重复刷屏）
-            from ocos.execution.pending import PendingStore
-            _store = PendingStore(db_path=db_path)
-            if any(proposal.description in (p.get("description") or "")
-                   for p in _store.list_by_status("pending")):
+            if any(proposal.description in (p.get("payload_json") or "")
+                   for p in store.list_by_status("pending")):
+                continue
+            payload = {
+                "proposal_id": proposal.proposal_id,
+                "repair_type": str(proposal.repair_type),
+                "steps": proposal.steps,
+                "description": proposal.description,
+                "target": proposal.target_component,
+            }
+            if approval_disabled():
+                # 审批关闭: 白名单可逆修复直接执行（checkpoint+失败回滚保留），
+                # 同一修复带冷却间隔防诊断循环重复执行
+                now = time.time()
+                if now - _auto_repair_last.get(proposal.description, 0.0) \
+                        < _AUTO_REPAIR_COOLDOWN:
+                    continue
+                _auto_repair_last[proposal.description] = now
+                result = execute_system_repair(payload, db_path)
+                executed.append({"description": proposal.description,
+                                 "ok": result.get("ok", False),
+                                 "result": result.get("result", "")})
                 continue
             pending_id = store.enqueue(
                 action_type="system_repair", target="system",
-                payload={
-                    "proposal_id": proposal.proposal_id,
-                    "repair_type": str(proposal.repair_type),
-                    "steps": proposal.steps,
-                    "description": proposal.description,
-                    "target": proposal.target_component,
-                },
+                payload=payload,
                 text=f"系统修复: {proposal.description}",
                 source="diagnosis")
             queued.append({"pending_id": pending_id,
@@ -104,18 +134,32 @@ def run_diagnosis_cycle(db_path: str) -> dict:
         conn.close()
         BLOAT_THRESHOLD = 20
         if stale > BLOAT_THRESHOLD:
-            from ocos.execution.pending import PendingStore
-            store = PendingStore(db_path=db_path)
-            pending_id = store.enqueue(
-                action_type="system_repair", target="memory",
-                payload={"proposal_id": f"rprop-bloat-{uuid.uuid4().hex[:8]}",
-                         "repair_type": "CLEAR_CACHE",
-                         "steps": ["归档 30 天前的低显著度记忆条目"],
-                         "description": f"记忆膨胀: {stale} 条陈旧低显著度条目",
-                         "target": "memory"},
-                text=f"记忆膨胀修剪（{stale} 条）", source="diagnosis")
-            queued.append({"pending_id": pending_id,
-                           "description": f"记忆膨胀修剪（{stale} 条）"})
+            from ocos.execution.pending import PendingStore, approval_disabled
+            bloat_payload = {
+                "proposal_id": f"rprop-bloat-{uuid.uuid4().hex[:8]}",
+                "repair_type": "CLEAR_CACHE",
+                "steps": ["归档 30 天前的低显著度记忆条目"],
+                "description": f"记忆膨胀: {stale} 条陈旧低显著度条目",
+                "target": "memory",
+            }
+            if approval_disabled():
+                # 审批关闭: 白名单归档修剪直接执行（冷却防诊断循环重复归档）
+                now = time.time()
+                if now - _auto_repair_last.get("memory_bloat", 0.0) \
+                        >= _AUTO_REPAIR_COOLDOWN:
+                    _auto_repair_last["memory_bloat"] = now
+                    result = execute_system_repair(bloat_payload, db_path)
+                    executed.append({"description": "记忆膨胀修剪",
+                                     "ok": result.get("ok", False),
+                                     "result": result.get("result", "")})
+            else:
+                store = PendingStore(db_path=db_path)
+                pending_id = store.enqueue(
+                    action_type="system_repair", target="memory",
+                    payload=bloat_payload,
+                    text=f"记忆膨胀修剪（{stale} 条）", source="diagnosis")
+                queued.append({"pending_id": pending_id,
+                               "description": "记忆膨胀修剪"})
     except sqlite3.OperationalError:
         pass
 
@@ -124,7 +168,8 @@ def run_diagnosis_cycle(db_path: str) -> dict:
             "failing": snapshot.failing_components,
             "faults": len(signals),
             "diagnoses": diagnostics,
-            "repairs_queued": queued}
+            "repairs_queued": queued,
+            "repairs_executed": executed}
 
 
 # ── 审批后的白名单修复执行 ────────────────────────────────────────────

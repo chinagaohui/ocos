@@ -12,6 +12,7 @@ from ocos.planning.models import Task
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setenv("OCOS_DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("OCOS_APPROVAL_MODE", "ask")
     return PendingStore(str(tmp_path / "test.db"))
 
 
@@ -65,8 +66,9 @@ class TestBridgePersistence:
         rows = store.list_by_status("pending")
         assert rows[0]["action_type"] == "dag_create"
 
-    def test_memory_fallback_without_store(self):
+    def test_memory_fallback_without_store(self, monkeypatch):
         """无 store → 内存回退（诚实降级），pending_actions 仍可见。"""
+        monkeypatch.setenv("OCOS_APPROVAL_MODE", "ask")
         bridge = DecisionBridge()
         bridge.attach_default_handlers()
         bridge.process({

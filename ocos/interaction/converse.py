@@ -19,7 +19,9 @@ v2（2026-08-30）新增:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -38,21 +40,138 @@ _SYSTEM_PROMPT = (\
     "不是通用聊天助手。你的身份锚点：陪伴主人长期成长。\n"\
     "回答规则：\n"\
     "- 用中文，极简输出，只要结果不要过程\n"\
-    "- 禁止使用任何 markdown 格式（# ** - | 等），纯文本输出\n"\
+    "- 禁止使用任何 markdown 格式（# ** - 等；USE| 动作行除外），纯文本输出\n"\
     "- 禁止分点罗列、禁止标题、禁止解释性文字\n"\
-    "- 只基于【自我认知】【最近对话】【最近目标结果】里的真实数据说话，不要编造\n"\
+    "- 历史与记忆类问题 → 只基于【自我认知】【最近对话】【最近目标结果】说话，不要编造\n"\
+    "- 查询/查看类请求（看/查/状态/多少/还剩）→ 直接用 USE| 动作行取数作答，"\
+    "不建目标、不转后台\n"\
+    "- 需要机器当前实时数据（磁盘/内存/进程/文件内容/系统状态等）→ 先输出 USE| "\
+    "动作行取真实数据，禁止拿旧记忆冒充当前数据\n"\
+    "- 例：用户问'磁盘还剩多少' → 先输出 USE|shell|{\"command\": \"df -h\"}；"\
+    "问'某文件写了什么' → USE|fs_read|{\"path\": \"文件绝对路径\"}\n"\
     "- 回复即结果：直接把答案和关键数据写进回复正文，一次性给全；\n"\
     "绝不要让用户去其他界面、面板、按钮查看\n"\
+    "- 本系统没有任何待批流程。绝不要向用户提及审批/批准/提交审批/待批动作\n"\
     "- 用户问进度/结果（好了吗/结果呢/什么时候给）→ 直接引用【最近目标结果】"\
     "的真实数据作答；活跃目标为空不代表没做过任务\n"\
     "- 用户的话指向之前聊过的事 → 依据【最近对话】衔接作答，"\
     "不要反问'你指哪件事'（除非确实无从判断）\n"\
     "- 绝不发明不存在的界面元素（按钮/面板/气泡/→目标）；你只有这个对话窗口\n"\
-    "- 涉及执行类请求（写文件/跑命令/联网/处理任务）：说明你会转成目标"\
-    "交给后台自动执行，完成后结果会自动出现在这个对话里\n"\
+    "- 涉及执行类请求（写文件/改文件/联网/处理任务）：说明你会转成目标"\
+    "交给后台自动执行，完成后结果会自动出现在这个对话里；"\
+    "不要对写类操作输出 USE| 动作行\n"\
+    "- USE| 动作行规则：单独成行，格式 USE|能力|参数JSON，每轮最多2条；"\
+    "输出动作行时不要同时写答案，等待观察结果\n"\
     "- 你的每轮对话都会沉淀为记忆（episodes），这是你的长期经验\n"\
-    "- 严格控制在100字以内，能一句话说完绝不用两句\n"\
+    "- 严格控制在100字以内（关键数据如数字/路径/命令结果必须完整保留），"\
+    "能一句话说完绝不用两句\n"\
 )
+
+
+# ── FIX-T1/T3: 对话层动作协议（USE|） ──────────────────────────────────
+# 回复 LLM 可输出 USE|<能力>|<参数JSON> 动作行主动获取机器实时数据；
+# 仅开放只读能力（shell 白名单命令 / fs 读），写类操作仍走目标管线。
+
+_USE_LINE_LIMIT = 2   # 每回复最多 USE| 动作行数（预算护栏）
+
+_USE_ALLOWED = ("shell", "fs_read")
+
+# FIX-T5a: 实时数据问题确定性触发 — 命中即向第一轮 prompt 注入硬指令，
+# 消除"LLM 是否选择行动"的随机性（行动由启发式保证，动作内容由 LLM 决定）
+_REALTIME_HINT = re.compile(
+    r"现在|当前|实时|此刻|还剩|剩余|使用率|占用|磁盘|内存|CPU|cpu|"
+    "网络|进程|看看|查一下|读一下|打开.{0,12}\.(py|txt|md|json|ya?ml|log|sh|toml)")
+
+
+_REALTIME_DIRECTIVE = (
+    "\n\n【内部提示】本条消息涉及机器当前实时数据 — "
+    "第一轮必须输出 USE| 动作行取真实数据，禁止引用旧记忆作答。"
+)
+
+
+def _parse_use_lines(reply: str, limit: int = _USE_LINE_LIMIT) -> list[tuple[str, dict]]:
+    """FIX-T1: 从 LLM 回复中解析 USE|<能力>|<参数JSON> 动作行。"""
+    acts: list[tuple[str, dict]] = []
+    for raw in reply.splitlines():
+        line = raw.strip()
+        if not line.startswith("USE|"):
+            continue
+        parts = line.split("|", 2)
+        if len(parts) < 3:
+            continue
+        name = parts[1].strip()
+        try:
+            params = json.loads(parts[2])
+        except Exception:
+            params = {"_raw": parts[2][:200]}
+        if not isinstance(params, dict):
+            params = {"_raw": str(params)[:200]}
+        acts.append((name, params))
+        if len(acts) >= limit:
+            break
+    return acts
+
+
+def _strip_use_lines(reply: str) -> str:
+    """FIX-T1: 从最终回复中剥离动作行（协议行不进对话流）。"""
+    return "\n".join(l for l in reply.splitlines()
+                     if not l.strip().startswith("USE|")).strip()
+
+
+_FS_READ_MAX_BYTES = 64_000
+_FS_SENSITIVE_PREFIXES = ("/etc", "/root", "/proc", "/sys", "/boot", "/dev",
+                          "/var/log", "/home/laogao/.ssh", "/home/laogao/.config")
+_FS_PUBLIC_READONLY = frozenset({
+    "/etc/os-release",
+    "/proc/cpuinfo", "/proc/meminfo", "/proc/loadavg",
+    "/proc/uptime", "/proc/version",
+})
+
+
+def _fs_read(params: dict) -> dict:
+    """FIX-T3: 只读文件观察 — 敏感前缀拦截 + 安全范围校验 + 大小截断。"""
+    path = str(params.get("path", "")).strip()
+    if not path:
+        return {"ok": False, "error": "empty path"}
+    try:
+        import os as _os
+        p = _os.path.abspath(_os.path.expanduser(path))
+        if p not in _FS_PUBLIC_READONLY and any(
+                p.startswith(s) for s in _FS_SENSITIVE_PREFIXES):
+            return {"ok": False, "error": f"敏感路径: {path[:80]}"}
+        safe_roots = [str(Path.home()), "/tmp", "/home/laogao/Documents"]
+        if p not in _FS_PUBLIC_READONLY and not any(
+                p.startswith(r) for r in safe_roots):
+            return {"ok": False, "error": f"路径超出安全范围: {path[:80]}"}
+        if not _os.path.isfile(p):
+            return {"ok": False, "error": f"不是文件: {path[:80]}"}
+        with open(p, "rb") as f:
+            data = f.read(_FS_READ_MAX_BYTES)
+        return {"ok": True, "content": data.decode("utf-8", errors="replace")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def make_default_tool_executor(db_path: str):
+    """FIX-T3: 对话层只读动作执行器 — 复用 bridge 沙盒白名单四重防护。
+
+    返回 callable(capability, params) -> dict。shell 走 DecisionBridge
+    _handler_run_command（白名单/敏感路径/沙盒/审计，与任务管线同一套）；
+    fs_read 走 _fs_read（safe_roots + 敏感前缀 + 大小截断）。
+    """
+    def _executor(capability: str, params: dict) -> dict:
+        if capability == "shell":
+            from ocos.execution.bridge import DecisionBridge, DispatchedAction
+            from ocos.autonomous_runtime.action_dispatcher import ActionType
+            action = DispatchedAction(
+                ActionType.RUN_COMMAND, target="sandbox",
+                payload={"command": str(params.get("command", ""))[:500]})
+            return DecisionBridge(db_path=db_path)._handler_run_command(action)
+        if capability == "fs_read":
+            return _fs_read(params)
+        return {"ok": False, "error": f"unknown capability: {capability}"}
+
+    return _executor
 
 
 class ChatResponder:
@@ -60,11 +179,16 @@ class ChatResponder:
 
     P0-2/P0-3: 可选接受 SessionManager — 保持跨请求会话状态。
     无 SessionManager 时退化为无状态模式（原有行为）。
+    FIX-T1/T3: 可选接受 tool_executor — 对话层只读动作执行器
+    （callable(capability, params) -> dict），注入后回复 LLM 可通过
+    USE| 动作行主动取机器实时数据（act→observe→answer 循环）。
     """
 
-    def __init__(self, db_path: str, session_manager: Any = None) -> None:
+    def __init__(self, db_path: str, session_manager: Any = None,
+                 tool_executor: Any = None) -> None:
         self._db_path = db_path
         self._session_manager = session_manager
+        self._tool_executor = tool_executor
 
     # ── B: 自我认知包 ────────────────────────────────────────────────
 
@@ -93,13 +217,27 @@ class ChatResponder:
             return f"引擎清单不可用 ({e})"
 
     def _capabilities(self) -> str:
-        """真实世界能力（capability_reality 自动发现结果）。"""
+        """真实世界能力（capability_reality 自动发现结果）。
+
+        FIX-T2: 注入结构化调用清单（能力名+格式+示例）而非名字字符串，
+        让回复 LLM 知道"怎么用"而不只是"有什么"。
+        无 tool_executor 注入时保持名字字符串（诚实降级）。
+        """
         try:
             from ocos.capability_reality.adapter_discovery import AdapterDiscovery
             registry, _ = AdapterDiscovery().run()
-            caps = [c.descriptor.name for c in registry.list_all()]
-            return (f"能力: {', '.join(caps) if caps else '无'}"
-                    "（fs 读写✓ / shell·HTTP 需审批）")
+            names = [c.descriptor.name for c in registry.list_all()]
+            if self._tool_executor is None:
+                return (f"能力: {', '.join(names) if names else '无'}"
+                        "（fs 读写✓ / shell·HTTP 需审批）")
+            if not names:
+                return "能力: 无"
+            lines = [
+                "可用动作（需要机器当前真实数据时用；每轮最多2条；仅只读）:",
+                'USE|shell|{"command": "<白名单只读命令，如 df -h / free -m / uname -a / ps aux>"}',
+                'USE|fs_read|{"path": "<安全范围内的文件绝对路径>"}',
+            ]
+            return "能力发现: " + ", ".join(names) + "\n" + "\n".join(lines)
         except Exception as e:
             return f"能力发现不可用 ({e})"
 
@@ -389,14 +527,22 @@ class ChatResponder:
         # PW-2.1: 提案走 evolution 治理链（影响分析→沙箱→快照）
         # 治理通过者由本层入待批（agent 层不依赖 interaction 的入队实现）
         from ocos.agent.self_evolution_link import propose_upgrade
-        from ocos.execution.pending import PendingStore
+        from ocos.execution.pending import PendingStore, approval_disabled
         store = PendingStore(db_path=self._db_path)
-        queued, rejected = [], []
+        queued, rejected, auto_applied = [], [], []
         for p in proposals[:3]:
             out = propose_upgrade(title=p["title"], change=p["change"],
                                   source_tick=source_tick)
             if not out["accepted"]:
                 rejected.append({**p, "reason": out.get("reason", "")})
+                continue
+            if approval_disabled():
+                # 审批关闭: 治理链通过（沙箱/影响分析/快照）即直接应用
+                from ocos.agent.self_evolution_link import apply_approved
+                applied = apply_approved(proposal_id=out["proposal_id"],
+                                         title=p["title"], change=p["change"])
+                auto_applied.append({**p, "ok": bool(applied.get("ok")),
+                                     "error": applied.get("error", "")})
                 continue
             pending_id = store.enqueue(
                 action_type="self_upgrade", target="self_knowledge",
@@ -405,7 +551,7 @@ class ChatResponder:
                 text=p["title"], source="self_improve")
             queued.append({**p, "pending_id": pending_id})
         return {"proposals": queued, "pending_ids": [q["pending_id"] for q in queued],
-                "rejected": rejected, "mock": False}
+                "rejected": rejected, "auto_applied": auto_applied, "mock": False}
 
     @staticmethod
     def apply_self_upgrade(change: str) -> str:
@@ -609,7 +755,9 @@ class ChatResponder:
 
         goal_note: UX-H 目标受理提示（auto 受理时注入 prompt，
                    让 LLM 确认任务已受理并说明后续流程）。
-        session_id: FIX-8 会话实体，透传给对话记忆样本归属。"""
+        session_id: FIX-8 会话实体，透传给对话记忆样本归属。
+        FIX-T1: 注入 tool_executor 后支持 USE| 动作循环 —
+        第一轮输出动作行 → 沙盒执行观察 → 第二轮据真实观察作答。"""
         context = self.build_context(message, session_id=session_id)
         if goal_note:
             context = f"{context}\n【内部提示】\n{goal_note}"
@@ -627,11 +775,32 @@ class ChatResponder:
                 # deepseek-v4-flash 等推理模型: reasoning 阶段消耗 token 预算,
                 # 预算太小会只产出 reasoning_content 而无正文 → 给足余量
                 style = self._style_profile()
+                styled = prompt + f"\n（主人沟通风格画像: {style} — 按此调整回复详略）"
+                # FIX-T5a: 实时数据问题 → 注入硬指令，保证第一轮必出 USE| 行
+                if self._tool_executor is not None \
+                        and _REALTIME_HINT.search(message):
+                    styled += _REALTIME_DIRECTIVE
                 reply = asyncio.run(tg._provider.generate(
-                    prompt + f"\n（主人沟通风格画像: {style} — 按此调整回复详略）",
+                    styled,
                     system_prompt=_SYSTEM_PROMPT,
                     temperature=0.6, max_tokens=2000))
                 reply = reply.strip()
+
+                # FIX-T1: USE| 动作循环 — LLM 请求实时数据时执行并回注观察，
+                # 每回复最多 1 轮（预算护栏），写类/未知能力在 _run_use_actions 拒绝
+                use_lines = _parse_use_lines(reply)
+                if use_lines and self._tool_executor is not None:
+                    observation = self._run_use_actions(use_lines)
+                    if observation:
+                        reply = asyncio.run(tg._provider.generate(
+                            styled + f"\n\n【工具观察】\n{observation}\n\n"
+                            "请基于以上真实观察以 OCOS 身份回答用户；"
+                            "不要重复输出 USE| 动作行。",
+                            system_prompt=_SYSTEM_PROMPT,
+                            temperature=0.6, max_tokens=2000)).strip()
+
+                # 协议行不进对话流
+                reply = _strip_use_lines(reply)
                 # PW-1.2: personalize_response 依画像微调（DIRECT=原样）
                 try:
                     style_engine = getattr(self, "_style_engine", None)
@@ -659,6 +828,35 @@ class ChatResponder:
             except Exception as e:
                 logger.debug("Session append failed: %s", e)
         return out
+
+    def _run_use_actions(self, use_lines: list) -> str:
+        """FIX-T1/T3: 执行对话层动作行 — 只读白名单 + 沙盒护栏，产出观察块。
+
+        写类/未知能力一律拒绝（对话层不开写权限，写操作仍走目标管线）；
+        沙盒拦截/失败也如实回注观察，让 LLM 据实作答而非编造。
+        """
+        blocks: list[str] = []
+        for name, params in use_lines:
+            if name not in _USE_ALLOWED:
+                blocks.append(f"[{name}] 拒绝: 对话层仅开放只读动作 "
+                              f"{list(_USE_ALLOWED)}")
+                continue
+            try:
+                res = self._tool_executor(name, params) or {}
+            except Exception as e:
+                blocks.append(f"[{name}] 执行异常: {e}")
+                continue
+            if res.get("blocked"):
+                blocks.append(f"[{name}] 被沙盒拦截: "
+                              f"{str(res.get('block_reason', ''))[:120]}")
+            elif res.get("ok"):
+                body = str(res.get("stdout") or res.get("content") or "")[:1200]
+                blocks.append(f"[{name}] 观察:\n{body}")
+            else:
+                err = str(res.get("stderr") or res.get("error")
+                          or res.get("block_reason") or "")[:200]
+                blocks.append(f"[{name}] 失败: {err}")
+        return "\n".join(blocks)
 
     def _state_reply(self, message: str, context: str) -> dict:
         """无 LLM 时的诚实回复 — 报告真实状态，不伪装对话。"""
@@ -882,6 +1080,11 @@ class ChatResponder:
                     goal_note = f"【当前任务上下文】goal_id={goal_id}  status={g.get('status', '?')}"
             except Exception:
                 pass
+            # FIX-T4: 实时查询交给 USE| 动作协议 — 不再单向引导"依据记忆作答"
+            if not goal_note:
+                goal_note = ("用户的这条消息是询问/推进，不是新任务。"
+                             "历史话题依据【最近对话】作答；"
+                             "涉及机器当前实时数据时先输出 USE| 动作行取数。")
         out = self.respond(message, goal_note=goal_note, session_id=session_id)
         out["goal_id"] = goal_id
         out["kind"] = compiled["kind"]

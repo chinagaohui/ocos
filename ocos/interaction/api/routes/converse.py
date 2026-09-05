@@ -41,8 +41,11 @@ async def converse(body: dict[str, Any]) -> APIResponse:
     # FIX-8: 客户端会话 id 贯穿到对话记忆（无状态 ChatResponder 的会话归属）
     session_id = str(body.get("session_id", "") or "").strip()[:64] or "web"
 
-    from ocos.interaction.converse import ChatResponder
-    responder = ChatResponder(db_path=_db())
+    from ocos.interaction.converse import (ChatResponder,
+                                           make_default_tool_executor)
+    # FIX-T3: 注入只读动作执行器 — 对话层可通过 USE| 行取实时数据
+    responder = ChatResponder(db_path=_db(),
+                              tool_executor=make_default_tool_executor(_db()))
     out = await asyncio.to_thread(
         responder.respond_auto, message, session_id=session_id)
     return APIResponse(

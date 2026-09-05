@@ -37,11 +37,11 @@ def _seed_stale(db: str, n: int = 30) -> None:
 
 class TestDiagnosisCycle:
     def test_bloat_detected_and_queued(self, db):
-        """记忆膨胀 → 归档修剪提案入待批。"""
+        """记忆膨胀 → 归档修剪直接执行（审批关闭时白名单路径）。"""
         from ocos.daemon.repair_link import run_diagnosis_cycle
         _seed_stale(db, n=30)
         out = run_diagnosis_cycle(db)
-        assert any("记忆膨胀" in q["description"] for q in out["repairs_queued"])
+        assert any("记忆膨胀" in q["description"] for q in out["repairs_executed"])
 
     def test_clean_db_no_bloat_proposal(self, db):
         from ocos.daemon.repair_link import run_diagnosis_cycle

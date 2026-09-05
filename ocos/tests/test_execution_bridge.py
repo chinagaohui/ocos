@@ -32,8 +32,10 @@ from ocos.planning.models import Task
 # ── fixtures ────────────────────────────────────────────────────────────
 
 @pytest.fixture
-def bridge():
+def bridge(monkeypatch):
     """真实装配: AdapterDiscovery 发现 + dispatcher + audit (tmp 隔离)。"""
+    # 保持审批开启以测试 ASK/pending 行为
+    monkeypatch.setenv("OCOS_APPROVAL_MODE", "ask")
     audit = ExecutionAudit()
     b = DecisionBridge(audit=audit)
     b.attach_default_handlers()

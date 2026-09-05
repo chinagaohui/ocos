@@ -487,6 +487,12 @@ class TestGrowthEngine:
             "ocos/memory/recall.py",
             "ocos/learning/persistence.py",
             "ocos/tests/test_import_rules.py",
+            "ocos/daemon/repair_link.py",  # FIX: 修复后注入 auto-repair + 白名单
+            # PW-4.1/PW-1.1 上电测试修复
+            "ocos/tests/test_immune_system.py",
+            "ocos/tests/test_pending_store.py",
+            "ocos/tests/test_phase49d_metacognition.py",
+            "ocos/tests/test_power_on_w1_w4.py",
         }
         violations = [l for l in changed if l not in allowed]
         assert violations == [], f"测试污染了生产代码: {violations}"

@@ -146,10 +146,13 @@ class ResidentRuntime:
             except Exception as e:
                 logger.warning("UserInbox unavailable, say channel disabled: %s", e)
             try:
-                from ocos.interaction.converse import ChatResponder
+                from ocos.interaction.converse import (ChatResponder,
+                                                       make_default_tool_executor)
+                # FIX-T3: 注入只读动作执行器 — 对话层可通过 USE| 行取实时数据
                 self._responder = ChatResponder(
                     db_path=db_path,
                     session_manager=self._session_manager,
+                    tool_executor=make_default_tool_executor(db_path),
                 )
             except Exception as e:
                 logger.warning("ChatResponder unavailable: %s", e)

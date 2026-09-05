@@ -256,9 +256,10 @@ class DecisionBridge:
         description = getattr(task, "description", "")
 
         # Phase 49-D (L8): 元认知置信度门 — 低置信写类任务升级 ASK
-        # (治理增强: 历史成功率低的写类动作不自动执行, 不烧 LLM token)
-        if self._confidence_source is not None \
-                and task_type in _DAG_ASK_TYPES:
+        # (治理增强: 历史成功率低的写类动作不自动执行, 不烧 LLM token;
+        #  审批关闭时跳过 — ASK 通道停用)
+        if (self._confidence_source is not None and not approval_disabled()
+                and task_type in _DAG_ASK_TYPES):
             try:
                 verdict = self._confidence_source(description, task_type)
                 if getattr(verdict, "should_escalate", False):
@@ -304,6 +305,12 @@ class DecisionBridge:
                     "reason": self._execution_failure_reason(llm, description)}
 
         if task_type in _DAG_ASK_TYPES:
+            # 审批关闭: 无 LLM 且写类动作无执行器（批准也只能 blocked）→ 诚实失败
+            if approval_disabled():
+                return {"status": "failed",
+                        "reason": ("无语言核心且审批已关闭"
+                                   "（OCOS_APPROVAL_MODE=auto）— "
+                                   "写类任务无法执行")}
             # 写文件 / shell 执行 = 高危 → 待批 (R4-B Outbox)
             self._enqueue_pending(
                 action_type=f"dag_{task_type}",
@@ -405,8 +412,11 @@ class DecisionBridge:
         if action.action_type in DENY_ACTIONS:
             return "deny", f"action {action.action_type.name} in DENY list"
 
-        # 2. 中危 → ASK 待批 (R4-B)
+        # 2. 中危 → ASK 待批 (R4-B) — 审批关闭时自动放行
         if action.action_type in ASK_ACTIONS:
+            if approval_disabled():
+                return "auto", (f"action {action.action_type.name} "
+                                f"auto-approved (approval off)")
             return "ask", f"action {action.action_type.name} requires approval (R4-B Outbox)"
 
         # 3. AUTO 路径: PermissionGuard 语义双检
@@ -421,6 +431,10 @@ class DecisionBridge:
         if action.action_type in AUTO_ACTIONS:
             return "auto", f"action {action.action_type.name} is low-risk"
 
+        # 审批关闭: 未分类动作尝试执行（未注册执行器时 dispatch 为 no-op）
+        if approval_disabled():
+            return "auto", (f"action {action.action_type.name} "
+                            f"not classified (approval off)")
         return "ask", f"action {action.action_type.name} not classified"
 
     # ── 真实执行器 (handler, 全部走 capability_reality 沙盒) ──────────────

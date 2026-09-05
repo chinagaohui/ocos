@@ -175,8 +175,9 @@ class TestBridgeMetacognitionGate:
         bridge._textgen = None
         return bridge
 
-    def test_low_confidence_execute_escalates_to_ask(self):
+    def test_low_confidence_execute_escalates_to_ask(self, monkeypatch):
         """写类 execute + 低置信源 → pending_approval。"""
+        monkeypatch.setenv("OCOS_APPROVAL_MODE", "ask")
         from ocos.learning.metacognition import CapabilityConfidence
 
         def source(desc, task_type):
