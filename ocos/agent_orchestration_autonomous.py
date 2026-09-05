@@ -1,5 +1,10 @@
 """Phase 61: Agent Orchestration Autonomous — 自主化编排层。
 
+⚠️ S4.3 / 上电方案 W5：本模块已标记废弃（deprecated）。
+    _monitor_running 以 attempts 计数模拟任务完成（伪造成功段，无真实执行）；
+    正式编排能力由 ocos.agent_orchestration 提供。本模块仅保留供遗留测试
+    兼容（test_phase61/test_phase62c/test_import_rules），新代码禁止引用。
+
 将 Phase 60 的 AutonomousLoop 与 Phase 28 的 AgentOrchestration 连接，
 使 OCOS 能自主完成:
     1. Goal → 子任务分解
@@ -18,6 +23,14 @@ Architecture:
 """
 
 from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "ocos.agent_orchestration_autonomous 已废弃（S4.3 / 上电方案 W5）— "
+    "_monitor_running 存在伪造成功段，请迁移到 ocos.agent_orchestration。"
+    "本模块仅保留供遗留测试兼容。",
+    DeprecationWarning, stacklevel=2)
 
 import time
 from dataclasses import dataclass, field

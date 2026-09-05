@@ -812,8 +812,8 @@ class MasterAgent:
         从 decision 提取目标 agent_type → 创建 Task → execute_task → 返回结果。
         失败时静默降级，不影响主链路。
         """
-        # Phase H: 记录当前决策到用户记忆
-        self._recall_and_record(decision)
+        # S4.3: 原 Phase H 空实现 _recall_and_record 已删除（无真实召回/落库，
+        # 仅注释占位）；决策记忆由 agent_runtime 的记忆管线统一承担。
 
         try:
             agent_type = ""
@@ -876,20 +876,6 @@ class MasterAgent:
             if not any(kw in desc.lower() for kw in contextual_keywords):
                 return True
         return False
-
-    def _recall_and_record(self, decision: Any) -> None:
-        """Phase H: 召回相关记忆并记录当前决策到用户记忆."""
-        try:
-            # 记录到用户记忆
-            if hasattr(self, '_memory_hub_ref') and self._memory_hub_ref:
-                # 简单提取决策描述
-                desc = str(decision) if decision else ""
-                desc = desc[:100] if len(desc) > 100 else desc
-                if desc and desc not in ("None", "", "{}"):
-                    # 尝试记录事件（如果 user_memory 存在）
-                    pass  # 简化：仅记录决策日志
-        except Exception:
-            pass  # 非阻塞
 
     def set_skill_registry(self, registry: Any) -> None:
         """Phase 49-C (L5/L6): 注入 SkillRegistry (由 daemon 装配时调用)."""
@@ -1727,25 +1713,6 @@ class MasterAgent:
         except Exception as e:
             logger.warning("Knowledge extraction failed: %s", e)
             return {"entities": 0, "relations": 0, "facts": 0, "confidence": 0.0}
-
-    def search_knowledge(self, query: str) -> list[dict[str, Any]]:
-        """搜索知识图谱。"""
-        if self._knowledge_graph is None:
-            return []
-        try:
-            entities = self._knowledge_graph.search_entities(query)
-            return [
-                {
-                    "id": e.entity_id,
-                    "name": e.name,
-                    "type": e.entity_type.name,
-                    "confidence": e.confidence,
-                }
-                for e in entities
-            ]
-        except Exception as e:
-            logger.warning("Knowledge search failed: %s", e)
-            return []
 
     def get_knowledge_stats(self) -> dict[str, Any]:
         """获取知识图谱统计。"""

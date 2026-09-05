@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,21 @@ class ExecutionRecord:
             "started", "running", "completed", "failed", "timed_out",
         ):
             raise ValueError(f"invalid status: {self.status}")
+
+    def to_dict(self) -> dict[str, Any]:
+        """S4.3: 序列化（orchestration 协作路径消费，原缺失导致 to_dict 崩溃）。"""
+        return {
+            "record_id": self.record_id,
+            "contract_id": self.contract_id,
+            "agent_id": self.agent_id,
+            "status": self.status,
+            "started_at": self.started_at.isoformat(),
+            "completed_at": (self.completed_at.isoformat()
+                             if self.completed_at else None),
+            "result_summary": self.result_summary,
+            "error": self.error,
+            "retry_count": self.retry_count,
+        }
 
 
 class ExecutionAudit:

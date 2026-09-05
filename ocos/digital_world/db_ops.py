@@ -1,5 +1,10 @@
 """Phase 29 — 数据库操作: db_query / db_write。
 
+⚠️ S4.3 / 占位模块：本文件为模拟实现（返回 "simulated" 假结果，无真实
+    数据库读写），v1.2 删除候选。真实数据访问走 storage/ 持久层。
+    被 tests/digital_world/test_dw_db_ops.py 引用（仅测试），新代码禁止
+    在生产路径调用。
+
 约束:
   - db_query 只读（默认）
   - db_write 需审批
