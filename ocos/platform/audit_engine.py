@@ -323,7 +323,14 @@ class AuditEngine:
         )
 
     def _on_system_event(self, event: Event) -> None:
-        """处理系统事件的自动收集回调。"""
+        """处理系统事件的自动收集回调。
+
+        S2.10 备注：audit_rule_emergency_recovery 依赖
+        details.related_halt_audit_id，其写入点要求 recover/reset 类
+        SYSTEM 事件——kernel.abi.EventType 当前不存在此类事件，该规则
+        已移出默认集（见 audit_rule_engine.DEFAULT_AUDIT_RULES 注释）。
+        未来新增恢复类事件时，需在此回填 related_halt_audit_id。
+        """
         payload = event.payload or {}
         self.record(
             record_type=AuditRecordType.SYSTEM,

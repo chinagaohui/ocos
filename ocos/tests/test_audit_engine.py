@@ -600,11 +600,13 @@ class TestDefaultRules:
         load_default_audit_rules(engine)
         rule_ids = list(engine.rules.keys())
         assert "audit_rule_decision_completeness" in rule_ids
-        assert "audit_rule_permission_consistency" in rule_ids
         assert "audit_rule_execution_chain" in rule_ids
         assert "audit_rule_governance_traceability" in rule_ids
-        assert "audit_rule_emergency_recovery" in rule_ids
-        assert len(rule_ids) >= 5
+        # S2.10: permission_consistency / emergency_recovery 两条规则
+        # 依赖的字段无真实写入点，移出默认集（保留检查函数）
+        assert "audit_rule_permission_consistency" not in rule_ids
+        assert "audit_rule_emergency_recovery" not in rule_ids
+        assert len(rule_ids) >= 3
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -656,8 +658,8 @@ class TestAuditEngineInit:
         assert engine.rule_engine is not None
         assert engine.trace_engine is None
         assert engine.get_audit_count() == 0
-        # 默认规则已加载
-        assert len(engine.rule_engine.rules) >= 5
+        # 默认规则已加载（S2.10: 2 条无写入点规则移出默认集，5→3）
+        assert len(engine.rule_engine.rules) >= 3
 
     def test_init_with_custom_store(self):
         store = InMemoryAuditStore(max_size=100)
@@ -1100,8 +1102,8 @@ class TestAuditEngineReset:
             engine.rule_engine.remove_rule(rid)
         assert len(engine.rule_engine.rules) == 0
         engine.reset()
-        # reset 应重新加载默认规则
-        assert len(engine.rule_engine.rules) >= 5
+        # reset 应重新加载默认规则（S2.10: 默认集 5→3）
+        assert len(engine.rule_engine.rules) >= 3
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

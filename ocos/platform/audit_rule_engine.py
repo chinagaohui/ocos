@@ -265,16 +265,11 @@ DEFAULT_AUDIT_RULES: list[tuple[AuditRule, CheckFn]] = [
         ),
         _check_decision_completeness,
     ),
-    (
-        AuditRule(
-            rule_id="audit_rule_permission_consistency",
-            name="权限一致性检查",
-            description="Governance 拒绝的决策不应有后续执行记录",
-            severity="error",
-            check_type="permission",
-        ),
-        _check_permission_consistency,
-    ),
+    # S2.10 (白皮书 P2): audit_rule_permission_consistency 暂时移出默认集——
+    # 其依赖的 details.governance_audit_id（决策 → 治理审计链接）在当前
+    # 代码库中没有任何写入点，链接语义未定义，规则输出永远为虚假阴性。
+    # 待"决策-治理"链接设计落地后在默认集恢复（_check_permission_consistency
+    # 函数保留供复用）。
     (
         AuditRule(
             rule_id="audit_rule_execution_chain",
@@ -295,16 +290,12 @@ DEFAULT_AUDIT_RULES: list[tuple[AuditRule, CheckFn]] = [
         ),
         _check_governance_traceability,
     ),
-    (
-        AuditRule(
-            rule_id="audit_rule_emergency_recovery",
-            name="应急恢复记录检查",
-            description="EMERGENCY_HALT 必须有对应的恢复记录",
-            severity="error",
-            check_type="compliance",
-        ),
-        _check_emergency_recovery,
-    ),
+    # S2.10 (白皮书 P2): audit_rule_emergency_recovery 暂时移出默认集——
+    # 其依赖的 details.related_halt_audit_id 写入点要求存在 recover/reset
+    # 类 SYSTEM 事件，但 kernel.abi.EventType 中并无此类事件（无真实写入
+    # 点），halt 后 finding 无法被清除（单向规则）。恢复类事件落地后与
+    # _on_system_event 的回填逻辑一起恢复默认启用。
+    # （_check_emergency_recovery 函数保留，供恢复后注册复用。）
 ]
 
 
