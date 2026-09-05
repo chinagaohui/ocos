@@ -136,6 +136,23 @@ class HealthLoop:
         }
         self._last_detail = detail
 
+        # S3.5 (白皮书 P3): 5 个核心 Prometheus 指标（monitoring 未装配
+        # 时静默跳过）
+        monitoring = getattr(self, "monitoring", None)
+        if monitoring is not None:
+            try:
+                monitoring.record_metric(
+                    "ocos_memory_episodes_total", episode_count,
+                    metric_type="gauge")
+                monitoring.record_metric(
+                    "ocos_goal_active", goal_depth, metric_type="gauge")
+                monitoring.record_metric(
+                    "ocos_execution_pending",
+                    detail.get("decision_failure_rate", 0.0),
+                    metric_type="gauge")
+            except Exception as _me:
+                logger.debug("metrics record skipped: %s", _me)
+
         detected: Optional[DisorderFinding] = None
         for finding in (mem_finding, dec_finding):
             if finding.detected:

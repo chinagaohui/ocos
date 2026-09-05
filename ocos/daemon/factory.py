@@ -195,7 +195,22 @@ def build_health_loop(runtime=None, interval_ticks: int = 100):
     alerts_dir = Path(os.environ.get("OCOS_ALERTS_DIR", str(Path.home() / ".ocos" / "alerts")))
     alerts.register_channel(FileChannel(str(alerts_dir / "alerts.log")))
 
-    return HealthLoop(
+    # S3.5 (白皮书 P3): Monitoring 接入生产——Prometheus 指标 + /metrics。
+    # HTTP 服务仅在生产装配显式开启（OCOS_MONITORING_ENABLED=true，默认
+    # 9090 端口），避免测试/嵌入场景端口冲突；指标记录始终可用。
+    monitoring = None
+    try:
+        from ocos.monitoring.manager import create_monitoring_manager
+        monitoring = create_monitoring_manager()
+        if os.environ.get("OCOS_MONITORING_ENABLED", "").strip().lower() == "true":
+            monitoring.start_http()
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "MonitoringManager unavailable (metrics disabled): %s", e)
+        monitoring = None
+
+    health_loop = HealthLoop(
         runtime=runtime,
         examiner=CognitiveExaminer(),
         alerts=alerts,
@@ -204,6 +219,9 @@ def build_health_loop(runtime=None, interval_ticks: int = 100):
         db_path=os.environ.get("OCOS_DB_PATH",
                                str(Path.home() / ".ocos" / "ocos.db")),
     )
+    if monitoring is not None:
+        health_loop.monitoring = monitoring  # HealthLoop.tick 记录指标
+    return health_loop
 
 
 def build_perception_pipeline(sensors: Optional[list] = None,

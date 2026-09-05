@@ -227,9 +227,9 @@ class MetricsRegistry:
     def to_prometheus(self) -> str:
         """导出为 Prometheus 格式。"""
         lines = []
-        lines.append("# HELP ococ_up System is running")
-        lines.append("# TYPE ococ_up gauge")
-        lines.append(f"ococ_up {{status=\"running\"}} 1")
+        lines.append("# HELP ocos_up System is running")
+        lines.append("# TYPE ocos_up gauge")
+        lines.append(f"ocos_up {{status=\"running\"}} 1")
         lines.append("")
 
         lines.append("# HELP ocos_uptime_seconds Uptime in seconds")
@@ -254,10 +254,19 @@ class MetricsRegistry:
         lines.append("# TYPE ocos_histograms histogram")
         for name, values in sorted(self._histograms.items()):
             if values:
+                # S3.5 (白皮书 P3): 真实分位数（原 0.9/0.99 均输出 max）
+                import statistics as _stats
                 avg = sum(values) / len(values)
-                lines.append(f"ocos_histograms{{name=\"{name}\",quantile=\"0.5\"}} {avg}")
-                lines.append(f"ocos_histograms{{name=\"{name}\",quantile=\"0.9\"}} {max(values)}")
-                lines.append(f"ocos_histograms{{name=\"{name}\",quantile=\"0.99\"}} {max(values)}")
+                ordered = sorted(values)
+                def _q(q: float) -> float:
+                    if len(ordered) == 1:
+                        return ordered[0]
+                    idx = min(len(ordered) - 1, max(0, int(round(q * (len(ordered) - 1)))))
+                    return ordered[idx]
+                p50 = _stats.median(ordered)
+                lines.append(f"ocos_histograms{{name=\"{name}\",quantile=\"0.5\"}} {p50}")
+                lines.append(f"ocos_histograms{{name=\"{name}\",quantile=\"0.9\"}} {_q(0.9)}")
+                lines.append(f"ocos_histograms{{name=\"{name}\",quantile=\"0.99\"}} {_q(0.99)}")
                 lines.append(f"ocos_histograms_count{{name=\"{name}\"}} {len(values)}")
         lines.append("")
 
