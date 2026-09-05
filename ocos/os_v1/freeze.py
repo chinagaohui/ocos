@@ -9,9 +9,16 @@ OS50-05: Freeze ≠ Dead
 
 from __future__ import annotations
 
+import hashlib
+import importlib
+import inspect
+import logging
+import os
 from dataclasses import dataclass, field
 
 from ocos.os_v1.os_types import FreezeManifest
+
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -98,9 +105,83 @@ class OSFreeze:
         )
         return self.manifest
 
+    # ── S4.4: 签名收集（真实签名 → SHA-256，替换占位 v1.0 字符串）──────────
+
     def _collect_signatures(self) -> list[str]:
-        """收集各模块签名。"""
-        return [f"{mod}:v1.0" for mod in ABI_MODULES]
+        """对 12 个 ABI_MODULES 逐个收集公开签名并哈希。
+
+        签名 = 模块公开可调用符号（函数/类，不含下划线开头）的名称 +
+        inspect.signature 序列化；整体 SHA-256 取前 16 hex 作为模块指纹。
+        任何模块收集失败 → 该模块指纹为空串（verify 时如实报告，不伪造）。
+        """
+        return [
+            self._module_signature(mod)
+            for mod in ABI_MODULES
+        ]
+
+    @staticmethod
+    def _module_signature(module_name: str) -> str:
+        """生成单个模块的 SHA-256 签名指纹。"""
+        try:
+            mod = importlib.import_module(module_name)
+            members: list[str] = []
+            for name, obj in inspect.getmembers(mod):
+                if name.startswith("_"):
+                    continue
+                if not (inspect.isfunction(obj) or inspect.isclass(obj)):
+                    continue
+                # 符号必须定义在本模块（跳过 re-export 的第三方符号）
+                try:
+                    if getattr(obj, "__module__", None) != module_name:
+                        continue
+                except Exception:
+                    pass
+                sig = ""
+                try:
+                    target = obj.__init__ if inspect.isclass(obj) else obj
+                    sig = str(inspect.signature(target))
+                except (TypeError, ValueError):
+                    sig = f"<no-signature:{getattr(obj, '__qualname__', name)}>"
+                members.append(f"{name}::{sig}")
+            blob = "\n".join(sorted(members))
+            return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+        except Exception as e:
+            logger.warning("S4.4: signature collection failed for %s: %s",
+                           module_name, e)
+            return ""
+
+    # ── S4.4: verify（启动校验）────────────────────────────────────────────
+
+    def verify(self) -> list[str]:
+        """校验当前签名 vs manifest 基线。
+
+        返回违规列表；不一致 → FROZEN_VIOLATION warning（OCOS_FREEZE_STRICT=
+        true 时 raise）。与 freeze() 后首次运行即基线（存量 diff 属预期，
+        见 scripts/verify_freeze.py --baseline）。
+        """
+        violations: list[str] = []
+        current = self._collect_signatures()
+        baseline = list(self.manifest.signatures or [])
+        if len(baseline) != len(ABI_MODULES):
+            violations.append(
+                f"FROZEN_VIOLATION: manifest 基线 {len(baseline)} 模块 "
+                f"≠ ABI 声明 {len(ABI_MODULES)} 模块（需重新 freeze 基线化）")
+        for i, mod in enumerate(ABI_MODULES):
+            base = baseline[i] if i < len(baseline) else ""
+            cur = current[i] if i < len(current) else ""
+            if not base:
+                violations.append(
+                    f"FROZEN_VIOLATION: {mod} 无基线签名（需 --baseline 固化）")
+            elif base != cur:
+                violations.append(
+                    f"FROZEN_VIOLATION: {mod} 签名漂移 {base} → {cur}")
+        if violations:
+            message = "; ".join(violations[:5])
+            logger.warning("FROZEN_VIOLATION: %s", message)
+            if os.environ.get("OCOS_FREEZE_STRICT",
+                              "").strip().lower() == "true":
+                raise RuntimeError(f"FROZEN_VIOLATION: {message}")
+        return violations
 
     def verify_abi(self, module_name: str) -> bool:
         """验证模块是否在 ABI 列表中。"""
@@ -133,3 +214,4 @@ __all__ = [
     "EXTENSION_SDK",
     "OSFreeze",
 ]
+

@@ -10,6 +10,7 @@ gate:
 	python3 scripts/phase24_gate.py
 	python3 scripts/phase25_gate.py
 	python3 scripts/phase27_28_gate.py
+	python3 scripts/verify_freeze.py
 
 # Gate + 全量测试
 full-gate: gate test

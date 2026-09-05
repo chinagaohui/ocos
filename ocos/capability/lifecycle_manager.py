@@ -271,6 +271,25 @@ class AgentLifecycleManager:
             handle.touch()
             return ok
 
+    def health_check_all(self,
+                         check_fn: Callable[[AgentHandle], bool]) -> dict[str, bool]:
+        """批量健康检查全部注册 Agent（Phase 24-C 契约）。
+
+        返回 {agent_id: ok}；任一失败 → 该 Agent 置 DEGRADED。
+        """
+        results: dict[str, bool] = {}
+        with self._lock:
+            for agent_id, h in list(self._agents.items()):
+                try:
+                    ok = bool(check_fn(h))
+                except Exception:
+                    ok = False
+                if not ok:
+                    h.state = AgentState.DEGRADED
+                h.touch()
+                results[agent_id] = ok
+        return results
+
     def release(self, handle: AgentHandle,
                 release_fn: Callable[[AgentHandle], None] | None = None) -> None:
         """释放: 调 release_fn → DESTROYED → 从注册表移除。"""

@@ -213,6 +213,37 @@ class TestOS50_05_FreezeNotDead:
         assert len(CONSTITUTION_PRINCIPLES) == 6
         assert any("Identity.anchor immutable" in p for p in CONSTITUTION_PRINCIPLES)
 
+    # ── S4.4: 真实签名指纹 + verify ──────────────────────────────────────
+
+    def test_signatures_real_sha256(self):
+        """S4.4: 签名不再是指占位 v1.0 字符串，而是 SHA-256 指纹。"""
+        os_freeze = OSFreeze()
+        os_freeze.freeze(1000)
+        sigs = os_freeze.manifest.signatures
+        assert len(sigs) == 12
+        for sig in sigs:
+            assert len(sig) == 16, f"expected 16-hex sha256 prefix, got {sig!r}"
+
+    def test_verify_detects_drift(self, monkeypatch):
+        """S4.4: verify 对签名漂移返回 FROZEN_VIOLATION（默认 warn 不 raise）。"""
+        monkeypatch.delenv("OCOS_FREEZE_STRICT", raising=False)
+        os_freeze = OSFreeze()
+        os_freeze.freeze(1000)
+        assert os_freeze.verify() == []  # 刚冻结 → 无违规
+        # 篡改基线 → 检出漂移
+        os_freeze.manifest.signatures[0] = "tampered"
+        violations = os_freeze.verify()
+        assert any("FROZEN_VIOLATION" in v for v in violations)
+
+    def test_verify_strict_raises(self, monkeypatch):
+        """S4.4: OCOS_FREEZE_STRICT=true 时漂移 raise。"""
+        monkeypatch.setenv("OCOS_FREEZE_STRICT", "true")
+        os_freeze = OSFreeze()
+        os_freeze.freeze(1000)
+        os_freeze.manifest.signatures[1] = "tampered"
+        with pytest.raises(RuntimeError, match="FROZEN_VIOLATION"):
+            os_freeze.verify()
+
     def test_protocols_defined(self):
         assert MEMORY_PROTOCOL["version"] == "v1"
         assert CAPABILITY_SDK["version"] == "v1"
