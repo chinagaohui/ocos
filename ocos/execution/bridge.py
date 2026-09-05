@@ -125,6 +125,7 @@ class DecisionBridge:
         agent_id: str = "decision_bridge",
         pending_store: Optional[Any] = None,    # AUD-F12: PendingStore (SQLite 持久化)
         db_path: Optional[str] = None,          # PW-1.4: 执行留痕 event_memory
+        permission_gateway: Optional[Any] = None,  # S3.2: 入口网关前检（None→惰性默认）
     ) -> None:
         self._dispatcher = dispatcher or ActionDispatcher()
         self._guard = guard or PermissionGuard()
@@ -133,6 +134,7 @@ class DecisionBridge:
         self._registry: Any = None
         self._pending_store = pending_store     # AUD-F12: 有 store 则跨进程存活
         self._db_path = db_path
+        self._permission_gateway = permission_gateway  # S3.2（None→惰性默认实例）
         self._lifecycle_store: Any = None       # PW-1.4: event_memory EventStore（惰性）
         # P2-2: LLM 日预算 — 超限后任务转待批（诚实降级，不烧 token）
         self._llm_calls_today: int = 0
@@ -214,6 +216,23 @@ class DecisionBridge:
         if not text:
             return report
 
+        # S3.2: 网关前检 — 反向控制/注入模式直接 DENY（带审计）
+        deny_reason = self._gateway_scan(text)
+        if deny_reason is not None:
+            v = ActionVerdict(
+                action_type="DECISION_TEXT", verdict="deny",
+                reason=deny_reason, status="denied",
+                summary="blocked by permission gateway pre-check")
+            report.verdicts.append(v)
+            self._audit.log_failure(
+                contract_id=f"GATEWAY-{uuid.uuid4().hex[:8]}",
+                agent_id=self._agent_id,
+                error=f"decision text blocked: {text[:200]}")
+            logger.warning("DecisionBridge: decision text denied by "
+                           "gateway pre-check — %s", deny_reason)
+            self._reports.append(report)
+            return report
+
         actions = self._dispatcher.interpret_decision(text, attention_focus)
         self._supplement_interpretation(text, actions)
         for action in actions:
@@ -255,6 +274,17 @@ class DecisionBridge:
         """
         task_type = getattr(task, "task_type", "execute")
         description = getattr(task, "description", "")
+
+        # S3.2: 网关前检 — 反向控制/注入模式的任务描述直接拒绝
+        deny_reason = self._gateway_scan(description)
+        if deny_reason is not None:
+            self._audit_record(
+                contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
+                status="failed",
+                summary=f"gateway_blocked: {deny_reason[:120]}")
+            return {"status": "failed",
+                    "reason": f"权限网关拦截: {deny_reason}"}
+
 
         # Phase 49-D (L8): 元认知置信度门 — 低置信写类任务升级 ASK
         # (治理增强: 历史成功率低的写类动作不自动执行, 不烧 LLM token;
@@ -1159,6 +1189,39 @@ class DecisionBridge:
             ))
         except Exception as e:
             logger.debug("lifecycle record failed: %s", e)
+
+    # ── S3.2: 入口权限网关前检 ───────────────────────────────────────────
+
+    def _gateway_scan(self, text: str) -> str | None:
+        """决策文本进入裁决管线前的权限网关扫描（白皮书 P2-5 生产接线）。
+
+        返回 None = 放行；否则返回拦截原因。网关故障 fail-closed。
+        未注入时惰性创建默认 PermissionGateway（与 ChatResponder S1.3
+        同模式——bridge 下游另有 PermissionGuard 语义双检 + 沙盒白名单）。
+        """
+        try:
+            from ocos.capability.permission_gateway import PermissionGateway
+        except Exception as e:
+            logger.warning("permission gateway unavailable, skip scan: %s", e)
+            return None
+        if self._permission_gateway is None:
+            self._permission_gateway = PermissionGateway()
+        from types import SimpleNamespace
+        contract = SimpleNamespace(
+            contract_id=f"bridge-{self._agent_id}",
+            agent_id="decision_bridge",
+            action="decision_text",
+            input_spec={"text": str(text)[:2000]})
+        try:
+            result = self._permission_gateway.validate(contract)
+        except Exception as e:
+            logger.warning("gateway scan error (fail-closed): %s", e)
+            return f"gateway error: {e}"
+        if getattr(result, "allowed", True):
+            return None
+        violations = getattr(result, "violations", None) or []
+        return ("; ".join(str(v) for v in violations[:3])
+                or getattr(result, "reason", "") or "denied by gateway")[:200]
 
     # ── 待批队列 ──────────────────────────────────────────────────────────
 

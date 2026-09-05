@@ -50,6 +50,12 @@ class BuiltinPolicies:
         "shell.execute": PermissionLevel.EXECUTE,
         "agent.invoke": PermissionLevel.EXECUTE,
         "tool.execute": PermissionLevel.EXECUTE,
+        # S3.2 (白皮书 P4-4): OPERATION_LEVELS 中声明但未注册的 4 项
+        # 补齐（原 default_deny 会拒绝这些合法操作，注册表漂移）
+        "api.get": PermissionLevel.READ,
+        "web.post": PermissionLevel.WRITE,
+        "database.update": PermissionLevel.WRITE,
+        "process.start": PermissionLevel.EXECUTE,
     }
 
     def evaluate(self, request: PermissionRequest) -> PolicyDecision:

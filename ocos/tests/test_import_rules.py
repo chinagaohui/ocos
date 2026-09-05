@@ -222,6 +222,7 @@ ALLOWED_IMPORTS = {
     # R4-A: 执行铰链 — 决策输出 → dispatcher 风险分级 → capability_reality 沙盒执行
     "ocos.execution": ["ocos.autonomous_runtime", "ocos.agent_orchestration",
                        "ocos.interaction", "ocos.capability_reality",
+                       "ocos.capability.permission_gateway",  # S3.2: 入口网关前检
                        "ocos.storage",
                        "ocos.operations", "ocos.event_memory", "ocos.digital_world",
                        "ocos.agent", "ocos.daemon", "ocos.engines"],
