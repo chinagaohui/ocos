@@ -73,8 +73,9 @@ REFLECT/LEARN 六段是否需要子 Stage、失败隔离粒度、与 Governance 
 | 依赖 | S3.10 兜底已就绪（已完成）；阶段二依赖 step7 语义重审裁决 |
 | 风险 1 | Stage 迁移后 context 不可变契约（TickContext frozen dataclass）与
   10 步步骤间共享可变状态（step_log/_recent_results）的适配 |
-| 风险 2 | 双 EventBus（ocos/event 单数 ingest vs ocos/events 复数 publish）
-  API 混淆面需在迁移前厘清（相关项见 S4.1 双 EventBus 统一） |
+| 风险 2 | 双 EventBus（ocos/perception_bus 单数 ingest vs ocos/events 复数
+  publish）API 混淆面需在迁移前厘清（S4.1 已完成 ocos/event →
+  ocos/perception_bus 重命名） |
 | 风险 3 | 迁移后回归面大（全量 tick 路径），需先固化 tick 黄金链路测试 |
 | 验收 | 8 Stage 全非空转且 step7 语义不变；全量测试绿；生产验证报告
   tick 心跳指标（ocos_tick_total）正常累计 |

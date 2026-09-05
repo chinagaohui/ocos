@@ -24,7 +24,7 @@ class EventIngestionStage:
     name = "EVENT_INGESTION"
 
     def __init__(self, event_bus: Any = None, max_events: int = 10) -> None:
-        """注入 EventBus（ocos/event.EventBus）。
+        """注入 EventBus（ocos/perception_bus.EventBus，原 ocos/event）。
 
         GAP-P2-2: 生产装配时传入 EventBus；缺省 None 保持旧行为（空事件）。
         """

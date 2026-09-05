@@ -20,7 +20,7 @@ ALLOWED_IMPORTS: set[tuple[str, str]] = {
     ("ocos.agent", "ocos.agent_orchestration"),
     ("ocos.capability", "ocos.agent_orchestration"),
     # Phase 34: Runtime Awakening — event perception nerve
-    ("ocos.agent", "ocos.event"),
+    ("ocos.agent", "ocos.perception_bus"),
     # Phase 35: Attention Constitution — contracts ABI
     ("ocos.capability", "ocos.contracts"),
     ("ocos.agent", "ocos.contracts"),

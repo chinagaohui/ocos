@@ -78,7 +78,7 @@ class TestInjectUserMessage:
         assert s1.get("status") != "no_events", "用户消息必须被 Step 1 摄入"
 
     def test_user_input_event_is_high_severity(self):
-        from ocos.event import EventBus, RawEvent, EventSource, EventSeverity
+        from ocos.perception_bus import EventBus, RawEvent, EventSource, EventSeverity
         ce = EventBus().push_user_message("重要消息", sender="test")
         assert ce.source == EventSource.USER_INPUT
         assert ce.severity == EventSeverity.HIGH

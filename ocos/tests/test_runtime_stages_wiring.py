@@ -11,7 +11,7 @@
 import pytest
 
 from ocos.agent.execution_manager import ExecutionManager
-from ocos.event import EventBus
+from ocos.perception_bus import EventBus
 from ocos.memory.hub import MemoryHub
 from ocos.runtime.stages.event_ingestion import EventIngestionStage
 from ocos.runtime.stages.execution_check import ExecutionCheckStage

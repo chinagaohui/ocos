@@ -69,12 +69,12 @@ class TestFormatterRedaction:
 class TestRecordTraceRedaction:
     def test_push_user_message_trace_not_plaintext(self, caplog):
         """push_user_message + record_trace 后，>50 字符内容不进日志。"""
-        from ocos.event import EventBus, EventSource, RawEvent
+        from ocos.perception_bus import EventBus, EventSource, RawEvent
         long_msg = "这是一段超长的用户隐私内容" * 10
         bus = EventBus()
         ev = bus.push_user_message(long_msg)
-        with caplog.at_level(logging.INFO, logger="ocos.event"):
+        with caplog.at_level(logging.INFO, logger="ocos.perception_bus"):
             bus.record_trace(ev, 0.5, __import__(
-                "ocos.event", fromlist=["AttentionDecision"]
+                "ocos.perception_bus", fromlist=["AttentionDecision"]
             ).AttentionDecision.QUEUED, "test")
         assert long_msg not in caplog.text

@@ -56,7 +56,8 @@ ALLOWED_IMPORTS = {
     "ocos.knowledge": ["ocos.knowledge", "ocos.memory.semantic"],  # GAP-P2-1: registry→semantic 镜像
     "ocos.knowledge.store": [],
     "ocos.knowledge.process": [],
-    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.event", "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity",
+    "ocos.agent": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.engines", "ocos.snapshot", "ocos.goal", "ocos.constitution", "ocos.memory", "ocos.storage", "ocos.operations", "ocos.capability", "ocos.capability.permission_gateway", "ocos.capability.result_understanding", "ocos.capability.registry", "ocos.capability.descriptor", "ocos.capability.provider", "ocos.capability.lifecycle_manager", "ocos.contracts.feedback_abi", "ocos.perception_bus",  # S4.1: 原 ocos.event
+                         "ocos.planning", "ocos.self", "ocos.proactive", "ocos.personal_memory", "ocos.cognitive_continuity",
                          "ocos.evolution", "ocos.extension", "ocos.task", "ocos.initiative", "ocos.collaboration", "ocos.autonomous",
                          # Phase R: Continuous Learning
                          "ocos.learning",
@@ -168,7 +169,7 @@ ALLOWED_IMPORTS = {
                          "ocos.storage", "ocos.agent", "ocos.execution",
                          "ocos.engines",
                          "ocos.capability_reality", "ocos.event_memory",
-                         "ocos.event", "ocos.personal_intelligence",
+                         "ocos.perception_bus", "ocos.personal_intelligence",
                          "ocos.learning",  # FIX-08: Learning persistence
                          "ocos.world_model",  # FIX-10: World state in context
                          "ocos.autonomous_runtime",  # PW-2.1: ActionType for sandbox

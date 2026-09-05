@@ -27,7 +27,7 @@ class Test34A_EventBus:
     """EventBus: push → normalize → ingest → attention trace."""
 
     def test_create_and_push_file_event(self):
-        from ocos.event import EventBus, EventSource
+        from ocos.perception_bus import EventBus, EventSource
 
         eb = EventBus()
         ce = eb.push_file_change("/project/app.py", "modified")
@@ -39,7 +39,7 @@ class Test34A_EventBus:
         assert eb.get_stats()["pending"] == 1
 
     def test_push_and_ingest(self):
-        from ocos.event import EventBus
+        from ocos.perception_bus import EventBus
 
         eb = EventBus()
         eb.push_file_change("/a.py")
@@ -53,7 +53,7 @@ class Test34A_EventBus:
         assert eb.get_stats()["pending"] == 0
 
     def test_trace_recording(self):
-        from ocos.event import EventBus, AttentionDecision
+        from ocos.perception_bus import EventBus, AttentionDecision
 
         eb = EventBus()
         ce = eb.push_file_change("/etc/secret.key")
@@ -65,7 +65,7 @@ class Test34A_EventBus:
         assert eb.get_stats()["traces_count"] == 1
 
     def test_normalizer_severity_hierarchy(self):
-        from ocos.event import EventBus, EventSource, EventSeverity
+        from ocos.perception_bus import EventBus, EventSource, EventSeverity
 
         eb = EventBus()
 
@@ -86,7 +86,7 @@ class Test34A_EventBus:
         assert ce4.severity == EventSeverity.NORMAL
 
     def test_timer_score_discount(self):
-        from ocos.event import EventBus
+        from ocos.perception_bus import EventBus
 
         eb = EventBus()
         ce = eb.push_timer("heartbeat")
@@ -94,7 +94,7 @@ class Test34A_EventBus:
         assert ce.candidate_score == pytest.approx(0.4)
 
     def test_ingest_max_events_cap(self):
-        from ocos.event import EventBus
+        from ocos.perception_bus import EventBus
 
         eb = EventBus(max_pending=100)
         for i in range(20):
@@ -105,7 +105,7 @@ class Test34A_EventBus:
         assert eb.get_stats()["pending"] == 15
 
     def test_event_bus_available_in_runtime(self):
-        from ocos.event import EventBus
+        from ocos.perception_bus import EventBus
 
         # Just verify class exists
         assert EventBus is not None
@@ -114,7 +114,7 @@ class Test34A_EventBus:
 
     def test_event_not_intention_principles(self):
         """EventBus 不直接触发 Goal — 事件 ≠ 意图。"""
-        from ocos.event import EventBus, AttentionDecision
+        from ocos.perception_bus import EventBus, AttentionDecision
 
         eb = EventBus()
         ce = eb.push_file_change("/tmp/log.txt")
@@ -352,7 +352,7 @@ class Test34E_IdentityContinuity:
 def test_phase34_import_rules():
     """验证 Phase 34 新增模块可正常导入。"""
     # 34A
-    from ocos.event import (
+    from ocos.perception_bus import (
         EventBus, RawEvent, CognitiveEvent, EventSource,
         EventSeverity, AttentionDecision, EventNormalizer, IngestionTrace,
     )

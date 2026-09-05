@@ -171,7 +171,7 @@ class AgentRuntime:
     def event_bus(self) -> Any:
         """Phase 34A: 延迟初始化 EventBus（感知神经中枢）。"""
         if self._event_bus is None:
-            from ocos.event import EventBus
+            from ocos.perception_bus import EventBus
             self._event_bus = EventBus()
         return self._event_bus
 

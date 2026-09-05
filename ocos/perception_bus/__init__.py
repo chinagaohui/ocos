@@ -1,4 +1,4 @@
-"""Phase 34A: EventBus — OCOS 的感知神经系统。
+"""Phase 34A: EventBus — OCOS 的感知神经系统（S4.1: 原 ocos/event 重命名）。
 
 架构:
   External World → EventBus → EventNormalizer → CognitiveEvent
