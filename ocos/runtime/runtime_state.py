@@ -35,6 +35,7 @@ ALLOWED_TRANSITIONS: dict[RuntimeState, set[RuntimeState]] = {
     RuntimeState.BOOTING:  {RuntimeState.RUNNING},
     RuntimeState.RUNNING:  {RuntimeState.SHUTDOWN, RuntimeState.SAFE_MODE, RuntimeState.DEGRADED},
     RuntimeState.DEGRADED: {RuntimeState.RUNNING, RuntimeState.SAFE_MODE, RuntimeState.SHUTDOWN},
-    RuntimeState.SAFE_MODE: {RuntimeState.SHUTDOWN},
+    # S3.10: 允许自动恢复（连续 5 tick 正常后 recover）
+    RuntimeState.SAFE_MODE: {RuntimeState.SHUTDOWN, RuntimeState.RUNNING},
     RuntimeState.SHUTDOWN: set(),  # terminal
 }

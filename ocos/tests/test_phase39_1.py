@@ -303,7 +303,10 @@ class TestRuntimeState:
         assert lm.shutdown() == RuntimeState.SHUTDOWN
         lm2 = LifecycleManager(RuntimeState.SAFE_MODE)
         with pytest.raises(InvalidTransitionError):
-            lm2.boot()
+            lm2.transition(RuntimeState.BOOTING)
+        # S3.10: SAFE_MODE→RUNNING 恢复路径（连续 5 tick 成功后自动恢复）
+        lm3 = LifecycleManager(RuntimeState.SAFE_MODE)
+        assert lm3.recover() == RuntimeState.RUNNING
 
     def test_degraded_recovery(self):
         lm = LifecycleManager(RuntimeState.RUNNING)

@@ -24,6 +24,8 @@ Phase 39.2 约束 (Governance Freeze):
 
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import json
 import signal
@@ -34,6 +36,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .capability_policy import CapabilityPolicyProvider
+
+logger = logging.getLogger(__name__)
 from .checkpoint import CheckpointEngine
 from .lifecycle import LifecycleManager
 from .pipeline import TickPipeline
@@ -84,6 +88,8 @@ class RuntimeKernel:
         self._tick_gen = None  # initialized after recovery
         self._last_tick_id = 0
         self._tick_count = 0
+        # S3.10: DEGRADED/SAFE_MODE 降级 tick 跳过 agent driver
+        self._skip_agent_driver = False
 
     # ── agent driver (39.3 / P1-C: 循环收敛) ──
 
@@ -167,13 +173,77 @@ class RuntimeKernel:
         支持 daemon 每轮 tick_loop(max_ticks=1) 的多次调用模式
         （P1-C 循环收敛：外层节奏由调用方控制）。
         """
+        # S3.10 (白皮书 P2-3): PipelineError 兜底 — 原 tick_loop 不捕获，
+        # 单 stage 异常即终止整个心跳线程。降级编排：
+        #   连续 1 次 stage 失败 → DEGRADED（降级 tick：跳过 agent driver）
+        #   连续 3 次 → SAFE_MODE（仅 checkpoint）
+        #   SAFE_MODE 下连续 5 tick 无失败 → 恢复 RUNNING
+        from ocos.runtime.pipeline import PipelineError
         executed = 0
-        while self._lifecycle.state == RuntimeState.RUNNING:
+        consecutive_failures = 0
+        consecutive_clean = 0
+        while self._lifecycle.state in (RuntimeState.RUNNING,
+                                        RuntimeState.DEGRADED,
+                                        RuntimeState.SAFE_MODE):
             if max_ticks is not None and executed >= max_ticks:
                 break
-
-            self._execute_tick()
+            try:
+                self._execute_tick()
+                consecutive_failures = 0
+                consecutive_clean += 1
+            except PipelineError as e:
+                consecutive_failures += 1
+                consecutive_clean = 0
+                logger.error("Pipeline stage failed (tick %d): %s",
+                             self._tick_count, e)
+                if (consecutive_failures >= 3
+                        and self._lifecycle.state != RuntimeState.SAFE_MODE):
+                    try:
+                        self._lifecycle.enter_safe_mode()
+                        logger.error("Runtime entered SAFE_MODE after %d "
+                                     "consecutive pipeline failures",
+                                     consecutive_failures)
+                    except Exception as te:
+                        logger.error("enter_safe_mode failed: %s", te)
+                elif (self._lifecycle.state == RuntimeState.RUNNING
+                        and consecutive_failures == 1):
+                    try:
+                        self._lifecycle.enter_degraded()
+                        logger.warning("Runtime DEGRADED after pipeline "
+                                       "failure")
+                    except Exception as te:
+                        logger.error("enter_degraded failed: %s", te)
             executed += 1
+
+            self._skip_agent_driver = self._lifecycle.state in (
+                RuntimeState.DEGRADED, RuntimeState.SAFE_MODE)
+
+            # SAFE_MODE 恢复判定
+            if self._lifecycle.state == RuntimeState.SAFE_MODE:
+                if consecutive_failures == 0 and consecutive_clean >= 5:
+                    try:
+                        self._lifecycle.recover()
+                        logger.info("Runtime recovered from SAFE_MODE")
+                    except Exception as te:
+                        logger.error("recover failed: %s", te)
+                # SAFE_MODE 降级 tick：仅心跳计数，不执行 agent driver
+                time.sleep(max(interval, 0.05))
+                continue
+
+            # DEGRADED 降级 tick：跳过 agent driver（认知内核停摆，
+            # 心跳与 checkpoint 仍在——Stage⑧ 在 _execute_tick 内）
+            if self._lifecycle.state == RuntimeState.DEGRADED:
+                consecutive_clean = 0
+                if consecutive_failures == 0:
+                    # 单次成功 tick 即尝试恢复 RUNNING
+                    try:
+                        self._lifecycle.recover()
+                        logger.info("Runtime recovered from DEGRADED")
+                    except Exception as te:
+                        logger.error("recover failed: %s", te)
+                if interval > 0:
+                    time.sleep(interval)
+                continue
 
             if self._lifecycle.shutdown_requested:
                 break
@@ -209,11 +279,21 @@ class RuntimeKernel:
             raise RuntimeError("Runtime not started. Call start() first.")
         tick_id = next(self._tick_gen)
 
+        # S3.10: 降级/安全模式仅心跳 + checkpoint（跳过 agent driver）
+        saved_driver = None
+        if self._skip_agent_driver:
+            saved_driver = self._pipeline._agent_driver
+            self._pipeline._agent_driver = None
+
         # 39.2: Pipeline 编排
-        ctx = self._pipeline.execute_tick(
-            tick_id=tick_id,
-            runtime_state=self._lifecycle.state.value,
-        )
+        try:
+            ctx = self._pipeline.execute_tick(
+                tick_id=tick_id,
+                runtime_state=self._lifecycle.state.value,
+            )
+        finally:
+            if saved_driver is not None:
+                self._pipeline._agent_driver = saved_driver
 
         tick = Tick(
             tick_id=tick_id,
