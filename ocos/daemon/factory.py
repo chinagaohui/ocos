@@ -201,7 +201,10 @@ def build_health_loop(runtime=None, interval_ticks: int = 100):
     monitoring = None
     try:
         from ocos.monitoring.manager import create_monitoring_manager
+        from ocos.monitoring.manager import set_global_metrics
         monitoring = create_monitoring_manager()
+        # S3.5: 挂接进程级指标 — bridge 等无实例模块经 record_global 埋点
+        set_global_metrics(monitoring.metrics)
         if os.environ.get("OCOS_MONITORING_ENABLED", "").strip().lower() == "true":
             monitoring.start_http()
     except Exception as e:

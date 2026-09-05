@@ -76,6 +76,14 @@ class HealthLoop:
 
     def tick(self) -> Optional[DisorderFinding]:
         """每个 daemon tick 调用一次；每 interval_ticks 次执行一次体检。"""
+        # S3.5: daemon tick 心跳计数器（每次调用 +1，与体检周期解耦）
+        monitoring = getattr(self, "monitoring", None)
+        if monitoring is not None:
+            try:
+                monitoring.record_metric(
+                    "ocos_tick_total", 1.0, metric_type="counter")
+            except Exception as _te:
+                logger.debug("tick metric skipped: %s", _te)
         self._ticks += 1
         if self._ticks < self._interval_ticks:
             return None

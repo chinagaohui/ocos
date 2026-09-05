@@ -45,3 +45,34 @@ class TestMonitoringWiring:
         m = re.search(r'ocos_histograms\{name="lat",quantile="0\.9"\} ([0-9.]+)', out)
         assert m, out
         assert float(m.group(1)) < 100.0
+
+    def test_five_core_metrics_present(self):
+        """S3.5 验收：5 个核心指标全部出现在 /metrics 输出。"""
+        from ocos.monitoring.manager import (
+            create_monitoring_manager, set_global_metrics,
+        )
+        mm = create_monitoring_manager()
+        set_global_metrics(mm.metrics)
+        mm.record_metric("ocos_tick_total", 1.0, metric_type="counter")
+        mm.record_metric("ocos_goal_active", 1.0, metric_type="gauge")
+        mm.record_metric("ocos_memory_episodes_total", 1.0, metric_type="gauge")
+        mm.record_metric("ocos_execution_pending", 1.0, metric_type="gauge")
+        from ocos.monitoring.manager import record_global
+        record_global("ocos_llm_calls_total", 1.0)
+        out = mm.get_metrics()
+        for name in ("ocos_tick_total", "ocos_goal_active",
+                     "ocos_llm_calls_total", "ocos_memory_episodes_total",
+                     "ocos_execution_pending", "ocos_up"):
+            assert name in out, f"missing metric: {name}"
+
+    def test_health_loop_tick_increments_counter(self):
+        """HealthLoop.tick 每次调用 +1 ocos_tick_total（心跳埋点）。"""
+        from ocos.daemon.factory import build_health_loop
+        hl = build_health_loop(interval_ticks=1000)
+        hl.tick()
+        hl.tick()
+        out = hl.monitoring.get_metrics()
+        m = __import__("re").search(
+            r'ocos_counters\{name="ocos_tick_total"\} ([0-9.]+)', out)
+        assert m, out
+        assert float(m.group(1)) >= 2.0

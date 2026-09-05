@@ -194,6 +194,40 @@ class AlertManager:
         }
 
 
+# ── 全局指标钩子（S3.5: 进程级埋点，未装配时静默 no-op）──────────────
+#
+# daemon 装配时经 set_global_metrics 挂接真实 MetricsRegistry；bridge 等
+# 无法直接持有实例的模块经 record_global 埋点。测试/嵌入场景不装配 →
+# _GLOBAL_METRICS 为 None，调用零开销返回。
+
+_GLOBAL_METRICS: Optional["MetricsRegistry"] = None
+
+
+def set_global_metrics(registry: Optional["MetricsRegistry"]) -> None:
+    """挂接（或解除，传 None）进程级指标注册表。"""
+    global _GLOBAL_METRICS
+    _GLOBAL_METRICS = registry
+
+
+def record_global(name: str, value: float = 1.0,
+                  metric_type: str = "counter",
+                  labels: Optional[dict[str, str]] = None) -> None:
+    """进程级指标记录 — 未挂接时静默跳过（与 health_loop 同模式）。"""
+    reg = _GLOBAL_METRICS
+    if reg is None:
+        return
+    try:
+        if metric_type == "counter":
+            reg.increment(name, value, labels)
+        elif metric_type == "gauge":
+            reg.set_gauge(name, value, labels)
+        elif metric_type == "histogram":
+            reg.observe(name, value, labels)
+    except Exception:
+        # 埋点失败不放大（fail-open，仅观测）
+        logger.debug("record_global skipped: %s", name)
+
+
 # ── MetricsRegistry ─────────────────────────────────────────────────────────
 
 

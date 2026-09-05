@@ -1100,6 +1100,12 @@ class DecisionBridge:
         if self._llm_calls_today >= cap:
             return False, f"LLM 日预算已用尽（{cap}/天）— 任务转待批明日再试"
         self._llm_calls_today += 1
+        # S3.5: LLM 调用计数器（进程级监控埋点；未装配时静默 no-op）
+        try:
+            from ocos.monitoring.manager import record_global
+            record_global("ocos_llm_calls_total", 1.0)
+        except Exception:
+            pass
         return True, ""
 
     def _llm_available(self) -> bool:
