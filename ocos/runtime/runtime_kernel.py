@@ -68,12 +68,11 @@ class RuntimeKernel:
         # S2.7 (白皮书 P2): 恢复数据（快照/事件/账本/审批）默认落
         # ~/.ocos/recovery/（持久目录），替换原 /tmp/ocos_checkpoints
         # ——/tmp 重启即失，恢复子系统形同虚设。OCOS_RECOVERY_DIR 可覆盖。
-        import os as _os
         from pathlib import Path as _Path
         if checkpoint_dir is None:
-            checkpoint_dir = _os.environ.get(
-                "OCOS_RECOVERY_DIR",
-                str(_Path.home() / ".ocos" / "recovery"))
+            from ocos.config import get_str
+            checkpoint_dir = get_str("OCOS_RECOVERY_DIR",
+                                     str(_Path.home() / ".ocos" / "recovery"))
         checkpoint_dir = _Path(checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         # S3.11 (白皮书 P2-1): runtime_id 固定化——daemon 未传时取

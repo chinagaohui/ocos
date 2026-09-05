@@ -88,11 +88,13 @@ def main():
     """API 服务器入口。"""
     import os
     import uvicorn
-    # S6：默认 8900，避免与 OpenTale（8000）端口冲突；可 OCOS_API_PORT 覆盖
-    port = int(os.getenv("OCOS_API_PORT", "8900"))
+    # S6：默认 8900，避免与 OpenTale（8000）端口冲突
+    # S3.3: 配置统一走 OCOSConfig（env > config.json > DEFAULTS）
+    from ocos.config import get_int, get_str
+    port = get_int("OCOS_API_PORT", 8900)
     # S1.2 (白皮书 P1-2): 默认只监听本机；需要远程访问时显式设置
     # OCOS_API_HOST（且必须配合 Bearer Token 认证）
-    host = os.getenv("OCOS_API_HOST", "127.0.0.1")
+    host = get_str("OCOS_API_HOST", "127.0.0.1")
     print(f"Starting OCOS Cognitive Interface API on http://{host}:{port}")
     print(f"Docs: http://localhost:{port}/ocos/docs")
     if host not in ("127.0.0.1", "localhost") and not auth_disabled():

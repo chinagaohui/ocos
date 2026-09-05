@@ -36,9 +36,10 @@ def approval_disabled() -> bool:
 
     auto → ASK 类动作直接执行或诚实失败，不进待批队列；
     ask  → 恢复人工审批（动作入 pending_actions 等 /approve）。
+    S3.3: 配置统一走 OCOSConfig（env > config.json > 默认）。
     """
-    import os
-    return os.environ.get("OCOS_APPROVAL_MODE", "auto").strip().lower() != "ask"
+    from ocos.config import get_str
+    return get_str("OCOS_APPROVAL_MODE", "auto").strip().lower() != "ask"
 
 
 _DDL = """
