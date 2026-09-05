@@ -34,6 +34,19 @@ from typing import Any, Optional
 from ocos.kernel.abi import Event, EventType, SCHEMA_VERSION
 from ocos.logging import get_logger
 
+def _publish_safe(event_bus, event) -> None:
+    """S1.6 (白皮书 P1-7): EventBus 的真实 API 是 publish（非 emit）。
+
+    兼容 None 注入与异构总线；发布失败降级为 debug 日志不阻断。
+    """
+    publish = getattr(event_bus, "publish", None)
+    if publish is None:
+        return
+    try:
+        publish(event)
+    except Exception as exc:  # 事件发射失败不阻断主流程（BR-04: 留痕不静默）
+        get_logger(__name__).debug("event publish failed: %s", exc)
+
 logger = get_logger(__name__)
 
 
@@ -522,7 +535,7 @@ class AdaptiveController:
 
         # 发射事件
         if self._event_bus is not None:
-            self._event_bus.emit(Event(
+            _publish_safe(self._event_bus, Event(
                 event_type=EventType.ADAPTATION_APPLIED,
                 source="adaptive-control",
                 payload={

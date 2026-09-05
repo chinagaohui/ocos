@@ -453,7 +453,7 @@ class TestTTL:
         )
         mgr_with_event_bus._cleanup_expired()
         # 验证发送 RESOURCE_RELEASED
-        emitted = [c.args[0] for c in mgr_with_event_bus._event_bus.emit.call_args_list]
+        emitted = [c.args[0] for c in mgr_with_event_bus._event_bus.publish.call_args_list]
         released_events = [e for e in emitted if e.event_type == EventType.RESOURCE_RELEASED]
         assert len(released_events) >= 1
         assert released_events[0].payload["reason"] == "ttl_expired"
@@ -468,7 +468,7 @@ class TestEventBus:
     def test_release_sends_resource_released_event(self, mgr_with_event_bus):
         slot = mgr_with_event_bus.request("cpu", 1.0, holder="engine-x").slot
         mgr_with_event_bus.release(slot.slot_id)
-        emitted = mgr_with_event_bus._event_bus.emit.call_args[0][0]
+        emitted = mgr_with_event_bus._event_bus.publish.call_args[0][0]
         assert emitted.event_type == EventType.RESOURCE_RELEASED
         assert emitted.payload["slot_id"] == slot.slot_id
 
@@ -477,7 +477,7 @@ class TestEventBus:
         mgr_with_event_bus.request("gpu", 1.0, holder="engine-x")
         result = mgr_with_event_bus.request("gpu", 0.5, holder="engine-y")
         assert not result.allowed
-        emitted = mgr_with_event_bus._event_bus.emit.call_args[0][0]
+        emitted = mgr_with_event_bus._event_bus.publish.call_args[0][0]
         assert emitted.event_type == EventType.RESOURCE_EXHAUSTED
         assert "insufficient" in emitted.payload["reason"]
 
@@ -495,7 +495,7 @@ class TestEventBus:
         mgr_with_event_bus.request("cpu", 2.0, holder="engine-x")
         mgr_with_event_bus.request("cpu", 0.1, holder="engine-x")
         # 最后一次应触发配额超限事件
-        calls = mgr_with_event_bus._event_bus.emit.call_args_list
+        calls = mgr_with_event_bus._event_bus.publish.call_args_list
         exhausted = [c.args[0] for c in calls if c.args[0].event_type == EventType.RESOURCE_EXHAUSTED]
         assert len(exhausted) >= 1
         assert "quota exceeded" in exhausted[-1].payload["reason"]

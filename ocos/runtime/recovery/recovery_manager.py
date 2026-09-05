@@ -194,15 +194,3 @@ class RecoveryManager:
     def _verifier(self):
         from .integrity_verifier import IntegrityVerifier
         return IntegrityVerifier(self.events, self.ledger, self.approvals)
-
-    # ── 关闭 ──
-
-    def shutdown(self, tick_id: int, runtime_state: str = "SHUTDOWN",
-                 active_goal_ids: tuple[str, ...] = ()) -> RuntimeSnapshot:
-        """关闭前最终快照。"""
-        return self.take_snapshot(
-            tick_id=tick_id,
-            runtime_state=runtime_state,
-            active_goal_ids=active_goal_ids,
-            reason=SnapshotReason.SHUTDOWN,
-        )

@@ -487,7 +487,7 @@ class TestEventBus:
         # 验证发射了 ADAPTATION_APPLIED
         emitted_events = [
             c.args[0]
-            for c in mock_event_bus.emit.call_args_list
+            for c in mock_event_bus.publish.call_args_list
         ]
         adapt_events = [
             e for e in emitted_events
@@ -511,7 +511,7 @@ class TestEventBus:
         ctrl.auto_adapt(trigger_event_id="evt-789")
         emitted = [
             c.args[0]
-            for c in mock_event_bus.emit.call_args_list
+            for c in mock_event_bus.publish.call_args_list
             if c.args[0].event_type == EventType.ADAPTATION_APPLIED
         ]
         if emitted:
