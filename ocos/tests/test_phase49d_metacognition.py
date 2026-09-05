@@ -169,6 +169,7 @@ class TestBridgeMetacognitionGate:
         bridge._confidence_source = source
         bridge._pending = []
         bridge._pending_store = None
+        bridge._permission_gateway = None  # S3.2: __new__ 绕过 __init__，需补网关属性
         bridge._agent_id = "test-bridge"
         bridge._llm_calls_today = 0
         bridge._llm_calls_date = ""

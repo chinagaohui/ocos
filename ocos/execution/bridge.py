@@ -1207,7 +1207,8 @@ class DecisionBridge:
             action="decision_text",
             input_spec={"text": str(text)[:2000]})
         try:
-            result = self._permission_gateway.validate(contract)
+            result = self._permission_gateway.validate(
+                contract, scope="text")
         except Exception as e:
             logger.warning("gateway scan error (fail-closed): %s", e)
             return f"gateway error: {e}"

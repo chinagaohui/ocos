@@ -206,8 +206,20 @@ class PermissionGateway:
         contract: Any,
         caller: CallerIdentity | None = None,
         context: dict[str, Any] | None = None,
+        *,
+        scope: str = "full",
     ) -> GatewayResult:
-        """完整版验证管道。"""
+        """完整版验证管道。
+
+        scope:
+          - "full": 全部检查（参数层完整校验，默认）。
+          - "text": 决策/任务自由文本预检 — 仅启用注入语言类模式
+            （REVERSE_CTRL + DANGEROUS_PATTERNS），跳过 CMD_INJECTION/
+            PATH_TRAVERSAL/SSRF。后者匹配元字符/路径/内网 URL 等需要
+            参数上下文的特征，直接扫描 LLM 自由文本（如 "run command
+            `ls /tmp`"）会产生误报；对应拦截在动作执行层（沙盒白名单、
+            敏感路径、URL 校验）落实（S3.2 修正）。
+        """
         violations: list[str] = []
         trace_id = getattr(contract, "contract_id", None) or uuid.uuid4().hex[:8]
         caller_id = caller.caller_id if caller else "unknown"
@@ -234,12 +246,14 @@ class PermissionGateway:
                     )
 
         # ── 24a3: 路径穿越 / 命令注入 / SSRF ──────────────────────────
-        if _PATH_TRAVERSAL_RE.search(serialized):
-            violations.append("PATH_TRAVERSAL: detected '..' in parameters")
-        if _COMMAND_INJECTION_RE.search(serialized):
-            violations.append("CMD_INJECTION: shell metacharacters detected")
-        if _SSRF_RE.search(serialized):
-            violations.append("SSRF: internal URL pattern detected")
+        # scope="text" 时跳过：这些模式需要参数上下文（见 validate docstring）
+        if scope != "text":
+            if _PATH_TRAVERSAL_RE.search(serialized):
+                violations.append("PATH_TRAVERSAL: detected '..' in parameters")
+            if _COMMAND_INJECTION_RE.search(serialized):
+                violations.append("CMD_INJECTION: shell metacharacters detected")
+            if _SSRF_RE.search(serialized):
+                violations.append("SSRF: internal URL pattern detected")
 
         # ── DANGEROUS_PATTERNS（Phase 22 保留）────────────────────────
         for pattern in _DANGEROUS_PATTERNS:
