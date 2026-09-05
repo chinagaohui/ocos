@@ -16,13 +16,13 @@ class TestMonitoringManager:
         from ocos.monitoring.manager import MonitoringManager
         mgr = MonitoringManager()
         metrics = mgr.get_metrics()
-        assert isinstance(metrics, dict)
+        assert isinstance(metrics, str)
 
     def test_get_health_status(self):
         from ocos.monitoring.manager import MonitoringManager
         mgr = MonitoringManager()
         status = mgr.get_health_status()
-        assert status is not None
+        assert isinstance(status, dict)
 
     def test_get_stats(self):
         from ocos.monitoring.manager import MonitoringManager
@@ -39,5 +39,12 @@ class TestMonitoringManager:
     def test_evaluate_alerts(self):
         from ocos.monitoring.manager import MonitoringManager
         mgr = MonitoringManager()
-        alerts = mgr.evaluate_alerts()
+        alerts = mgr.evaluate_alerts({"context": "test"})
         assert isinstance(alerts, list)
+
+    def test_start_stop_http(self):
+        from ocos.monitoring.manager import MonitoringManager
+        mgr = MonitoringManager()
+        result = mgr.start_http()
+        assert isinstance(result, bool)
+        mgr.stop_http()

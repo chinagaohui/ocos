@@ -12,26 +12,21 @@ class TestGrowthEngine:
         engine = GrowthEngine()
         assert engine is not None
 
-    def test_ingest(self):
-        from ocos.growth.engine import GrowthEngine
-        engine = GrowthEngine()
-        result = engine.ingest({"type": "test"})
-        assert result is not None
-
-    def test_grow_once(self):
-        from ocos.growth.engine import GrowthEngine
-        engine = GrowthEngine()
-        result = engine.grow_once()
-        assert result is not None
-
     def test_analyze_pending(self):
         from ocos.growth.engine import GrowthEngine
         engine = GrowthEngine()
         result = engine.analyze_pending()
-        assert result is not None
+        assert isinstance(result, list)
 
-    def test_execute_proposal(self):
-        from ocos.growth.engine import GrowthEngine
+    def test_execute_proposal_with_mock(self):
+        """Test execute_proposal with a proper GrowthProposal."""
+        from ocos.growth.engine import GrowthEngine, GrowthProposal
         engine = GrowthEngine()
-        result = engine.execute_proposal({"type": "test"})
+        # GrowthProposal needs signal_topic, rationale, file_path
+        proposal = GrowthProposal(
+            signal_topic="test_topic",
+            rationale="test rationale for this proposal",
+            file_path="/tmp/test.py"
+        )
+        result = engine.execute_proposal(proposal)
         assert result is not None

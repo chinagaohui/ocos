@@ -1,8 +1,8 @@
 {
-  "snapshot_id": "snap-1788569945-281ac1",
+  "snapshot_id": "snap-1788570701-70effa",
   "type": "FULL",
-  "timestamp": 1788569945.76253,
-  "datetime": "2026-09-05T00:59:05.762530+00:00",
+  "timestamp": 1788570701.3501878,
+  "datetime": "2026-09-05T01:11:41.350188+00:00",
   "reason": "test_save",
   "data": {
     "agent_id": "test-agent",
