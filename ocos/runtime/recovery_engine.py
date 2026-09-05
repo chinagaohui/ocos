@@ -33,6 +33,7 @@ class RecoveryResult:
     from_checkpoint: bool = False
     snapshot_id: str | None = None
     warnings: list[str] | None = None
+    restore_result: Any = None  # S3.11: 39.4 RestoreResult（认知矢量可观测）
 
     @property
     def has_pending_approvals(self) -> bool:
@@ -101,6 +102,7 @@ class RecoveryEngine:
             from_checkpoint=True,
             snapshot_id=restore.snapshot_id,
             warnings=restore.warnings,
+            restore_result=restore,
         )
 
     def create_checkpoint(self, tick_id: int, state: RuntimeState) -> CheckpointRecord:

@@ -109,7 +109,11 @@ class ResidentRuntime:
         # kernel 不 import ocos.agent — AgentRuntime.tick 经 driver 注入。
         if kernel is None:
             from ocos.runtime.runtime_kernel import RuntimeKernel
-            kernel = RuntimeKernel()
+            # S3.11: 固定 runtime_id（由 agent_id 派生）——旧式 checkpoint
+            # 可跨重启命中；OCOS_RUNTIME_ID 环境变量优先
+            kernel = RuntimeKernel(
+                runtime_id=os.environ.get("OCOS_RUNTIME_ID")
+                or f"daemon-{getattr(agent, 'agent_id', 'master')}")
         self._kernel: Any = kernel
         self._health_loop: Optional[Any] = health_loop  # GAP-P1-2
         self._perception_pipeline: Optional[Any] = perception_pipeline  # AUD-F1

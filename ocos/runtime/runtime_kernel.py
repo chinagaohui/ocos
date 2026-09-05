@@ -76,7 +76,12 @@ class RuntimeKernel:
                 str(_Path.home() / ".ocos" / "recovery"))
         checkpoint_dir = _Path(checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        self._runtime_id = runtime_id or str(uuid.uuid4())
+        # S3.11 (白皮书 P2-1): runtime_id 固定化——daemon 未传时取
+        # OCOS_RUNTIME_ID，杜绝每 boot 换 uuid 致旧式 checkpoint 永远
+        # miss（CheckpointEngine.latest_checkpoint 按 runtime_id 前缀查找）
+        self._runtime_id = (runtime_id
+                            or __import__("os").environ.get("OCOS_RUNTIME_ID")
+                            or str(uuid.uuid4()))
         self._checkpoint_engine = CheckpointEngine(checkpoint_dir)
         self._recovery_engine = RecoveryEngine(
             self._checkpoint_engine, self._runtime_id,
@@ -137,6 +142,17 @@ class RuntimeKernel:
 
         if result.recovered:
             self._last_tick_id = result.last_tick_id
+            # S3.11: 认知矢量观测回灌——恢复出的 goals/attention/pending
+            # 不再被静默丢弃（注入状态注入留待后续版本，先保证可观测）
+            restore = getattr(result, "restore_result", None)
+            if restore is not None:
+                n_goals = len(getattr(restore, "active_goal_ids", ()) or ())
+                n_pending = getattr(restore, "pending_approvals_count", 0)
+                logger.info(
+                    "Recovery restored cognitive vector: "
+                    "active_goals=%d pending_approvals=%s warnings=%s",
+                    n_goals, n_pending,
+                    getattr(restore, "warnings", ()) or ())
 
         # Init tick generator (从恢复后的 tick 开始)
         self._tick_gen = tick_id_generator(start=result.next_tick_id)
