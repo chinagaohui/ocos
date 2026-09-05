@@ -63,10 +63,14 @@ testpaths = ["ocos/tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short --strict-markers"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "asyncio: 异步测试（pytest-asyncio）",
+    "requires_psutil: 依赖 psutil 环境传感器采集（缺失时跳过）",
 ]
 
 [tool.ruff]

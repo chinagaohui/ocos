@@ -177,11 +177,15 @@ class TestFileSensor:
 
 
 # 2026-08-17 健康化：psutil 缺失时环境传感器降级——依赖真实采集的测试跳过。
+# S4.5: skipif 收敛为显式 marker requires_psutil（配合 --strict-markers）。
 try:
     import psutil  # noqa: F401
     _PSUTIL_OK = True
 except ImportError:
     _PSUTIL_OK = False
+
+requires_psutil = pytest.mark.skipif(
+    not _PSUTIL_OK, reason="psutil 缺失（环境传感器降级）")
 
 
 class TestEnvironmentSensor:
@@ -191,7 +195,7 @@ class TestEnvironmentSensor:
         # Should produce at least no errors
         assert isinstance(observations, list)
 
-    @pytest.mark.skipif(not _PSUTIL_OK, reason="psutil 缺失（环境传感器降级）")
+    @requires_psutil
     def test_memory_anomaly_thresholds(self):
         """设置极低阈值触发告警。"""
         sensor = EnvironmentSensor()
@@ -202,7 +206,7 @@ class TestEnvironmentSensor:
         # 至少有一个内存告警
         assert any(o.type == ObservationType.ANOMALY for o in observations)
 
-    @pytest.mark.skipif(not _PSUTIL_OK, reason="psutil 缺失（环境传感器降级）")
+    @requires_psutil
     def test_snapshot_available(self):
         sensor = EnvironmentSensor()
         sensor.poll()
