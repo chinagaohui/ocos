@@ -284,6 +284,56 @@ class OpenaiProvider(LLMProvider):
 
 
 # ═══════════════════════════════════════════════════════════════
+# Failover Provider（P3-429: 第二 provider 故障转移）
+# ═══════════════════════════════════════════════════════════════
+
+
+class FailoverProvider(LLMProvider):
+    """主备故障转移 — primary 限流(429)/网络/服务端错误时透明切换 fallback。
+
+    每次请求先走 primary（自身已含 SDK 级退避重试）；重试耗尽仍失败时，
+    同一请求改由 fallback 完成。fallback 也失败则抛出 fallback 的错误。
+    未配置 fallback（config.json 无 llm_fallback 段）时不会被构造，
+    行为与单 provider 完全一致。
+    """
+
+    def __init__(self, primary: LLMProvider, fallback: LLMProvider) -> None:
+        self._primary = primary
+        self._fallback = fallback
+
+    @property
+    def name(self) -> str:
+        return f"failover({self._primary.name}->{self._fallback.name})"
+
+    @property
+    def available(self) -> bool:
+        return self._primary.available or self._fallback.available
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.8,
+        max_tokens: int = 2000,
+    ) -> str:
+        import asyncio
+        kwargs = {"system_prompt": system_prompt,
+                  "temperature": temperature, "max_tokens": max_tokens}
+        if not self._primary.available:
+            return await self._fallback.generate(prompt, **kwargs)
+        try:
+            return await self._primary.generate(prompt, **kwargs)
+        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+            raise  # 取消/中断必须透传，不得转投 fallback
+        except Exception as exc:
+            logger.warning(
+                "Primary provider '%s' failed (%s: %s), failover to '%s'",
+                self._primary.name, type(exc).__name__, str(exc)[:120],
+                self._fallback.name)
+            return await self._fallback.generate(prompt, **kwargs)
+
+
+# ═══════════════════════════════════════════════════════════════
 # Prompt 构建器
 # ═══════════════════════════════════════════════════════════════
 
@@ -430,11 +480,24 @@ def get_text_generator() -> "TextGenerator":
 
 def _read_llm_config() -> dict:
     """读取 ~/.ocos/config.json 的 llm 段（环境变量优先于配置文件）。"""
+    return _read_config_block("llm")
+
+
+def _read_llm_fallback_config() -> dict:
+    """读取 ~/.ocos/config.json 的 llm_fallback 段（P3-429 故障转移备用 provider）。
+
+    格式: {"llm_fallback": {"api_key", "base_url", "model"}} — 段缺失或
+    api_key 为空表示未启用故障转移，行为与单 provider 一致。
+    """
+    return _read_config_block("llm_fallback")
+
+
+def _read_config_block(block: str) -> dict:
     path = os.path.join(os.path.expanduser("~"), ".ocos", "config.json")
     try:
         import json
         with open(path, encoding="utf-8") as f:
-            return (json.load(f) or {}).get("llm", {}) or {}
+            return (json.load(f) or {}).get(block, {}) or {}
     except (OSError, ValueError):
         return {}
 
@@ -458,7 +521,19 @@ class TextGenerator:
             return AnthropicProvider()
         if (os.environ.get("OPENAI_API_KEY")
                 or _read_llm_config().get("api_key")):
-            return OpenaiProvider()
+            primary: LLMProvider = OpenaiProvider()
+            # P3-429: 配置了 llm_fallback 段（含 api_key）则启用故障转移
+            fb = _read_llm_fallback_config()
+            if fb.get("api_key"):
+                fallback = OpenaiProvider(
+                    api_key=fb.get("api_key", ""),
+                    base_url=fb.get("base_url", ""),
+                    model=fb.get("model", ""),
+                )
+                logger.info("LLM failover enabled: %s -> %s",
+                            primary.name, fallback.name)
+                return FailoverProvider(primary, fallback)
+            return primary
         logger.info("No API keys found, using MockProvider")
         return MockProvider()
 
