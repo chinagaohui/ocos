@@ -26,6 +26,7 @@ class ActionType(Enum):
     RUN_COMMAND = auto()          # PW-4.1: 沙盒命令（黑白名单，ASK 审批后执行）
     HTTP_FETCH = auto()           # PW-4.1: 白名单 URL 抓取（ASK 审批后执行）
     QUERY_DB = auto()             # P2-1: 只读 SQLite 查询（系统自检/数据分析）
+    FILE_WRITE = auto()           # S1.1/白皮书 P1-1: 文件写入（强制审批，最高危写动作）
 
 
 @dataclass

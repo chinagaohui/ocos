@@ -55,6 +55,7 @@ ASK_ACTIONS: frozenset[ActionType] = frozenset({
     ActionType.SEARCH_WEB,           # 网络检索 (中危)
     ActionType.RUN_COMMAND,          # PW-4.1: 沙盒命令 (黑/白名单闸门后真实执行)
     ActionType.HTTP_FETCH,           # PW-4.1: 白名单 URL 抓取
+    ActionType.FILE_WRITE,           # S1.1: 文件写入 — 强制审批（不受 APPROVAL_MODE 影响）
 })
 
 DENY_ACTIONS: frozenset[ActionType] = frozenset()
@@ -296,6 +297,14 @@ class DecisionBridge:
                     status="completed",
                     summary=f"dag_{task_type}: {str(llm.get('stdout', llm.get('applied', '')))[:150]}")
                 return {"status": "completed", "result": llm}
+            if llm.get("pending"):
+                # S1.1: FILE_WRITE 强制审批 — 待批而非失败/执行
+                self._audit_record(
+                    contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
+                    status="pending",
+                    summary=f"dag_{task_type}: {str(llm.get('error', ''))[:150]}")
+                return {"status": "pending_approval",
+                        "reason": str(llm.get("error", "file_write requires approval"))}
             # UX-G: LLM 判定不可执行（描述模糊/无动作）→ 诚实 failed，
             # 落入 goal_result 摘要；不再堆无法批准的待批噪音
             # FIX-失败遮蔽: 真实原因若藏在 blocked/stderr/exit_code 里，
@@ -369,6 +378,14 @@ class DecisionBridge:
                     status="completed",
                     summary=f"dag_{task_type}: {str(llm.get('stdout', llm.get('applied', '')))[:150]}")
                 return {"status": "completed", "result": llm}
+            if llm.get("pending"):
+                # S1.1: FILE_WRITE 强制审批 — 待批而非失败/执行
+                self._audit_record(
+                    contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
+                    status="pending",
+                    summary=f"dag_{task_type}: {str(llm.get('error', ''))[:150]}")
+                return {"status": "pending_approval",
+                        "reason": str(llm.get("error", "file_write requires approval"))}
             self._pending.append({
                 "action_type": f"dag_{task_type}",
                 "target": "dag_task",
@@ -748,9 +765,13 @@ class DecisionBridge:
         target = payload.get("target", "")
         if not target:
             return {"ok": False, "error": "empty target"}
-        if not payload.get("approval_id"):
+        approval_id = payload.get("approval_id")
+        if not approval_id:
             return {"ok": False,
                     "error": "file op requires approval_id（必须经审批流触达）"}
+        if not self._verify_approval(approval_id):
+            return {"ok": False,
+                    "error": f"invalid or unapproved approval_id: {approval_id}"}
         try:
             from ocos.digital_world.base import DigitalOperation
             from ocos.digital_world import file_ops
@@ -904,10 +925,26 @@ class DecisionBridge:
         if raw.startswith("FILE_WRITE|"):
             parts = raw.split("|", 2)
             if len(parts) == 3:
+                # S1.1 (白皮书 P1-1): FILE_WRITE 强制审批 — 不再自造
+                # approval_id ("task-approved") 绕过守门；无 approval_id
+                # 一律入待批队列，无论 OCOS_APPROVAL_MODE 为何值。
+                approval_id = payload.get("approval_id")
+                if not approval_id:
+                    self._enqueue_pending(
+                        action_type="file_op",
+                        target=parts[1].strip(),
+                        payload={"op_type": "file_write",
+                                 "target": parts[1].strip(),
+                                 "params": {"content": parts[2]}},
+                        text=f"FILE_WRITE {parts[1].strip()} "
+                             f"(LLM 规划写文件 — 强制待批)")
+                    return {"ok": False, "pending": True,
+                            "error": ("file_write requires approval — "
+                                      "已入待批队列，等待人工批准")}
                 return self._handler_file_op(SimpleNamespace(payload={
                     "op_type": "file_write", "target": parts[1].strip(),
                     "params": {"content": parts[2]},
-                    "approval_id": payload.get("approval_id", "task-approved")}))
+                    "approval_id": approval_id}))
             return {"ok": False, "error": f"FILE_WRITE 格式错误: {raw[:80]}"}
         if raw.startswith("NONE|"):
             return {"ok": False, "error": f"任务无法执行: {raw[5:].strip()}"}
@@ -1054,7 +1091,23 @@ class DecisionBridge:
 
         approvals（CLI/API/REPL）统一走这里, 保证每笔批准动作都有
         ExecutionAudit + event_memory 留痕。
+        S1.1 (白皮书 P1-1): payload 携带 approval_id 时必须能溯源到
+        pending_actions 表中已批准的行, 伪造 ID 一律拒绝并留痕。
         """
+        payload = dict(payload or {})
+        approval_id = payload.get("approval_id")
+        if approval_id and not self._verify_approval(approval_id):
+            self._record_lifecycle(
+                "result", self._agent_id,
+                {"status": "blocked",
+                 "summary": f"forged/unapproved approval_id: {approval_id}"})
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                action_type=action_type_name, target="approval-check",
+                payload=payload, status="failed",
+                result={"ok": False,
+                        "error": f"invalid or unapproved approval_id: "
+                                 f"{approval_id}"})
         dispatched = self.dispatcher.dispatch_by_name(
             action_type_name, payload)
         if dispatched is None:
@@ -1108,6 +1161,25 @@ class DecisionBridge:
             logger.debug("lifecycle record failed: %s", e)
 
     # ── 待批队列 ──────────────────────────────────────────────────────────
+
+    def _verify_approval(self, approval_id: str) -> bool:
+        """S1.1 (白皮书 P1-1): approval_id 必须对应 pending_actions 表中
+        已批准（status='approved'）的行；无 PendingStore 时 fail-closed。
+        """
+        if self._pending_store is None:
+            logger.warning("approval verification failed (no pending store, "
+                           "fail-closed): approval_id=%s", approval_id)
+            return False
+        try:
+            row = self._pending_store.get(str(approval_id))
+        except Exception as e:
+            logger.warning("approval verification error: %s", e)
+            return False
+        if row is None or row.get("status") != "approved":
+            logger.warning("approval verification failed: approval_id=%s "
+                           "(missing or not approved)", approval_id)
+            return False
+        return True
 
     def _enqueue_pending(self, action_type: str, target: str,
                          payload: dict, text: str) -> None:

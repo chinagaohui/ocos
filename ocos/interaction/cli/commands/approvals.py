@@ -59,6 +59,9 @@ def cmd_approvals_approve(args, session) -> int:
     # 尝试真实执行 — 有 handler 的动作 dispatch；无 executor 的诚实 blocked
     action_type = row["action_type"]
     payload = json.loads(row["payload_json"] or "{}")
+    # S1.1 (白皮书 P1-1): 注入本待批行 id 作为 approval_id，
+    # 供 handler 侧溯源校验（必须对应 status='approved' 的行）
+    payload.setdefault("approval_id", args.pending_id)
     dispatched = bridge.execute_approved(action_type, payload)
     if dispatched is not None and dispatched.status == "done":
         store.mark_executed(args.pending_id,
