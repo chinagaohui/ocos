@@ -53,6 +53,15 @@ MAX_CONTEXT_TOKENS = 128_000
 CONVERSE_TIMEOUT = 300.0
 API_TIMEOUT = 10.0
 
+
+def _api_headers() -> dict[str, str]:
+    """S1.2: TUI 请求统一携带 API Bearer Token（与服务端共用配置）。"""
+    try:
+        from ocos.interaction.api.auth import get_api_token
+        return {"Authorization": f"Bearer {get_api_token()}"}
+    except Exception:
+        return {}
+
 # ── kawaii 思考动画帧（Hermes 风格） ─────────────────────────────────
 THINKING_FRAMES = [
     ("◜", "(｡•́︿•̀｡)", "pondering..."),
@@ -435,7 +444,7 @@ class ChatScreen(App):
     async def _refresh_state(self) -> None:
         try:
             async with httpx.AsyncClient(base_url=self.api_base, timeout=API_TIMEOUT,
-                                         trust_env=False) as client:
+                                         trust_env=False, headers=_api_headers()) as client:
                 resp = await client.get("/ocos/introspect")
                 if resp.status_code == 200:
                     data = resp.json().get("data", {})
@@ -634,7 +643,7 @@ class ChatScreen(App):
     async def _do_turn(self, message: str) -> None:
         try:
             async with httpx.AsyncClient(base_url=self.api_base, timeout=CONVERSE_TIMEOUT,
-                                         trust_env=False) as client:
+                                         trust_env=False, headers=_api_headers()) as client:
                 # FIX-8: 携带会话 id → 服务端据此把对话写入同 session_id 的记忆
                 resp = await client.post(
                     "/ocos/converse",
@@ -676,7 +685,7 @@ class ChatScreen(App):
     async def _poll_outbox(self) -> None:
         try:
             async with httpx.AsyncClient(base_url=self.api_base, timeout=API_TIMEOUT,
-                                         trust_env=False) as client:
+                                         trust_env=False, headers=_api_headers()) as client:
                 resp = await client.get(f"/ocos/outbox?after={self._outbox_cursor}")
                 if resp.status_code != 200:
                     return
@@ -859,7 +868,7 @@ class ChatScreen(App):
     async def _run_background(self, n: int, prompt: str) -> None:
         try:
             async with httpx.AsyncClient(base_url=self.api_base, timeout=CONVERSE_TIMEOUT,
-                                         trust_env=False) as client:
+                                         trust_env=False, headers=_api_headers()) as client:
                 resp = await client.post("/ocos/converse", json={"message": prompt})
             reply = resp.json().get("data", {}).get("reply", "（无回复）")
             self._panel(_strip_markdown(reply), f"OCOS (background #{n})", border="cyan")
@@ -872,7 +881,7 @@ class ChatScreen(App):
             return
         try:
             async with httpx.AsyncClient(base_url=self.api_base, timeout=API_TIMEOUT,
-                                         trust_env=False) as client:
+                                         trust_env=False, headers=_api_headers()) as client:
                 resp = await client.post("/ocos/goals-from-chat", json={"message": arg})
                 data = resp.json()
                 if resp.status_code == 200 and data.get("success"):
@@ -914,7 +923,7 @@ class ChatScreen(App):
         action = "approve" if approved else "deny"
         try:
             async with httpx.AsyncClient(base_url=self.api_base, timeout=API_TIMEOUT,
-                                         trust_env=False) as client:
+                                         trust_env=False, headers=_api_headers()) as client:
                 resp = await client.post(f"/ocos/approvals/{pid}/{action}")
                 msg = resp.json().get("message", "?")
             icon = "✓" if approved else "✗"
@@ -932,7 +941,7 @@ class ChatScreen(App):
         self._sys_line("[dim]自省中...[/dim]")
         try:
             async with httpx.AsyncClient(base_url=self.api_base, timeout=CONVERSE_TIMEOUT,
-                                         trust_env=False) as client:
+                                         trust_env=False, headers=_api_headers()) as client:
                 resp = await client.post("/ocos/self-improve")
                 d = resp.json().get("data", {})
             proposals = d.get("proposals", [])

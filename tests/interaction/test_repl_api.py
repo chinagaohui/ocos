@@ -189,7 +189,9 @@ def _get_app_paths():
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # S1.2: 业务逻辑测试 — 显式关闭 Bearer Token 门
+    monkeypatch.setenv("OCOS_API_AUTH_DISABLED", "true")
     return TestClient(app)
 
 

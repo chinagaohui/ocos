@@ -19,6 +19,7 @@ import sys
 from fastapi import FastAPI
 
 from ocos.interaction.api.models import HealthResponse, APIResponse
+from ocos.interaction.api.auth import AuthMiddleware, auth_disabled
 
 app = FastAPI(
     title="OCOS Cognitive Interface API",
@@ -28,6 +29,12 @@ app = FastAPI(
     redoc_url="/ocos/redoc",
     openapi_url="/ocos/openapi.json",
 )
+
+# S1.2 (白皮书 P1-2): 全站 Bearer Token 认证（/ocos/health 与 UI 静态页豁免）。
+# 开发环境可 OCOS_API_AUTH_DISABLED=true 显式关闭。
+app.add_middleware(AuthMiddleware)
+if auth_disabled():
+    print("⚠ OCOS_API_AUTH_DISABLED=true — API 认证已关闭，仅限开发环境！")
 
 
 @app.get("/ocos/health", tags=["health"])
@@ -83,9 +90,15 @@ def main():
     import uvicorn
     # S6：默认 8900，避免与 OpenTale（8000）端口冲突；可 OCOS_API_PORT 覆盖
     port = int(os.getenv("OCOS_API_PORT", "8900"))
-    print(f"Starting OCOS Cognitive Interface API on http://localhost:{port}")
+    # S1.2 (白皮书 P1-2): 默认只监听本机；需要远程访问时显式设置
+    # OCOS_API_HOST（且必须配合 Bearer Token 认证）
+    host = os.getenv("OCOS_API_HOST", "127.0.0.1")
+    print(f"Starting OCOS Cognitive Interface API on http://{host}:{port}")
     print(f"Docs: http://localhost:{port}/ocos/docs")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    if host not in ("127.0.0.1", "localhost") and not auth_disabled():
+        print("⚠ 远程监听已启用 — 确保客户端携带 API Token "
+              "(~/.ocos/config.json api.token)")
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

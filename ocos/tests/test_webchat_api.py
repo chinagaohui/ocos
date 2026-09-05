@@ -15,9 +15,15 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(scope="module")
 def client() -> TestClient:
+    # S1.2: 本文件测业务逻辑而非认证 — 显式关闭 Bearer Token 门
+    import os
     from ocos.interaction.api.server import app
 
-    return TestClient(app)
+    os.environ["OCOS_API_AUTH_DISABLED"] = "true"
+    try:
+        yield TestClient(app)
+    finally:
+        os.environ.pop("OCOS_API_AUTH_DISABLED", None)
 
 
 def test_health(client: TestClient) -> None:
