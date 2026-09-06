@@ -280,3 +280,17 @@ class TestBridgeAgentWiring:
         """python3 视为通用运行时，不触发强制调用指令。"""
         bridge = self._bridge([self._agent(name="python3")])
         assert bridge._agent_hint("运行 python3 脚本") == ""
+
+    def test_agent_forced_call_returns_name(self):
+        """描述命中已发现可用 CLI 智能体 → 返回其名（保真闸门用）。"""
+        bridge = self._bridge([self._agent(name="codex")])
+        assert bridge._agent_forced_call("运行 codex --version") == "codex"
+
+    def test_agent_forced_call_empty_without_match(self):
+        """未命中 / python3 / 不可用 → 不干预。"""
+        bridge = self._bridge([self._agent(name="codex")])
+        assert bridge._agent_forced_call("查看磁盘使用情况") == ""
+        bridge2 = self._bridge([self._agent(name="python3")])
+        assert bridge2._agent_forced_call("运行 python3 脚本") == ""
+        bridge3 = self._bridge([self._agent(name="codex", available=False)])
+        assert bridge3._agent_forced_call("运行 codex --version") == ""

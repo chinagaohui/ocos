@@ -974,6 +974,22 @@ class DecisionBridge:
                 t = t.strip("`").lstrip()
             return t.splitlines()[0].strip()
 
+        # AGI 能力补全: 保真闸门 — 任务显式引用已发现智能体但规划输出未调用它
+        # → 一次带强反馈的纠正（确定性拉回，抑制"调用 XX 智能体"漂移成
+        # uname/df 系统分析；沿用 UX-K 重试通道，仍失败则诚实失败）。
+        try:
+            _forced = self._agent_forced_call(description)
+            if _forced and not any(
+                    _forced in _ln for _ln in raw.splitlines()):
+                _raw2 = _first_line(_convert(
+                    f"任务明确要求调用智能体「{_forced}」，你的输出未调用它。"
+                    f"请只输出 RUN|{_forced} <参数>（只读示例: "
+                    f"RUN|{_forced} --version），不要输出其他系统命令。"))
+                if _raw2.startswith("RUN|"):
+                    raw = _raw2
+        except Exception:
+            pass
+
         def _run_one(command: str, auto_readonly: bool) -> dict:
             """UX-F1: 单命令执行（含只读校验 + 沙盒拦截带反馈重试一次）。"""
             if auto_readonly and any(
@@ -1255,6 +1271,28 @@ class DecisionBridge:
         if not hints:
             return ""
         return "【智能体调用强制指令】\n" + "\n".join(hints)
+
+    def _agent_forced_call(self, description: str) -> str:
+        """AGI 能力补全: 任务显式引用的已发现可用智能体名（保真闸门用）。
+
+        描述命中已发现可用 CLI 智能体（codex 等）→ 返回该名，调用方据此
+        在规划输出未调用它时强制纠正；未命中/不可用 → ""（不干预）。
+        """
+        if self._agent_source is None or not description:
+            return ""
+        try:
+            agents = self._agent_source(description) or []
+        except Exception:
+            return ""
+        for a in agents:
+            name = str(a.get("name", ""))
+            if not name or name in ("python3",) or not a.get("available"):
+                continue
+            if a.get("kind", "cli") != "cli":
+                continue  # 保真闸门仅针对 CLI（HTTP 走提示引导）
+            if name in description:
+                return name
+        return ""
 
     def _world_hint(self, description: str) -> str:
         """P2.2 (AGI 计划): 世界模型前置校验注记。
