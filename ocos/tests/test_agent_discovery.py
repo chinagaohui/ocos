@@ -231,12 +231,14 @@ class TestBridgeAgentWiring:
                 "cli_path": path, "version": "3.x", "api_endpoint": ""}
 
     def test_prior_agents_injects_list(self):
-        """_prior_agents 输出【可用智能体软件】清单（含路径与版本）。"""
+        """_prior_agents 输出【可用智能体软件】清单（含路径、版本与执行引导）。"""
         bridge = self._bridge([self._agent()])
         block = bridge._prior_agents("调用 python3 执行任务")
         assert "【可用智能体软件】" in block
         assert "python3" in block
         assert "CLI" in block
+        assert "可直接执行" in block  # 明确 RUN| 行可直接调用的引导
+        assert "python3 --version" in block
 
     def test_discovered_cli_runs_in_sandbox(self):
         """已发现 CLI → 沙盒动态放行并真实执行（非白名单外拦截）。"""

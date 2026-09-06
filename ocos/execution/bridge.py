@@ -1203,6 +1203,11 @@ class DecisionBridge:
                 ver = f" ({str(a.get('version', ''))[:40]})" \
                     if a.get("version") else ""
                 lines.append(f"- {name}: CLI {a.get('cli_path', '')}{ver}")
+                # 关键引导: 明确该 CLI 已获白名单放行、可在 RUN| 行直接执行
+                # （否则规划 LLM 常把"调用智能体"漂移成通用系统分析）
+                lines.append(
+                    f"  → 可直接执行: {name} <参数>"
+                    f"（只读示例: {name} --version）")
             elif kind == "http":
                 lines.append(f"- {name}: HTTP {a.get('api_endpoint', '')}")
         try:
