@@ -961,12 +961,19 @@ class AgentRuntime:
                     else:
                         dag = TaskDecomposer.decompose(ug)
                         # UX-F1: 模板任务携带目标语境
+                        # FIX(AGI): PlanTask 是 @dataclass(frozen=True)，直接
+                        # _t.description=... 抛 FrozenInstanceError 被吞 →
+                        # 子任务永远是"收集数据"等空壳名，goal 指令（如"调用
+                        # codex"）丢失 → bridge 注入/保真闸门全部无法命中。
+                        # 用 dataclasses.replace 重建任务并写回 DAG。
                         goal_ctx = (ug.objective or ug.raw_input or "")[:80]
-                        for _t in dag.tasks.values():
+                        import dataclasses as _dc
+                        for _tid, _t in list(dag.tasks.items()):
                             _d = getattr(_t, "description", "")
                             if goal_ctx and goal_ctx not in _d:
                                 try:
-                                    _t.description = f"{goal_ctx} — {_d}"
+                                    dag.tasks[_tid] = _dc.replace(
+                                        _t, description=f"{goal_ctx} — {_d}")
                                 except Exception:
                                     pass
                     self._active_dag = dag
@@ -1193,8 +1200,18 @@ class AgentRuntime:
                 bases[task_id] = (getattr(task, "description", "") or "")
             revised = self._revise_task_description(
                 bases[task_id], reason, retry_count + 1)
+            # FIX(AGI): PlanTask 为 frozen dataclass，直接赋值抛
+            # FrozenInstanceError 被吞 → 重试描述回注从未生效。用
+            # dataclasses.replace 重建并写回 active DAG。
             try:
-                task.description = revised
+                import dataclasses as _dc
+                _active = getattr(self, "_active_dag", None)
+                if (_active is not None
+                        and task_id in getattr(_active, "tasks", {})):
+                    _active.tasks[task_id] = _dc.replace(
+                        task, description=revised)
+                else:
+                    object.__setattr__(task, "description", revised)
             except Exception:
                 pass
             meta["revised_description"] = revised
