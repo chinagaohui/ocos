@@ -349,6 +349,44 @@ def build_execution_bridge(agent: Any = None, agent_id: str = "decision_bridge",
         import logging
         logging.getLogger(__name__).debug(
             "learning source attach skipped: %s", e)
+    # AGI 能力补全: 自动分析本机智能体软件（openclaw/codex/claude/...）→
+    # 注入规划上下文（规划 LLM 可见可用清单）+ 动态放行发现 CLI（沙盒
+    # extra_allow）→ "调用 XX 智能体"类任务可规划并真实执行。失败不阻断。
+    try:
+        import json as _json
+        import os as _os
+        from ocos.capability.agent_discovery import AgentDiscovery
+
+        _cfg: dict = {}
+        _cfg_path = _os.path.join(_os.path.expanduser("~"), ".ocos", "config.json")
+        if _os.path.exists(_cfg_path):
+            try:
+                with open(_cfg_path, encoding="utf-8") as _cf:
+                    _cfg = _json.load(_cf) or {}
+            except Exception:
+                _cfg = {}
+        _discovery = AgentDiscovery(config=_cfg)
+        _agents = _discovery.discover()
+        _avail = [a for a in _agents if a.available]
+        if _avail:
+            bridge.attach_agent_source(
+                lambda _desc, _as=_agents: [
+                    {"name": a.name, "available": a.available,
+                     "kind": a.kind, "cli_path": a.cli_path,
+                     "version": a.version,
+                     "api_endpoint": a.api_endpoint} for a in _as])
+            bridge.attach_agent_clis(
+                {a.cli_path for a in _avail
+                 if a.kind == "cli" and a.cli_path}
+                | {a.name for a in _avail if a.kind == "cli"})
+            import logging
+            logging.getLogger(__name__).info(
+                "AgentDiscovery: %d 个智能体软件可用 — %s",
+                len(_avail), _discovery.report()[:400])
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).debug(
+            "agent discovery attach skipped: %s", e)
     if agent is not None:
         attach = getattr(agent, "attach_decision_bridge", None)
         if attach is not None:

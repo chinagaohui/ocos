@@ -143,10 +143,15 @@ class SandboxOps:
     用法:
         sandbox = SandboxOps(strict=True)
         result = sandbox.execute(SandboxCommand(command="ls /tmp"))
+
+    AGI 能力补全: extra_allow 提供实例级动态放行前缀集（已发现智能体软件
+    CLI），在固定 ALLOWED_COMMANDS 之外按需扩展；默认空集 = 行为不变。
     """
 
-    def __init__(self, strict: bool = True):
+    def __init__(self, strict: bool = True,
+                 extra_allow: Optional[frozenset] = None):
         self._strict = strict
+        self._extra_allow: frozenset = extra_allow or frozenset()
         self._audit_log: list[SandboxAuditRecord] = []
 
     @property
@@ -179,7 +184,7 @@ class SandboxOps:
                 )
 
         # ── 白名单检查 ──────────────────────────────────────────
-        if not self._is_allowed(cmd.command):
+        if not self._is_allowed(cmd.command, self._extra_allow):
             self._audit_log.append(SandboxAuditRecord(
                 command=cmd.command,
                 allowed=False,
@@ -261,9 +266,17 @@ class SandboxOps:
             )
 
     @staticmethod
-    def _is_allowed(command: str) -> bool:
-        """检查命令是否在白名单中（前缀匹配）。"""
+    def _is_allowed(command: str,
+                    extra_allow: Optional[frozenset] = None) -> bool:
+        """检查命令是否在白名单中（前缀匹配）。
+
+        AGI 能力补全: extra_allow 为实例级动态放行前缀（已发现智能体 CLI），
+        默认 None → 行为与固定 ALLOWED_COMMANDS 完全一致。
+        """
         for allowed in ALLOWED_COMMANDS:
+            if command.strip().startswith(allowed):
+                return True
+        for allowed in (extra_allow or frozenset()):
             if command.strip().startswith(allowed):
                 return True
         return False

@@ -128,6 +128,7 @@ class DecisionBridge:
         permission_gateway: Optional[Any] = None,  # S3.2: 入口网关前检（None→惰性默认）
         learning_source: Optional[Any] = None,  # P1.2: 学习产物检索源（None→无注入）
         world_source: Optional[Any] = None,  # P2.1: 世界状态检索源（None→无注入）
+        agent_source: Optional[Any] = None,  # AGI: 智能体软件检索源（None→无注入）
     ) -> None:
         self._dispatcher = dispatcher or ActionDispatcher()
         self._guard = guard or PermissionGuard()
@@ -144,6 +145,10 @@ class DecisionBridge:
         # P2.1 (AGI 计划): 世界状态检索源 — fn(description) -> world context dict
         # （None=无注入；默认零传感器空世界也返回 available=False 不注入）
         self._world_source: Any = world_source
+        # AGI 能力补全: 智能体软件检索源 — fn(description) -> 可用智能体清单
+        # （None=无注入）；动态放行 CLI 前缀集（沙盒 extra_allow）
+        self._agent_source: Any = agent_source
+        self._agent_clis: frozenset = frozenset()
         # P2-2: LLM 日预算 — 超限后任务转待批（诚实降级，不烧 token）
         self._llm_calls_today: int = 0
         self._llm_calls_date: str = ""
@@ -228,6 +233,27 @@ class DecisionBridge:
         （默认零传感器）返回 available=False → 不注入，优雅降级。
         """
         self._world_source = source
+        return self
+
+    def attach_agent_source(self, source: Any) -> "DecisionBridge":
+        """AGI 能力补全: 注入智能体软件检索源。
+
+        source 为可调用对象: fn(description) -> list[dict]，每项含
+        {name, available, kind, cli_path, version, api_endpoint}（见
+        AgentDiscovery 发现结果）。规划 LLM 据此知道本机有哪些智能体软件
+        可用及如何调用（自动分析 → 接入 → 调用 的规划侧闭环）。
+        """
+        self._agent_source = source
+        return self
+
+    def attach_agent_clis(self, clis: set) -> "DecisionBridge":
+        """AGI 能力补全: 注入动态放行 CLI 前缀集（沙盒 extra_allow）。
+
+        仅放行 AgentDiscovery 确认存在的智能体软件可执行名/绝对路径；
+        放行后 LLM 规划的 `<agent> <args>` 命令可经沙盒真实执行。
+        """
+        cleaned = {str(c).strip() for c in (clis or set()) if str(c).strip()}
+        self._agent_clis = frozenset(cleaned)
         return self
 
     # ── 决策执行入口 ──────────────────────────────────────────────────────
@@ -583,7 +609,8 @@ class DecisionBridge:
         try:
             from ocos.operations.sandbox_ops import SandboxOps
             for seg in segments:
-                if not SandboxOps._is_allowed(seg):
+                # AGI 能力补全: extra_allow 放行已发现智能体 CLI（沙盒动态白名单）
+                if not SandboxOps._is_allowed(seg, self._agent_clis):
                     return {"ok": False, "blocked": True,
                             "block_reason": f"白名单外命令段: {seg[:60]}"}
                 # 敏感路径拦截: 命令参数指向系统敏感目录即拒绝
@@ -603,7 +630,9 @@ class DecisionBridge:
             _os.makedirs(workdir, exist_ok=True)  # 沙盒工作目录（SandboxOps 不自建）
 
             def _exec(cmd: str):
-                r = SandboxOps(strict=True).execute(
+                # AGI 能力补全: 动态放行已发现智能体 CLI（默认空集 = 行为不变）
+                r = SandboxOps(strict=True,
+                               extra_allow=self._agent_clis).execute(
                     SandboxCommand(command=cmd, workdir=workdir, timeout=30.0))
                 return (r.success, r.blocked, r.block_reason, r.exit_code,
                         r.stdout or "", r.stderr or "")
@@ -910,6 +939,10 @@ class DecisionBridge:
                 world = self._prior_world(description)
                 if world:
                     prompt = f"{world}\n\n{prompt}"
+                # AGI 能力补全: 注入可用智能体软件清单（自动分析 → 规划可见）
+                agents = self._prior_agents(description)
+                if agents:
+                    prompt = f"{agents}\n\n{prompt}"
                 # P2.2 (AGI 计划): 世界前置校验注记（目标对象不在世界模型 → 诚实说明）
                 hint = self._world_hint(description)
                 if hint:
@@ -1139,6 +1172,42 @@ class DecisionBridge:
         try:
             from ocos.monitoring.manager import record_global
             record_global("world_state_injected", float(len(entities[:limit])))
+        except Exception:
+            pass
+        return "\n".join(lines)
+
+    def _prior_agents(self, description: str, limit: int = 8) -> str:
+        """AGI 能力补全: 注入可用智能体软件清单到规划 prompt。
+
+        使规划 LLM 知道本机有哪些智能体软件（openclaw/codex/claude/...）、
+        调用方式（CLI 路径 / HTTP 端点）与版本 — 任务涉及"调用 XX"时可规划
+        出真实可执行的命令，而非漂移成通用系统分析或诚实失败。
+        """
+        if self._agent_source is None:
+            return ""
+        try:
+            agents = self._agent_source(description) or []
+        except Exception as e:
+            logger.debug("agent source retrieval failed: %s", e)
+            return ""
+        if not agents:
+            return ""
+        lines = ["【可用智能体软件】"]
+        for a in agents[:limit]:
+            name = str(a.get("name", "?"))
+            if not a.get("available"):
+                lines.append(f"- {name}: 未发现（不可调用）")
+                continue
+            kind = a.get("kind", "cli")
+            if kind == "cli":
+                ver = f" ({str(a.get('version', ''))[:40]})" \
+                    if a.get("version") else ""
+                lines.append(f"- {name}: CLI {a.get('cli_path', '')}{ver}")
+            elif kind == "http":
+                lines.append(f"- {name}: HTTP {a.get('api_endpoint', '')}")
+        try:
+            from ocos.monitoring.manager import record_global
+            record_global("agent_injected", float(len(agents[:limit])))
         except Exception:
             pass
         return "\n".join(lines)
