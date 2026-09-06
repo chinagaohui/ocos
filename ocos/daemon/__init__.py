@@ -169,6 +169,29 @@ class ResidentRuntime:
                 )
             except Exception as e:
                 logger.warning("ChatResponder unavailable: %s", e)
+        # P5.2 (AGI 计划): Phase 53 主动交互唤醒 — 沉睡器官生产接线。
+        # NeedMonitor→AttentionTrigger→Validator→Scheduler 全链由
+        # ActiveInteractionEngine 承担；产出经 outbox 进入对话流。
+        # 权限双检复用 agent 的 PermissionGuard + 行为宪法（fail-closed）。
+        self._active_interaction: Any = None
+        try:
+            from ocos.daemon.active_interaction import ActiveInteractionEngine
+
+            def _post_proposal(message: str) -> None:
+                if self._user_inbox is not None:
+                    self._user_inbox.post_outbound(message)
+                    logger.info("Active interaction proposal posted to outbox")
+                else:
+                    logger.info("[active-interaction] %s", message)
+
+            self._active_interaction = ActiveInteractionEngine(
+                goal_store=self._domain_goal_store,
+                output_callback=_post_proposal,
+                permission_guard=getattr(agent, "_permission_guard", None),
+                constitution=getattr(agent, "_constitution", None),
+            )
+        except Exception as e:
+            logger.warning("ActiveInteraction unavailable (Phase 53 passive): %s", e)
         self._tick_interval = tick_interval
         self._max_idle_cycles = max_idle_cycles
         self._state: DaemonState = DaemonState.STOPPED
@@ -408,6 +431,14 @@ class ResidentRuntime:
                     if self._hb_ticks % 60 == 0:
                         if agent_obj is not None and hasattr(agent_obj, "maybe_proactive_output"):
                             agent_obj.maybe_proactive_output()
+                    # P5.2 (AGI 计划): Phase 53 主动交互唤醒 — 空闲期基于
+                    # 目标状态（停滞/依赖数据过期）产出交互提议，走 outbox。
+                    if (self._active_interaction is not None
+                            and self._hb_ticks % 60 == 0):
+                        try:
+                            self._active_interaction.scan_and_interact()
+                        except Exception:
+                            logger.exception("Active interaction scan failed")
                 except Exception:
                     pass
 

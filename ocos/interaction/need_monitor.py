@@ -116,13 +116,21 @@ class NeedMonitor:
 
 
 def _rule_goal_stale(monitor: NeedMonitor, ctx: dict) -> NeedSignal | None:
-    """目标停滞检测。"""
-    stale = monitor.get_stale_goals(threshold_days=30)
+    """目标停滞检测。
+
+    P5.2 (AGI 计划): 停滞窗口可由 ctx["goal_stale_threshold_days"] 调制
+    （默认 30 天；验收场景可调低到 3 天以匹配"依赖数据过期"判定）。
+    """
+    threshold_days = int(ctx.get("goal_stale_threshold_days", 30))
+    stale = monitor.get_stale_goals(threshold_days=threshold_days)
     if not stale:
         return None
 
     worst = max(stale, key=lambda g: g.days_since_progress)
-    urgency = min(1.0, worst.days_since_progress / 90.0)
+    # P5.2 (AGI 计划): urgency 按阈值缩放 — 默认 30 天 → 30×3=90 与旧语义
+    # 一致（30 天停滞 ≈ 0.33）；阈值调低（如 3 天）时短停滞也能通过
+    # AttentionTrigger 的优先级门槛（低阈值场景不被默认急迫度淹没）。
+    urgency = min(1.0, worst.days_since_progress / (max(1, threshold_days) * 3.0))
 
     return NeedSignal(
         need_type=NeedType.GOAL_STALE,
