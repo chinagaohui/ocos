@@ -317,25 +317,30 @@ class DecisionBridge:
         # Phase 49-D (L8): 元认知置信度门 — 低置信写类任务升级 ASK
         # (治理增强: 历史成功率低的写类动作不自动执行, 不烧 LLM token;
         #  审批关闭时跳过 — ASK 通道停用)
+        # P3.1 (AGI 计划): 经验豁免 — 低置信但命中高置信同类经验 → 不升级，
+        # 经验支持直接执行（置信度驱动策略：无经验才保守）。
         if (self._confidence_source is not None and not approval_disabled()
                 and task_type in _DAG_ASK_TYPES):
             try:
-                verdict = self._confidence_source(description, task_type)
-                if getattr(verdict, "should_escalate", False):
-                    self._enqueue_pending(
-                        action_type=f"dag_{task_type}",
-                        target="dag_task",
-                        payload={"task_id": getattr(task, "task_id", ""),
-                                 "description": description,
-                                 "metacognition": getattr(
-                                     verdict, "reason", "")},
-                        text=f"{description} (低置信升级待批)",
-                    )
-                    return {
-                        "status": "pending_approval",
-                        "reason": (f"metacognition: low confidence "
-                                   f"({getattr(verdict, 'reason', '')})"),
-                    }
+                if self._experience_supports(description):
+                    pass  # 经验豁免：同类高置信经验存在，不升级 ASK
+                else:
+                    verdict = self._confidence_source(description, task_type)
+                    if getattr(verdict, "should_escalate", False):
+                        self._enqueue_pending(
+                            action_type=f"dag_{task_type}",
+                            target="dag_task",
+                            payload={"task_id": getattr(task, "task_id", ""),
+                                     "description": description,
+                                     "metacognition": getattr(
+                                         verdict, "reason", "")},
+                            text=f"{description} (低置信升级待批)",
+                        )
+                        return {
+                            "status": "pending_approval",
+                            "reason": (f"metacognition: low confidence "
+                                       f"({getattr(verdict, 'reason', '')})"),
+                        }
             except Exception as _mc_e:
                 logger.debug("metacognition gate failed (non-blocking): %s",
                              _mc_e)
@@ -1048,6 +1053,25 @@ class DecisionBridge:
             self._textgen = get_text_generator()
         return self._textgen
 
+    def _experience_supports(self, description: str,
+                             min_confidence: float = 0.7) -> bool:
+        """P3.1 (AGI 计划): 经验豁免判定 — 同类高置信经验存在 → True。
+
+        置信度驱动策略：低置信写类任务若检索到高置信（>=0.7）同类经验，
+        说明该路径已被验证过，允许直接执行（不升级 ASK）；否则保守升级。
+        """
+        if getattr(self, "_learning_source", None) is None:
+            return False
+        try:
+            artifacts = self._learning_source(description) or []
+        except Exception as e:
+            logger.debug("experience support check failed: %s", e)
+            return False
+        return any(
+            float(a.get("confidence", 0.0)) >= min_confidence
+            for a in artifacts
+        )
+
     def _prior_knowledge(self, description: str, limit: int = 3) -> str:
         """P1.2 (AGI 计划): 学习产物（方法论级）注入决策 prompt。
 
@@ -1057,7 +1081,7 @@ class DecisionBridge:
 
         未注入 learning_source 时返回 ""（基线路径，行为不变）。
         """
-        if self._learning_source is None:
+        if getattr(self, "_learning_source", None) is None:
             return ""
         try:
             artifacts = self._learning_source(description) or []

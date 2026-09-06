@@ -1744,6 +1744,25 @@ class AgentRuntime:
         except Exception:
             pass
 
+        # P3.2 (AGI 计划): 反思回流 — 最近反思的建设性结论并入注入面
+        # （仅取 insights 文本，作为 type="reflection" artifact；无反思或
+        #  反思为空则跳过，不伪造）
+        try:
+            agent = getattr(self, "agent", None)
+            last_ref = getattr(agent, "_last_reflection", None)
+            insights = getattr(last_ref, "insights", None) or ()
+            if insights:
+                for i, insight in enumerate(insights[:2]):
+                    artifacts.append({
+                        "artifact_id": f"reflection:{i}",
+                        "type": "reflection",
+                        "text": str(insight)[:120],
+                        "confidence": 0.7,  # 反思默认视为可用参考（成功侧）
+                        "score": 1,
+                    })
+        except Exception:
+            pass
+
         artifacts.sort(key=lambda a: (a["score"], a["confidence"]),
                        reverse=True)
         return artifacts[:limit]

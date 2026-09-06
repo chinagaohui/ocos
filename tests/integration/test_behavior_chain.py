@@ -431,3 +431,67 @@ def test_world_hint_silent_on_match_and_empty_world():
     assert b._world_hint("查看 app.log 大小") == ""
     b2 = DecisionBridge()
     assert b2._world_hint("分析 report.xlsx") == ""
+
+
+# ── P3.1: 置信度驱动策略（经验豁免）────────────────────────────────────
+
+
+def test_experience_supports_high_confidence_hit():
+    """同类高置信经验存在 → 经验豁免 True（低置信不升级 ASK）。"""
+    from ocos.execution.bridge import DecisionBridge
+    b = DecisionBridge()
+    b.attach_learning_source(lambda desc: [
+        {"artifact_id": "b-1", "type": "belief",
+         "text": "当写文件时路径校验有效", "confidence": 0.85},
+    ])
+    assert b._experience_supports("写入文件 /tmp/x") is True
+
+
+def test_experience_supports_false_without_hit():
+    """无经验/低置信经验 → 豁免 False（走保守升级）。"""
+    from ocos.execution.bridge import DecisionBridge
+    b = DecisionBridge()
+    assert b._experience_supports("写入文件 /tmp/x") is False
+    b.attach_learning_source(lambda desc: [
+        {"artifact_id": "b-2", "type": "belief",
+         "text": "当磁盘高时 df -h 有效", "confidence": 0.5},
+    ])
+    assert b._experience_supports("写入文件 /tmp/x") is False
+
+
+# ── P3.2: 反思回流（reflection 并入学习产物）────────────────────────────
+
+
+def test_learning_artifacts_merge_recent_reflection():
+    """最近反思 insights 并入检索产物（type=reflection）。"""
+    from types import SimpleNamespace
+    from ocos.agent.agent_runtime import AgentRuntime
+    from ocos.agent.belief_system import BeliefSystem
+    from ocos.agent.knowledge_base import KnowledgeBase
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt._recent_results = []
+    rt.beliefs = BeliefSystem()
+    rt.knowledge = KnowledgeBase()
+    rt.beliefs.add("当磁盘使用率高时, df -h 有效", confidence=0.8)
+    rt.agent = SimpleNamespace(_last_reflection=SimpleNamespace(
+        insights=("磁盘类任务应先用 df 确认分区再下结论",)))
+
+    artifacts = rt.learning_artifacts("检查磁盘使用率")
+    assert any(a["type"] == "reflection" for a in artifacts), artifacts
+    assert any("df" in a["text"] for a in artifacts if a["type"] == "belief")
+
+
+def test_learning_artifacts_no_reflection_without_agent():
+    """无 agent/_last_reflection → 不出现 reflection 产物（不伪造）。"""
+    from ocos.agent.agent_runtime import AgentRuntime
+    from ocos.agent.belief_system import BeliefSystem
+    from ocos.agent.knowledge_base import KnowledgeBase
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt._recent_results = []
+    rt.beliefs = BeliefSystem()
+    rt.knowledge = KnowledgeBase()
+    rt.beliefs.add("当磁盘使用率高时, df -h 有效", confidence=0.8)
+    artifacts = rt.learning_artifacts("检查磁盘使用率")
+    assert not any(a["type"] == "reflection" for a in artifacts)
