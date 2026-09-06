@@ -13,23 +13,26 @@ class TestProactiveOutputCallback:
         """获取代理的 proactive_output_callback（私有属性）。"""
         return getattr(agent, '_proactive_output_callback', None)
 
+    def _build(self, *args, **kwargs):
+        """P4.1: build_master_agent 返回 (agent, skill_registry) 元组。"""
+        from ocos.daemon.factory import build_master_agent
+        agent, _registry = build_master_agent(*args, **kwargs)
+        return agent
+
     def test_callback_injected_in_production(self, tmp_path):
         """build_master_agent 接受 db_path，注入非 None 回调。"""
-        from ocos.daemon.factory import build_master_agent
-
         db = str(tmp_path / "test.db")
-        agent = build_master_agent("ocos-test", db_path=db)
+        agent = self._build("ocos-test", db_path=db)
         assert self._get_callback(agent) is not None
 
     def test_callback_posts_to_inbox(self, tmp_path):
         """回调调用 → post_outbound 写入 inbox（outbound 状态）。"""
-        from ocos.daemon.factory import build_master_agent
         from ocos.interaction.inbox import UserInbox
 
         db = str(tmp_path / "test.db")
         # 先初始化 UserInbox 创建表
         inbox = UserInbox(db_path=db)
-        agent = build_master_agent("ocos-test", db_path=db)
+        agent = self._build("ocos-test", db_path=db)
         callback = self._get_callback(agent)
         assert callback is not None
 
@@ -41,16 +44,12 @@ class TestProactiveOutputCallback:
 
     def test_callback_none_without_db(self, tmp_path):
         """db_path=None 时，proactive_output_callback 为 None。"""
-        from ocos.daemon.factory import build_master_agent
-
-        agent = build_master_agent("ocos-test", db_path=None)
+        agent = self._build("ocos-test", db_path=None)
         assert self._get_callback(agent) is None
 
     def test_memory_db_callback_none(self, tmp_path):
         """db_path=':memory:' 时，proactive_output_callback 为 None。"""
-        from ocos.daemon.factory import build_master_agent
-
-        agent = build_master_agent("ocos-test", db_path=":memory:")
+        agent = self._build("ocos-test", db_path=":memory:")
         assert self._get_callback(agent) is None
 
     def test_say_channel_tests_still_pass(self, tmp_path):
