@@ -987,10 +987,10 @@ class DecisionBridge:
                 prior = self._prior_task_results(description)
                 if prior:
                     prompt = f"{prior}\n\n{prompt}"
-                # P1.2 (AGI 计划): 注入方法论级学习产物（信念/知识，带归因 id）
-                knowledge = self._prior_knowledge(description)
-                if knowledge:
-                    prompt = f"{knowledge}\n\n{prompt}"
+                # 记忆直接参与决策 — 统一记忆决策上下文（量化 + 归因 + 类型分布）
+                memory_ctx = self._memory_decision_context(description)
+                if memory_ctx:
+                    prompt = f"{memory_ctx}\n\n{prompt}"
                 # P2.1 (AGI 计划): 注入世界状态（感知→世界模型→决策）
                 world = self._prior_world(description)
                 if world:
@@ -1187,39 +1187,61 @@ class DecisionBridge:
             for a in artifacts
         )
 
-    def _prior_knowledge(self, description: str, limit: int = 3) -> str:
-        """P1.2 (AGI 计划): 学习产物（方法论级）注入决策 prompt。
+    def _memory_decision_context(self, description: str,
+                                 limit: int = 5) -> str:
+        """记忆直接参与决策 — 统一记忆决策上下文（用户方向）。
 
-        与 _prior_task_results（结果级）互补：本方法注入沉淀的信念/知识
-        （如"当磁盘使用率高时 df -h 有效"），使规划 LLM 在动作选择上
-        复用历史经验而非仅看到摘要结果。带 artifact_id 供 ER-2 归因。
+        把历史经验/信念/技能/反思聚合为一个**结构化量化决策块**注入规划
+        prompt：不只给文本让 LLM 参考，还带**命中条数/类型分布/高置信计数**
+        等可量化摘要，使记忆成为决策的一等依据（ocos 作为"生命体"干活时
+        优先问记忆），而非仅为抽象 Skill 而存在。带 artifact_id 可审计。
 
-        未注入 learning_source 时返回 ""（基线路径，行为不变）。
+        无记忆/未注入 learning_source → ""（基线路径，行为不变）。
         """
         if getattr(self, "_learning_source", None) is None:
             return ""
         try:
             artifacts = self._learning_source(description) or []
         except Exception as e:
-            logger.debug("prior knowledge retrieval failed: %s", e)
+            logger.debug("memory decision context failed: %s", e)
             return ""
+        artifacts = [a for a in artifacts if a and a.get("text")]
         if not artifacts:
             return ""
-        lines = ["【历史经验（方法论）】"]
-        for a in artifacts[:limit]:
+        # 量化摘要: 命中数 / 类型分布 / 高置信计数 / 平均置信度
+        n = len(artifacts)
+        by_type: dict[str, int] = {}
+        high_conf = 0
+        conf_sum = 0.0
+        for a in artifacts:
+            t = a.get("type", "?")
+            by_type[t] = by_type.get(t, 0) + 1
+            c = float(a.get("confidence", 0.0))
+            conf_sum += c
+            if c >= 0.7:
+                high_conf += 1
+        # 依 score（技能>信念>知识>反思）排序，取 top-k
+        ordered = sorted(artifacts,
+                         key=lambda a: (a.get("score", 0), a.get("confidence", 0)),
+                         reverse=True)[:limit]
+        type_desc = ", ".join(f"{k}={v}" for k, v in
+                              sorted(by_type.items(), key=lambda x: -x[1]))
+        head = (f"【记忆决策上下文】命中{n}条相关记忆 "
+                f"(类型: {type_desc}; 高置信≥0.7: {high_conf}; "
+                f"平均置信 {conf_sum / max(n, 1):.2f})")
+        lines = [head]
+        for a in ordered:
             aid = str(a.get("artifact_id", ""))[:40]
-            text = str(a.get("text", ""))[:120]
-            conf = float(a.get("confidence", 0.0))
+            text = str(a.get("text", ""))[:110]
+            c = float(a.get("confidence", 0.0))
             lines.append(
-                f"- [{a.get('type', 'belief')}] {text} "
-                f"(conf={conf:.2f}, artifact={aid})")
-            # P0.3/P1.2: 注入可观测 — 每次真实注入打点（未装配时静默）
-            try:
-                from ocos.monitoring.manager import record_global
-                record_global("knowledge_injected", 1.0,
-                              labels={"artifact_id": aid})
-            except Exception:
-                pass
+                f"- [{a.get('type', '?')}] {text} "
+                f"(conf={c:.2f}, artifact={aid})")
+        try:
+            from ocos.monitoring.manager import record_global
+            record_global("memory_decision_injected", float(n))
+        except Exception:
+            pass
         return "\n".join(lines)
 
     def _prior_world(self, description: str, limit: int = 5) -> str:
