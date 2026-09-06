@@ -219,8 +219,16 @@ class SandboxOps:
             # 触发 glibc __stack_chk_fail → SIGABRT("stack smashing detected"),
             # 偶发导致命令执行崩溃。最小环境既消除该栈压力, 也顺带避免向沙箱
             # 子进程泄漏宿主内部变量(沙箱更严格)。调用方 cmd.env 可追加/覆盖。
+            # AGI 能力补全: PATH 追加用户级 bin（~/.local/bin）— 智能体软件
+            # CLI（codex/opentale 等）常装于用户目录而非 /usr/bin；不加则
+            # 已放行的智能体命令解析失败（codex: not found, exit 127）。
+            _user_bins = [
+                _os.path.join(_os.path.expanduser("~"), ".local", "bin"),
+                _os.path.join(_os.path.expanduser("~"), "bin"),
+            ]
             base_env = {
-                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:"
+                        + ":".join(_user_bins),
                 "LANG": "C.UTF-8",
                 "HOME": _os.path.expanduser("~"),
             }
