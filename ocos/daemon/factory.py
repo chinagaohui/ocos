@@ -366,23 +366,53 @@ def build_execution_bridge(agent: Any = None, agent_id: str = "decision_bridge",
             except Exception:
                 _cfg = {}
         _discovery = AgentDiscovery(config=_cfg)
+
+        # 可刷新智能体源: 闭包持有可变清单；安装某智能体成功后重跑发现，
+        # 使 "下载安装 → 重发现 → 可调用" 闭环在同一运行时内成立。
         _agents = _discovery.discover()
-        _avail = [a for a in _agents if a.available]
-        if _avail:
-            bridge.attach_agent_source(
-                lambda _desc, _as=_agents: [
-                    {"name": a.name, "available": a.available,
+
+        def _refresh() -> None:
+            nonlocal _agents
+            _agents = _discovery.discover()
+            _av = [a for a in _agents if a.available]
+            bridge.attach_agent_clis(
+                {a.cli_path for a in _av if a.kind == "cli" and a.cli_path}
+                | {a.name for a in _av if a.kind == "cli"})
+
+        def _agent_list(_desc, _as=_agents):  # noqa: ANN001
+            return [{"name": a.name, "available": a.available,
                      "kind": a.kind, "cli_path": a.cli_path,
                      "version": a.version,
-                     "api_endpoint": a.api_endpoint} for a in _as])
-            bridge.attach_agent_clis(
-                {a.cli_path for a in _avail
-                 if a.kind == "cli" and a.cli_path}
-                | {a.name for a in _avail if a.kind == "cli"})
+                     "api_endpoint": a.api_endpoint,
+                     "installable": getattr(a, "installable", False),
+                     "install_command": getattr(a, "install_command", "")}
+                    for a in _as]
+
+        bridge.attach_agent_source(_agent_list)
+        _refresh()
+        # AGI 自我增强: 注入安装执行器 — 白名单 AgentInstaller + 重发现。
+        # 真实下载/安装只在人工审批(execute_approved)通过后由 bridge 调用。
+        try:
+            from ocos.capability.agent_installer import AgentInstaller
+            _installer = AgentInstaller()
+
+            def _install_fn(name: str) -> dict:
+                res = _installer.install(name, approved=True)
+                if res.get("ok") or res.get("executed"):
+                    _refresh()
+                    res["rediscovered"] = True
+                return res
+
+            bridge.attach_installer(_install_fn)
+        except Exception as _ie:  # noqa: BLE001
             import logging
-            logging.getLogger(__name__).info(
-                "AgentDiscovery: %d 个智能体软件可用 — %s",
-                len(_avail), _discovery.report()[:400])
+            logging.getLogger(__name__).debug(
+                "agent installer attach skipped: %s", _ie)
+        import logging
+        logging.getLogger(__name__).info(
+            "AgentDiscovery: %d 个智能体软件可用 — %s",
+            len([a for a in _agents if a.available]),
+            _discovery.report()[:400])
     except Exception as e:  # noqa: BLE001
         import logging
         logging.getLogger(__name__).debug(

@@ -129,6 +129,7 @@ class DecisionBridge:
         learning_source: Optional[Any] = None,  # P1.2: 学习产物检索源（None→无注入）
         world_source: Optional[Any] = None,  # P2.1: 世界状态检索源（None→无注入）
         agent_source: Optional[Any] = None,  # AGI: 智能体软件检索源（None→无注入）
+        installer: Optional[Any] = None,  # AGI: 智能体安装执行器 fn(name)->result（None→禁安装）
     ) -> None:
         self._dispatcher = dispatcher or ActionDispatcher()
         self._guard = guard or PermissionGuard()
@@ -149,6 +150,9 @@ class DecisionBridge:
         # （None=无注入）；动态放行 CLI 前缀集（沙盒 extra_allow）
         self._agent_source: Any = agent_source
         self._agent_clis: frozenset = frozenset()
+        # AGI 自我增强: 智能体安装执行器 — fn(name) -> {ok, executed, ...}
+        # （None=未接入，安装动作直接拒绝；审批必经 execute_approved 触达）
+        self._installer: Any = installer
         # P2-2: LLM 日预算 — 超限后任务转待批（诚实降级，不烧 token）
         self._llm_calls_today: int = 0
         self._llm_calls_date: str = ""
@@ -200,6 +204,9 @@ class DecisionBridge:
         # PW-4.2: 文件操作执行器（digital_world file_ops, 需审批）
         self._dispatcher.register_custom_handler(
             "file_op", self._handler_file_op)
+        # AGI 自我增强: 智能体下载/安装执行器（需审批, 经 execute_approved 触达）
+        self._dispatcher.register_custom_handler(
+            "agent_install", self._handler_agent_install)
         # UX-F1: DAG 任务 LLM 执行器 — 任务描述→具体动作→真实执行
         for dag_action in ("dag_create", "dag_modify", "dag_execute", "dag_verify"):
             self._dispatcher.register_custom_handler(
@@ -254,6 +261,16 @@ class DecisionBridge:
         """
         cleaned = {str(c).strip() for c in (clis or set()) if str(c).strip()}
         self._agent_clis = frozenset(cleaned)
+        return self
+
+    def attach_installer(self, fn: Any) -> "DecisionBridge":
+        """AGI 自我增强: 注入智能体安装执行器。
+
+        fn(name) -> {ok, executed, output, error, ...}（真实下载/安装 + 重发现；
+        由 daemon 装配层构造并持 white-list AgentInstaller）。未注入 → 安装
+        动作直接拒绝（fail-closed，绝不执行任意安装）。
+        """
+        self._installer = fn
         return self
 
     # ── 决策执行入口 ──────────────────────────────────────────────────────
@@ -848,6 +865,44 @@ class DecisionBridge:
             return {"ok": False, "error": "no db_path — 无法执行数据级修复"}
         return execute_system_repair(payload, self._db_path)
 
+    def _handler_agent_install(self, action) -> dict:
+        """AGI 自我增强: 智能体下载/安装执行器（仅经审批触达）。
+
+        由 execute_approved("agent_install", ...) 调用；payload 需带 agent 名
+        与 approval_id。真实安装由注入的 installer fn 承担（白名单 AgentInstaller
+        + 重发现）。未接入 installer → fail-closed 拒绝。
+        """
+        payload = action.payload or {}
+        name = (payload.get("agent") or payload.get("target") or "").strip()
+        return self._handle_install_action(
+            name, payload.get("approval_id"), already_approved=True)
+
+    def _handle_install_action(self, name: str, approval_id: Any,
+                               already_approved: bool = False) -> dict:
+        """AGI 自我增强: 安装动作统一入口 — 无审批 → 入待批；已审批 → 执行。
+
+        安全: 未接入 installer 直接拒绝（fail-closed）；agent 名来自规划 LLM
+        输出，仅作为白名单查表键传给 AgentInstaller（installer 内部再校验）。
+        """
+        if not name:
+            return {"ok": False, "error": "empty agent name for install"}
+        if self._installer is None:
+            return {"ok": False, "error": "没有可用安装执行器 — 安装被拒"}
+        if not approval_id and not already_approved:
+            self._enqueue_pending(
+                action_type="agent_install",
+                target=name,
+                payload={"agent": name},
+                text=f"AGENT_INSTALL {name} (智能体下载/安装 — 强制审批)")
+            return {"ok": False, "pending": True,
+                    "error": f"agent {name} 安装需人工审批 — 已入待批队列"}
+        try:
+            res = self._installer(name)
+            return res if isinstance(res, dict) else {"ok": bool(res)}
+        except Exception as e:
+            return {"ok": False, "executed": False,
+                    "error": f"install failed: {e}"}
+
     def _handler_file_op(self, action) -> dict:
         """PW-4.2: 文件操作 — digital_world/file_ops 宽语义后端。
 
@@ -921,6 +976,7 @@ class DecisionBridge:
                     "把上述任务转换为可直接执行的动作。每行一个动作、最多 4 行，格式严格为：\n"
                     "RUN|<命令>（优先使用只读命令: uname/df/free/uptime/ls/cat/head/"
                     "tail/grep/find/ps/whoami/date/env/hostname/id）\n"
+                    "AGENT_INSTALL|<智能体名>（任务要求下载/安装某智能体时用）\n"
                     "FILE_WRITE|<绝对路径>|<文件内容>\n"
                     "NONE|<一句话说明为什么无法执行>\n"
                     "单一操作只输出一行；复合任务（如同时查看系统版本/磁盘/内存）"
@@ -985,6 +1041,8 @@ class DecisionBridge:
                     f"任务明确要求调用智能体「{_forced}」，你的输出未调用它。"
                     f"请只输出 RUN|{_forced} <参数>（只读示例: "
                     f"RUN|{_forced} --version），不要输出其他系统命令。"))
+                logger.info("AGENT-GUARD: forced=%s corrected_to=%s",
+                            _forced, _raw2[:100])
                 if _raw2.startswith("RUN|"):
                     raw = _raw2
         except Exception:
@@ -1049,6 +1107,9 @@ class DecisionBridge:
                 return _rr2
             if not raw2.startswith("NONE|"):
                 raw = raw2
+        if raw.startswith("AGENT_INSTALL|"):
+            name = raw.split("|", 1)[1].strip()
+            return self._handle_install_action(name, payload.get("approval_id"))
         if raw.startswith("FILE_WRITE|"):
             parts = raw.split("|", 2)
             if len(parts) == 3:

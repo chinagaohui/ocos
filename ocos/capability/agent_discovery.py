@@ -34,6 +34,20 @@ class DiscoveredAgent:
     api_endpoint: str = ""     # HTTP API 端点（kind=http）
     probe_note: str = ""       # 探查说明（找到位置/不可用原因）
     capability_id: str = ""    # 注册为能力时的 ID（cap:<name>）
+    installable: bool = False  # AGI 自我增强: 未安装但已知安装方式
+    install_command: str = ""  # AGI 自我增强: 预设安装命令（AgentInstaller 白名单）
+
+
+# 已知智能体安装方式映射（AGI 自我增强: 缺失 → 可安装）。
+# 与 AgentInstaller.KNOWN_AGENT_INSTALLS 同源；此处为 discover 标注 installable
+# 的元数据来源（install 命令来自白名单表，防任意命令注入）。
+def known_install_command(name: str) -> str:
+    """按智能体名查预设安装命令；未知返回空串（不可自动安装）。"""
+    try:
+        from ocos.capability.agent_installer import KNOWN_AGENT_INSTALLS
+        return KNOWN_AGENT_INSTALLS.get(name, {}).get("command", "")
+    except Exception:
+        return ""
 
 
 def default_agents_spec() -> list[dict[str, Any]]:
@@ -115,6 +129,8 @@ class AgentDiscovery:
                 lines.append(f"  ✓ {a.name} (HTTP) {a.api_endpoint}")
             else:
                 note = a.probe_note or "not available"
+                if a.installable:
+                    note += f" — 可安装（{a.install_command[:40]}...）"
                 lines.append(f"  ✗ {a.name} — {note}")
         return "\n".join(lines)
 
@@ -150,10 +166,20 @@ class AgentDiscovery:
         api = cfg.get("api")
         if api:
             return self._http_entry(name, api)
+        # AGI 自我增强: 未安装 → 标注是否可自动安装。安装命令来源:
+        # 1) spec["install"]["command"]（扩展清单自带）；2) 缺省查预设白名单表
+        cmd = ""
+        _inst = spec.get("install")
+        if isinstance(_inst, dict) and _inst.get("command"):
+            cmd = str(_inst["command"])
+        if not cmd:
+            cmd = known_install_command(name)
         return DiscoveredAgent(
             name=name, available=False, kind="cli",
-            probe_note="command not found in PATH",
-            capability_id=f"cap:{name}")
+            probe_note=("command not found in PATH"
+                        + ("（可安装）" if cmd else "")),
+            capability_id=f"cap:{name}",
+            installable=bool(cmd), install_command=cmd)
 
     def _read_version(self, path: str, flags: list[str]) -> str:
         """执行 <cli> <flag> 读取版本标识（只读、短超时、截断）。"""
