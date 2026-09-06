@@ -1147,6 +1147,7 @@ class AgentRuntime:
 
         # 从失败文本分类原因 (复用 Phase 49-A 确定性诊断)
         cause = "unknown"
+        diag = None
         try:
             # 构造最小 episode 形状供诊断器使用
             fake_ep = type("FailedTask", (), {
@@ -1202,6 +1203,10 @@ class AgentRuntime:
             counts = getattr(self, "_task_retry_count", None)
             if counts is not None:
                 counts.pop(task_id, None)
+            # P5.1 (AGI 计划): 不可修正/重试耗尽失败 → 教训回学习管道（feed G1）
+            # （模糊任务/工具受限/重试耗尽 → honest failed + 教训入库）
+            meta["lesson"] = self._record_failure_lesson(
+                task_id, task, diag, decision, reason)
         return meta
 
     def _revise_task_description(self, base: str, reason: str,
@@ -1224,6 +1229,99 @@ class AgentRuntime:
               "（优先使用只读白名单命令），不要重复会失败的做法。"
         )
         return f"{_base}\n{note}" if _base else note.strip()
+
+    def _record_failure_lesson(self, task_id: str, task: Any,
+                               diagnosis: Any, decision: Any,
+                               reason: str) -> dict[str, Any]:
+        """P5.1 (AGI 计划): 失败教训回学习管道 — 不可修正失败 → LESSON 入库。
+
+        对齐 G5（失败归因重规划）: 归因已由 FailureDiagnoser 完成（确定性
+        规则，无 LLM；覆盖目标模糊/工具受限/执行错误/超时/权限拒绝），
+        此处把结构化教训持久化为 source="lesson" Episode（复用 EpisodeStore，
+        零新表）。下一周期 _fast_path_learning 重放 → RuleBasedLearner 聚合
+        failure_causes 分布（feed G1 统计侧，为未来决策提供成功率依据）。
+
+        治理: 教训只进统计学习管道，不注入决策 prompt（延续 FIX-4 教训——
+        失败史注入造成负反馈循环）。未装配 memory hub / 写入失败 → 静默跳过，
+        不影响主流程。
+        """
+        # diagnosis.cause 为 FailureCause 枚举 → 归一为字符串值（与
+        # _replan_failed_task 的 cause 语义一致，供指标/标签/检索使用）
+        _cause = getattr(diagnosis, "cause", "unknown")
+        _cause = _cause.value if hasattr(_cause, "value") else str(_cause)
+        lesson: dict[str, Any] = {
+            "task_id": task_id,
+            "cause": _cause,
+            "recorded": False,
+        }
+        hub = getattr(self, "_memory_hub", None)
+        if hub is None or not hub.is_initialized():
+            return lesson
+        try:
+            import uuid as _uuid
+            from datetime import datetime, timezone
+            from ocos.learning.experience_learning import (
+                FailureCause, FailureDiagnosis, build_lesson_artifact,
+            )
+            from ocos.memory.episode.models import Episode, EpisodeStatus
+
+            if diagnosis is None:
+                # 归因失败 → 以 UNKNOWN 教训兜底（仍入库，避免信息黑洞）
+                diagnosis = FailureDiagnosis(
+                    episode_id=f"task:{task_id}",
+                    cause=FailureCause.UNKNOWN,
+                    hypothesis="失败原因无法从现有证据分类",
+                    evidence=(reason or "")[:500],
+                    signals_hit=(),
+                )
+            description = (getattr(task, "description", "") or "")[:300]
+            artifact = build_lesson_artifact(diagnosis, description)
+            episode = Episode(
+                id=f"EPI-LESSON-{_uuid.uuid4().hex[:12]}",
+                experience_id=artifact.id,
+                created_at=datetime.now(timezone.utc),
+                session_id=f"tick_{getattr(self, '_cycle_count', 0)}",
+                context={
+                    "lesson_type": "failure_pattern",
+                    "task_id": task_id,
+                    "artifact_id": artifact.id,
+                    "goal_pattern": description[:100],
+                },
+                goal=description[:200],
+                decision=(f"[{artifact.artifact_type.value}] "
+                          f"{artifact.hypothesis}")[:400],
+                action="failure_lesson",
+                outcome={
+                    "success": False,
+                    "cause": _cause,
+                    "replan": (decision.action.value
+                               if getattr(decision, "action", None) else ""),
+                    "confidence": artifact.confidence,
+                },
+                condition=(f"task:{task_id} failed "
+                           f"cause={_cause}"),
+                significance_score=0.55,
+                evaluation_trace={"source": "p5.1_replan",
+                                  "task_id": task_id},
+                source="lesson",
+                status=EpisodeStatus.ACTIVE,
+                tags=["failure_lesson", _cause],
+            )
+            hub.episode.save(episode)
+            lesson["recorded"] = True
+            lesson["artifact_id"] = artifact.id
+            lesson["episode_id"] = episode.id
+            try:
+                from ocos.monitoring.manager import record_global
+                record_global("failure_lesson", 1.0,
+                              labels={"cause": _cause})
+            except Exception:
+                pass
+            logger.info("Failure lesson recorded: cause=%s task=%s "
+                        "artifact=%s", _cause, task_id, artifact.id)
+        except Exception as e:
+            logger.debug("failure lesson recording skipped: %s", e)
+        return lesson
 
     def _tick_step_core_loop(self) -> dict[str, Any]:
         """Step 7: Core Loop — 优先执行 TaskDAG，无 DAG 时回退认知循环。

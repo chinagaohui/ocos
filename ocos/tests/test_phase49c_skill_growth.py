@@ -300,6 +300,118 @@ class TestAgentRuntimeReplanIntegration:
         assert meta["cause"] == "execution_error"
 
 
+class _FakeEpisodeStore:
+    def __init__(self, saved):
+        self.saved = saved
+
+    def save(self, episode):
+        self.saved.append(episode)
+
+
+class _FakeHub:
+    """P5.1: 最小 MemoryHub 替身（is_initialized + episode.save）。"""
+
+    def __init__(self):
+        self.saved = []
+        self.episode = _FakeEpisodeStore(self.saved)
+
+    def is_initialized(self):
+        return True
+
+
+class TestP51FailureLessonPipeline:
+    """P5.1 (AGI 计划): 失败归因重规划 — 教训回学习管道。"""
+
+    def _make_runtime(self):
+        from ocos.agent.agent_runtime import AgentRuntime
+        from ocos.agent.master_agent import MasterAgent
+        from ocos.agent.capability_manager import CapabilityManager
+        from ocos.agent.execution_manager import ExecutionManager
+        from ocos.agent.goal_stack import GoalStack
+        from ocos.agent.intent import Intent
+        from ocos.agent.state import AgentState
+
+        class FakeIdentity:
+            def verify(self): return True
+            def get_identity_id(self): return "id-1"
+
+        class FakeAttention:
+            def current_focus(self): return None
+
+        class FakeWM:
+            def add(self, item): return None
+
+        agent = MasterAgent(
+            agent_id="test", identity=FakeIdentity(),
+            goal_stack=GoalStack(), intent=Intent(),
+            attention=FakeAttention(), working_memory=FakeWM(),
+            capability_manager=CapabilityManager(),
+            execution_manager=ExecutionManager(),
+            state=AgentState(),
+        )
+        rt = AgentRuntime.__new__(AgentRuntime)
+        rt._task_retry_count = {}
+        rt.agent = agent
+        rt._memory_hub = _FakeHub()
+        return rt
+
+    def test_terminal_failure_records_lesson(self):
+        """不可修正失败（模糊任务）→ failure_lesson 入库且带结构化 cause。"""
+        rt = self._make_runtime()
+        task = type("T", (), {"description": "分析数据",
+                              "task_type": "analyze",
+                              "agent_type": "researcher"})()
+        meta = rt._replan_failed_task("TASK-1", task,
+                                      "任务描述\"分析数据\"过于模糊")
+        assert meta["decision"] != "retry_pending"
+        lesson = meta.get("lesson", {})
+        assert lesson.get("recorded") is True
+        assert lesson.get("cause") == "ambiguous_task"
+        assert lesson.get("artifact_id", "").startswith("ART-")
+        # Episode 已落 hub（source="lesson", 带 failure_lesson 标签）
+        eps = rt._memory_hub.saved
+        assert len(eps) == 1
+        assert eps[0].source == "lesson"
+        assert "failure_lesson" in eps[0].tags
+        assert eps[0].outcome["cause"] == "ambiguous_task"
+
+    def test_retry_exhausted_records_lesson(self):
+        """重试耗尽 → 终态失败 + 教训入库。"""
+        rt = self._make_runtime()
+        task = type("T", (), {"description": "任务X",
+                              "task_type": "execute",
+                              "agent_type": "researcher"})()
+        rt._task_retry_count["TASK-2"] = 2  # 已达上限
+        meta = rt._replan_failed_task("TASK-2", task, "exit=1: boom")
+        assert meta["decision"] != "retry_pending"
+        assert meta["cause"] == "execution_error"
+        assert meta["lesson"]["recorded"] is True
+
+    def test_retryable_failure_skips_lesson(self):
+        """可重试失败（执行错误）→ 仅重试，不写教训（等终态才归档）。"""
+        rt = self._make_runtime()
+        task = type("T", (), {"description": "运行 python 脚本",
+                              "task_type": "execute",
+                              "agent_type": "researcher"})()
+        meta = rt._replan_failed_task("TASK-3", task,
+                                      "exit=2: module not found")
+        assert meta["decision"] == "retry_pending"
+        assert "lesson" not in meta or meta["lesson"].get("recorded") is False
+        assert rt._memory_hub.saved == []  # 无 lesson episode
+
+    def test_uninitialized_hub_skips_gracefully(self):
+        """未装配 memory hub → 静默跳过（裸实例兼容，不抛）。"""
+        rt = self._make_runtime()
+        del rt._memory_hub  # 模拟未装配 hub 的裸实例
+        task = type("T", (), {"description": "分析数据",
+                              "task_type": "analyze",
+                              "agent_type": "researcher"})()
+        meta = rt._replan_failed_task("TASK-4", task,
+                                      "任务描述\"分析数据\"过于模糊")
+        assert meta["decision"] != "retry_pending"
+        assert meta.get("lesson", {}).get("recorded") is False
+
+
 class TestMasterAgentSkillGrowthIntegration:
     """L5/L6 集成: grow_skills_from_episodes。"""
 
