@@ -943,6 +943,11 @@ class DecisionBridge:
                 agents = self._prior_agents(description)
                 if agents:
                     prompt = f"{agents}\n\n{prompt}"
+                # AGI 能力补全: 任务显式引用已发现智能体 → 强制规划为直接调用
+                # （抑制"调用 XX 智能体"漂移成通用系统分析的模板固化倾向）
+                agent_hint = self._agent_hint(description)
+                if agent_hint:
+                    prompt = f"{agent_hint}\n\n{prompt}"
                 # P2.2 (AGI 计划): 世界前置校验注记（目标对象不在世界模型 → 诚实说明）
                 hint = self._world_hint(description)
                 if hint:
@@ -1216,6 +1221,40 @@ class DecisionBridge:
         except Exception:
             pass
         return "\n".join(lines)
+
+    def _agent_hint(self, description: str) -> str:
+        """AGI 能力补全: 任务显式引用已发现智能体 → 强制规划为直接调用。
+
+        规划 LLM 常把"调用 XX 智能体"漂移成通用系统分析（uname/df 模板
+        固化）；当描述命中已发现可用 agent 名时，追加强制指令把规划拉回
+        真实调用。未命中/未注入 → ""（基线路径不变）。
+        """
+        if self._agent_source is None or not description:
+            return ""
+        try:
+            agents = self._agent_source(description) or []
+        except Exception:
+            return ""
+        hints: list[str] = []
+        for a in agents:
+            name = str(a.get("name", ""))
+            # python3 为测试辅助/通用运行时，不算外部智能体软件
+            if not name or name in ("python3",) or not a.get("available"):
+                continue
+            if name in description:
+                if a.get("kind", "cli") == "cli":
+                    hints.append(
+                        f"任务明确引用智能体「{name}」：请直接输出 RUN|{name} <参数>"
+                        f"（已获白名单放行，只读示例: RUN|{name} --version），"
+                        "不要改用 uname/df 等其他系统命令，也不要拆分分析子任务。")
+                else:
+                    hints.append(
+                        f"任务明确引用智能体「{name}」（HTTP "
+                        f"{a.get('api_endpoint', '')}）：请输出 "
+                        "RUN|curl -s <该端点> 或诚实说明无法调用。")
+        if not hints:
+            return ""
+        return "【智能体调用强制指令】\n" + "\n".join(hints)
 
     def _world_hint(self, description: str) -> str:
         """P2.2 (AGI 计划): 世界模型前置校验注记。

@@ -262,3 +262,21 @@ class TestBridgeAgentWiring:
         from ocos.execution.bridge import DecisionBridge
         bridge = DecisionBridge(agent_id="test-bridge")
         assert bridge._prior_agents("随便什么任务") == ""
+
+    def test_agent_hint_forces_direct_call(self):
+        """描述命中已发现智能体 → 输出强制直接调用指令（抑制漂移）。"""
+        bridge = self._bridge([self._agent(name="codex")])
+        hint = bridge._agent_hint("运行 codex --version 获取版本号")
+        assert "【智能体调用强制指令】" in hint
+        assert "RUN|codex --version" in hint
+        assert "不要改用 uname/df" in hint
+
+    def test_agent_hint_empty_without_match(self):
+        """描述未引用任何已发现智能体 → 无强制指令。"""
+        bridge = self._bridge([self._agent(name="codex")])
+        assert bridge._agent_hint("查看磁盘使用情况") == ""
+
+    def test_agent_hint_skips_python3(self):
+        """python3 视为通用运行时，不触发强制调用指令。"""
+        bridge = self._bridge([self._agent(name="python3")])
+        assert bridge._agent_hint("运行 python3 脚本") == ""
