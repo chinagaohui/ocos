@@ -361,3 +361,73 @@ def test_prune_keeps_recently_accessed_beliefs():
     for b in bs._beliefs.values():
         b.access_count = 1
     assert bs.prune_stale() == 0
+
+
+# ── P2.1: 世界状态注入（_prior_world）───────────────────────────────────
+
+
+def test_prior_world_injects_entities():
+    """有世界实体 → 注入块含实体状态 + world_state_injected 打点。"""
+    from ocos.monitoring.manager import (
+        MetricsRegistry, set_global_metrics,
+    )
+    reg = MetricsRegistry()
+    set_global_metrics(reg)
+
+    from ocos.execution.bridge import DecisionBridge
+    b = DecisionBridge()
+    b.attach_world_source(lambda desc: {
+        "available": True, "entity_count": 1,
+        "entities": [{"entity_id": "e1", "name": "app.log",
+                      "entity_type": "file", "state": {"size": 2048},
+                      "tick_id": 5}],
+    })
+    block = b._prior_world("检查日志文件")
+    assert "【世界状态】" in block
+    assert "app.log" in block
+    assert "size=2048" in block
+    out = reg.to_prometheus()
+    assert "world_state_injected" in out, out
+    set_global_metrics(None)
+
+
+def test_prior_world_empty_world_degraded():
+    """空世界/未注入 → 空块（默认零传感器优雅降级）。"""
+    from ocos.execution.bridge import DecisionBridge
+    b = DecisionBridge()
+    assert b._prior_world("检查日志") == ""
+    b.attach_world_source(lambda desc: {"available": False, "entities": []})
+    assert b._prior_world("检查日志") == ""
+    b.attach_world_source(lambda desc: {"available": True, "entities": []})
+    assert b._prior_world("检查日志") == ""
+
+
+# ── P2.2: 世界模型前置校验（_world_hint）───────────────────────────────
+
+
+def test_world_hint_flags_unknown_entity():
+    """描述引用的对象不在世界模型 → 诚实注记（不空跑不编造）。"""
+    from ocos.execution.bridge import DecisionBridge
+    b = DecisionBridge()
+    b.attach_world_source(lambda desc: {
+        "available": True,
+        "entities": [{"entity_id": "e1", "name": "app.log",
+                      "entity_type": "file"}],
+    })
+    hint = b._world_hint("分析 report.xlsx 的规模")
+    assert "不在当前世界模型中" in hint
+    assert "app.log" in hint
+
+
+def test_world_hint_silent_on_match_and_empty_world():
+    """描述命中已知实体 / 空世界 → 无注记。"""
+    from ocos.execution.bridge import DecisionBridge
+    b = DecisionBridge()
+    b.attach_world_source(lambda desc: {
+        "available": True,
+        "entities": [{"entity_id": "e1", "name": "app.log",
+                      "entity_type": "file"}],
+    })
+    assert b._world_hint("查看 app.log 大小") == ""
+    b2 = DecisionBridge()
+    assert b2._world_hint("分析 report.xlsx") == ""

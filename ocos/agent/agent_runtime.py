@@ -1086,6 +1086,14 @@ class AgentRuntime:
                 attach(self.learning_artifacts)
             except Exception as _lse:
                 logger.debug("learning source bind skipped: %s", _lse)
+        # P2.1 (AGI 计划): 世界状态检索源 — 经 master_agent.world_context 消费
+        # WorldStore（感知→世界模型→决策；空世界返回 available=False 不注入）
+        attach_world = getattr(bridge, "attach_world_source", None)
+        if attach_world is not None:
+            try:
+                attach_world(lambda _desc: self.agent.world_context())
+            except Exception as _wse:
+                logger.debug("world source bind skipped: %s", _wse)
 
     def _replan_failed_task(self, task_id: str, task: Any,
                             reason: str) -> dict[str, Any]:

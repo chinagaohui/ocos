@@ -127,6 +127,7 @@ class DecisionBridge:
         db_path: Optional[str] = None,          # PW-1.4: 执行留痕 event_memory
         permission_gateway: Optional[Any] = None,  # S3.2: 入口网关前检（None→惰性默认）
         learning_source: Optional[Any] = None,  # P1.2: 学习产物检索源（None→无注入）
+        world_source: Optional[Any] = None,  # P2.1: 世界状态检索源（None→无注入）
     ) -> None:
         self._dispatcher = dispatcher or ActionDispatcher()
         self._guard = guard or PermissionGuard()
@@ -140,6 +141,9 @@ class DecisionBridge:
         # P1.2 (AGI 计划): 学习产物检索源 — fn(description) -> artifacts 列表
         # （None=无注入，走原始 prompt 基线路径）
         self._learning_source: Any = learning_source
+        # P2.1 (AGI 计划): 世界状态检索源 — fn(description) -> world context dict
+        # （None=无注入；默认零传感器空世界也返回 available=False 不注入）
+        self._world_source: Any = world_source
         # P2-2: LLM 日预算 — 超限后任务转待批（诚实降级，不烧 token）
         self._llm_calls_today: int = 0
         self._llm_calls_date: str = ""
@@ -214,6 +218,16 @@ class DecisionBridge:
         None/未注入 = 决策 prompt 无学习产物注入（基线路径）。
         """
         self._learning_source = source
+        return self
+
+    def attach_world_source(self, source: Any) -> "DecisionBridge":
+        """P2.1 (AGI 计划): 注入世界状态检索源。
+
+        source 为可调用对象: fn(description) -> world context dict（含
+        available/entities，见 WorldStore.cognitive_world_state）。空世界
+        （默认零传感器）返回 available=False → 不注入，优雅降级。
+        """
+        self._world_source = source
         return self
 
     # ── 决策执行入口 ──────────────────────────────────────────────────────
@@ -887,6 +901,14 @@ class DecisionBridge:
                 knowledge = self._prior_knowledge(description)
                 if knowledge:
                     prompt = f"{knowledge}\n\n{prompt}"
+                # P2.1 (AGI 计划): 注入世界状态（感知→世界模型→决策）
+                world = self._prior_world(description)
+                if world:
+                    prompt = f"{world}\n\n{prompt}"
+                # P2.2 (AGI 计划): 世界前置校验注记（目标对象不在世界模型 → 诚实说明）
+                hint = self._world_hint(description)
+                if hint:
+                    prompt = f"{hint}\n\n{prompt}"
                 raw = asyncio.run(tg._provider.generate(
                     prompt,
                     system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的动作行。",
@@ -1060,6 +1082,79 @@ class DecisionBridge:
             except Exception:
                 pass
         return "\n".join(lines)
+
+    def _prior_world(self, description: str, limit: int = 5) -> str:
+        """P2.1 (AGI 计划): 世界状态注入任务执行规划器。
+
+        与 MasterAgent.think/plan 侧的 world_context 消费互补：本方法把
+        当前世界实体状态带给**执行规划 LLM**，让 RUN 命令选择/参数化
+        基于世界事实（感知→世界模型→决策，修复只写不读断点）。
+
+        空世界/未注入 → ""（优雅降级，基线路径）。
+        """
+        if self._world_source is None:
+            return ""
+        try:
+            ctx = self._world_source(description) or {}
+        except Exception as e:
+            logger.debug("world state retrieval failed: %s", e)
+            return ""
+        if not ctx.get("available"):
+            return ""
+        entities = ctx.get("entities") or []
+        if not entities:
+            return ""
+        lines = ["【世界状态】"]
+        for ent in entities[:limit]:
+            name = ent.get("name") or ent.get("entity_id") or "?"
+            etype = ent.get("entity_type") or "?"
+            state = ent.get("state") or {}
+            state_str = ", ".join(f"{k}={v}" for k, v in
+                                  list(state.items())[:4])
+            lines.append(f"- {name} ({etype}) [{state_str}]")
+        try:
+            from ocos.monitoring.manager import record_global
+            record_global("world_state_injected", float(len(entities[:limit])))
+        except Exception:
+            pass
+        return "\n".join(lines)
+
+    def _world_hint(self, description: str) -> str:
+        """P2.2 (AGI 计划): 世界模型前置校验注记。
+
+        世界可用但描述中未发现任何已知实体 → 返回注记（提示规划器：
+        目标引用的对象不在当前世界模型中，应诚实说明而非空跑/编造）。
+        空世界/未注入 → ""（默认零传感器优雅降级，不阻断任务）。
+        """
+        if self._world_source is None or not description:
+            return ""
+        try:
+            ctx = self._world_source(description) or {}
+        except Exception as e:
+            logger.debug("world hint retrieval failed: %s", e)
+            return ""
+        if not ctx.get("available"):
+            return ""
+        entities = ctx.get("entities") or []
+        if not entities:
+            return ""
+        names = {str(e.get("name") or e.get("entity_id") or "")
+                 for e in entities}
+        names = {n for n in names if n}
+        if not names:
+            return ""
+        # 描述与已知实体名是否重叠（2-gram / 子串）
+        desc = description
+        overlap = any(
+            n in desc or any(g in n for g in
+                             {desc[i:i + 2] for i in range(len(desc) - 1)}
+                             if g.strip())
+            for n in names)
+        if overlap:
+            return ""
+        return ("注：目标引用的对象不在当前世界模型中"
+                f"（已知实体: {', '.join(sorted(names)[:5])}）— "
+                "若任务依赖该对象，请说明无法获取而非编造结果")
 
     def _prior_task_results(self, description: str, limit: int = 2) -> str:
         """FIX-4: 同类任务历史结果 — 任务转换前的执行经验注入。
