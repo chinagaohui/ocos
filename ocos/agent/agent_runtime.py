@@ -1068,8 +1068,44 @@ class AgentRuntime:
             )
             self._memory_hub.episode.save(episode)
             logger.info("Goal result episode saved (%d tasks)", len(results))
+            # P4.1 (AGI 计划): 目标完成后触发技能习得 — 从最近成功 goal_result
+            # episode 归纳候选技能（只读自动提交、写类待审批）。失败不阻断。
+            try:
+                self._grow_skills()
+            except Exception as _gs_e:
+                logger.debug("skill growth skipped: %s", _gs_e)
         except Exception as e:
             logger.debug("goal result episode skipped: %s", e)
+
+    def _grow_skills(self) -> dict[str, Any]:
+        """P4.1 (AGI 计划): 技能习得触发 — 最近成功 goal_result → 候选技能。
+
+        输入：hub.episode 最近 goal_result episodes（SkillProposer 归纳成功
+        任务指纹 → 四段生命周期）。产出打点 skill_growth{stage} 供观测。
+        """
+        try:
+            episodes = (self._memory_hub.episode
+                        .query_by_source("goal_result", limit=30))
+        except Exception as e:
+            logger.debug("skill growth episodes fetch failed: %s", e)
+            return {}
+        if not episodes:
+            return {}
+        grow = getattr(self.agent, "grow_skills_from_episodes", None)
+        if grow is None:
+            return {}
+        stats = grow(episodes) or {}
+        try:
+            from ocos.monitoring.manager import record_global
+            record_global("skill_growth", float(stats.get("proposals", 0)),
+                          labels={"stage": "proposals"})
+            record_global("skill_growth", float(stats.get("committed", 0)),
+                          labels={"stage": "committed"})
+        except Exception:
+            pass
+        if stats.get("proposals"):
+            logger.info("Skill growth: %s", str(stats)[:200])
+        return stats
 
     def attach_decision_bridge(self, bridge: Any) -> None:
         """R4-A: 挂载决策执行铰链 (公开装配入口, 供 daemon.factory 调用)。
@@ -1741,6 +1777,26 @@ class AgentRuntime:
                     "confidence": float(t.confidence),
                     "score": 1,
                 })
+        except Exception:
+            pass
+
+        # P4.2 (AGI 计划): 技能复用 — 已提交技能按名称/描述与任务描述重叠
+        # 检索，type="skill" 且 score 权重高于信念（技能 > 信念 > 知识）。
+        # 技能来自 grow_skills_from_episodes 生命周期（四段治理后提交）。
+        try:
+            registry = getattr(getattr(self, "agent", None),
+                               "_skill_registry", None)
+            if registry is not None:
+                for s in registry.list_skills():
+                    hay = f"{s.name} {s.description}"
+                    if _overlap(hay, description) > 0 or s.name in description:
+                        artifacts.append({
+                            "artifact_id": f"skill:{s.id}",
+                            "type": "skill",
+                            "text": f"技能[{s.name}]: {s.description}"[:120],
+                            "confidence": 0.9,  # 已提交技能 = 高置信可复用
+                            "score": 3,
+                        })
         except Exception:
             pass
 

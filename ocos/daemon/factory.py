@@ -132,6 +132,18 @@ def build_master_agent(agent_id: str, db_path: Optional[str] = None):
         except Exception as e:
             logger.warning("UserInbox unavailable for proactive output: %s", e)
 
+    # P4.1 (AGI 计划): 技能习得生产装配 — SkillRegistry（SQLite 持久化）
+    # 注入 master_agent；grow_skills_from_episodes 四段生命周期（只读候选
+    # 自动提交、写类候选待审批）在 AgentRuntime 目标完成后触发。
+    try:
+        from ocos.capability.skill_registry import SkillRegistry
+        _registry = SkillRegistry(db_path=db_path or "ocos/capability.db")
+        _registry.init_db()
+        _registry_holder = _registry
+    except Exception as e:
+        logger.warning("SkillRegistry unavailable: %s", e)
+        _registry_holder = None
+
     return MasterAgent(
         agent_id=agent_id,
         identity=IdentityBoundary.create_default(),
@@ -147,7 +159,7 @@ def build_master_agent(agent_id: str, db_path: Optional[str] = None):
         # FIX-17: 注入主动输出回调 → 消息写入 UserInbox
         proactive_output_callback=proactive_output_callback,
         **engines,
-    )
+    ), _registry_holder
 
 
 def build_cognitive_engines(event_bus: Any = None, working_memory: Any = None) -> dict:

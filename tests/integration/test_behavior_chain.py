@@ -495,3 +495,85 @@ def test_learning_artifacts_no_reflection_without_agent():
     rt.beliefs.add("当磁盘使用率高时, df -h 有效", confidence=0.8)
     artifacts = rt.learning_artifacts("检查磁盘使用率")
     assert not any(a["type"] == "reflection" for a in artifacts)
+
+
+# ── P4: 技能习得生产化（grow_skills 装配 + 技能复用检索）─────────────────
+
+
+class _FakeSkill:
+    def __init__(self, id, name, description):
+        self.id, self.name, self.description = id, name, description
+
+
+class _FakeRegistry:
+    def __init__(self, skills):
+        self._skills = skills
+
+    def list_skills(self):
+        return list(self._skills)
+
+
+def test_grow_skills_triggered_after_goal_result():
+    """目标完成后 _grow_skills 调用 agent.grow_skills_from_episodes。"""
+    from types import SimpleNamespace
+    from ocos.agent.agent_runtime import AgentRuntime
+
+    grown = {}
+
+    def _grow(episodes):
+        grown["called"] = True
+        grown["n"] = len(episodes)
+        return {"proposals": 1, "committed": 1, "skills": [{"id": "s1"}]}
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt._memory_hub = SimpleNamespace(
+        episode=SimpleNamespace(query_by_source=lambda src, limit: [
+            SimpleNamespace(goal="分析宿主机", outcome={"success": True})]))
+    rt.agent = SimpleNamespace(grow_skills_from_episodes=_grow)
+    stats = rt._grow_skills()
+    assert grown.get("called") is True
+    assert grown["n"] == 1
+    assert stats["committed"] == 1
+
+
+def test_skill_artifact_retrieved_prefers_skill():
+    """已提交技能按描述命中 → type=skill 且排序优先于 belief。"""
+    from types import SimpleNamespace
+    from ocos.agent.agent_runtime import AgentRuntime
+    from ocos.agent.belief_system import BeliefSystem
+    from ocos.agent.knowledge_base import KnowledgeBase
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt._recent_results = []
+    rt.beliefs = BeliefSystem()
+    rt.knowledge = KnowledgeBase()
+    rt.beliefs.add("当磁盘使用率高时, df -h 有效", confidence=0.8)
+    rt.agent = SimpleNamespace(
+        _skill_registry=_FakeRegistry([
+            _FakeSkill("host-analyze", "宿主机分析",
+                       "分析磁盘/内存/系统版本的一站式流程"),
+        ]),
+        _last_reflection=None,
+    )
+    artifacts = rt.learning_artifacts("分析宿主机磁盘和内存")
+    assert artifacts, artifacts
+    assert artifacts[0]["type"] == "skill", artifacts
+    assert "技能[宿主机分析]" in artifacts[0]["text"]
+    assert artifacts[0]["confidence"] >= 0.9
+
+
+def test_skill_absent_without_registry():
+    """无技能注册表 → 不出现 skill 产物（不伪造）。"""
+    from types import SimpleNamespace
+    from ocos.agent.agent_runtime import AgentRuntime
+    from ocos.agent.belief_system import BeliefSystem
+    from ocos.agent.knowledge_base import KnowledgeBase
+
+    rt = AgentRuntime.__new__(AgentRuntime)
+    rt._recent_results = []
+    rt.beliefs = BeliefSystem()
+    rt.knowledge = KnowledgeBase()
+    rt.beliefs.add("当磁盘使用率高时, df -h 有效", confidence=0.8)
+    rt.agent = SimpleNamespace(_skill_registry=None, _last_reflection=None)
+    artifacts = rt.learning_artifacts("分析宿主机磁盘")
+    assert not any(a["type"] == "skill" for a in artifacts)

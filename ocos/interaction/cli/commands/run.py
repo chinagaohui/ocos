@@ -50,7 +50,16 @@ def cmd_run(args, session) -> int:
 
     from ocos.daemon.factory import build_master_agent
 
-    agent = build_master_agent(args.agent_id, db_path=db_path)
+    agent, skill_registry = build_master_agent(args.agent_id, db_path=db_path)
+    # P4.1 (AGI 计划): 技能习得 — SkillRegistry 注入 agent（目标完成后
+    # grow_skills_from_episodes 经此提交候选技能）
+    if skill_registry is not None:
+        set_reg = getattr(agent, "set_skill_registry", None)
+        if set_reg is not None:
+            try:
+                set_reg(skill_registry)
+            except Exception:
+                pass
 
     from ocos.daemon import ResidentRuntime
     from ocos.daemon.factory import build_health_loop
