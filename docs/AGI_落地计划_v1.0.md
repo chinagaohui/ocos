@@ -4,7 +4,7 @@
 > 定位：OCOS 已是真实运行的有限自主 Cognitive Runtime；本计划补齐"学习经验→行为改变"的因果闭环及下游消费链
 > 总门禁：**ER-2 Behavioral Delta**——学习前后同类任务行为发生可归因、可验证的变化（蓝图 v1.1 §8 定义）
 > 生成日期：2026-09-06
-> 进度：**P0 ✅ 完成 / P1 ✅ 完成（ER-2 机制验证通过 + 生产链路绑定生效）** / P2-P5 待执行
+> 进度：**P0 ✅ / P1 ✅（ER-2 机制验证通过 + 生产链路绑定生效）/ P2 ✅ / P3 ✅ / P4 ✅ / P5 ✅（P5.1 失败归因重规划 + 教训回学习管道；P5.2 Phase 53 主动交互唤醒生产接线）— 全 Phase 完成**
 
 ---
 
@@ -125,14 +125,14 @@
 
 ## 六、Phase 5 — 长期自主 + 主动交互（P2）
 
-### P5.1 失败归因重规划（对齐 G5）
-1. 目标失败 → 归因分类（LLM 判定：知识缺失/工具受限/目标模糊/环境变化）→ 写 `failure_lesson` 回学习管道（feed G1）。
-2. 重规划策略：可修正因素（模糊目标→澄清）→ 二次尝试；不可修正 → honest failed + 教训入库。
+### P5.1 失败归因重规划（对齐 G5）✅
+1. 目标失败 → 归因分类（确定性 FailureDiagnoser：目标模糊/工具受限/执行错误/超时/权限拒绝/LLM 转换失败）→ 终态失败写入 `failure_lesson`（source="lesson" Episode）回学习管道（feed G1 统计侧，`_fast_path_learning` 下一周期重放聚合 failure_causes）。教训只进统计管道，不注入决策 prompt（延续 FIX-4 教训）。
+2. 重规划策略：可修正因素（执行错误/超时 → 描述回注修正 + 有限重试，MAX_RETRY_PER_TASK=2）；不可修正（模糊目标/工具受限/重试耗尽）→ honest failed + 教训入库。实现：`agent_runtime._record_failure_lesson`，测试 `tests/test_phase49c_skill_growth.py::TestP51FailureLessonPipeline`。
 
-### P5.2 Phase 53 主动交互唤醒（对齐 G6，沉睡器官接线）
-1. `need_monitor` + `attention_trigger` + `interaction_scheduler`（白皮书确认"完整实现未接线"，仅测试引用）接入 daemon tick：空闲时基于目标状态触发主动交互（如"目标依赖数据过期 → 主动发起重新采集"）。
-2. 约束：主动交互必须过权限网关（S1.3 通道复用）+ 只读白名单；产出走 outbox 可观测。
-3. 验收：构造"目标依赖的指标文件 3 天未更新"→ daemon 主动生成交互提议并出现在对话流。
+### P5.2 Phase 53 主动交互唤醒（对齐 G6，沉睡器官接线）✅
+1. `ActiveInteractionEngine`（`ocos/daemon/active_interaction.py`，daemon 生产装配层获准依赖 interaction+monitoring）串起 NeedMonitor → AttentionTrigger → InteractionValidator（IS53-03）→ InteractionScheduler（IS53-04）→ 权限双检（PermissionGuard + 宪法，fail-closed）→ outbox 输出；daemon heartbeat 每 60 tick 空闲期扫描。
+2. 约束：交互只读化（IS53-01/02 验证器守护）+ 只读白名单通道（outbox）+ 频率/去重治理；`OCOS_INTERACTION_STALE_DAYS` 可调停滞窗口（默认 30 天）。
+3. 验收：构造"目标依赖数据 5 天未更新（阈值 3 天）"→ 主动生成交互提议出现在对话流 — 测试 `tests/test_p52_active_interaction.py`。
 
 ---
 
