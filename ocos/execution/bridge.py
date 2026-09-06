@@ -991,6 +991,10 @@ class DecisionBridge:
                 memory_ctx = self._memory_decision_context(description)
                 if memory_ctx:
                     prompt = f"{memory_ctx}\n\n{prompt}"
+                # 记忆冲突回落 — 记忆命中但世界无对象 → 显式回落防过时误导
+                conflict = self._memory_conflict_hint(description)
+                if conflict:
+                    prompt = f"{conflict}\n\n{prompt}"
                 # P2.1 (AGI 计划): 注入世界状态（感知→世界模型→决策）
                 world = self._prior_world(description)
                 if world:
@@ -1243,6 +1247,45 @@ class DecisionBridge:
         except Exception:
             pass
         return "\n".join(lines)
+
+    def _memory_conflict_hint(self, description: str) -> str:
+        """记忆冲突回落: 记忆给出建议但世界模型无对应对象时显式回落。
+
+        动机: 记忆（经验/信念/技能）可能过时或不适配当前现实；当**记忆命中**
+        （学习源有相关产物）却**世界模型可用且查无对象**时，说明记忆所依赖的
+        前提在当前现实不成立 → 提示规划 LLM 回落：优先依据命令实际输出/世界
+        事实判定，不要盲目套用历史做法。
+
+        无记忆 / 世界不可用 / 世界有对象 → ""（不误报冲突，基线不变）。
+        """
+        memory_hit = False
+        if getattr(self, "_learning_source", None) is not None:
+            try:
+                memory_hit = bool(self._learning_source(description) or [])
+            except Exception:
+                memory_hit = False
+        if not memory_hit:
+            return ""
+        if self._world_source is None:
+            return ""
+        ctx = {}
+        try:
+            ctx = self._world_source(description) or {}
+        except Exception:
+            return ""
+        if not ctx.get("available"):
+            return ""
+        entities = ctx.get("entities") or []
+        if entities:
+            return ""  # 世界有对象 → 记忆可适用，无冲突
+        try:
+            from ocos.monitoring.manager import record_global
+            record_global("memory_conflict_fallback", 1.0)
+        except Exception:
+            pass
+        return ("【记忆冲突回落】存在相关历史经验，但当前世界模型中未检索到"
+                "对应对象；历史记忆可能过时或不适用于当前现实。请优先依据命令"
+                "实际输出与世界状态判定，不要盲目套用历史做法，必要时诚实说明。")
 
     def _prior_world(self, description: str, limit: int = 5) -> str:
         """P2.1 (AGI 计划): 世界状态注入任务执行规划器。

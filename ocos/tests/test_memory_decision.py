@@ -76,3 +76,47 @@ class TestMemoryDecisionContext:
         i_belief = block.find("调用 openclaw 有效")
         i_know = block.find("可执行单轮任务")
         assert 0 <= i_skill < i_belief < i_know, block[:400]
+
+
+class TestMemoryConflictFallback:
+    """记忆冲突回落: 记忆命中但世界模型缺失对应对象 → 显式回落，防过时记忆误导。"""
+
+    def _bridge(self, artifacts, world_ctx):
+        from ocos.execution.bridge import DecisionBridge
+        bridge = DecisionBridge(agent_id="test-conflict")
+        if artifacts is not None:
+            bridge.attach_learning_source(lambda _d: artifacts)
+        if world_ctx is not None:
+            bridge.attach_world_source(lambda _d: world_ctx)
+        return bridge
+
+    def _world(self, available=True, entities=()):
+        return {"available": available, "entities": list(entities)}
+
+    def test_conflict_when_memory_hit_world_empty(self):
+        """记忆命中 + 世界可用但无对象 → 返回回落提示。"""
+        bridge = self._bridge(_MEMORY_HIT, self._world(available=True, entities=[]))
+        hint = bridge._memory_conflict_hint("分析宿主机状态")
+        assert "【记忆冲突回落】" in hint
+        assert "历史" in hint and "世界" in hint
+
+    def test_no_conflict_when_world_unavailable(self):
+        """世界不可用/无非世界证据 → 不误报冲突。"""
+        bridge = self._bridge(_MEMORY_HIT, self._world(available=False))
+        assert bridge._memory_conflict_hint("分析宿主机状态") == ""
+
+    def test_no_conflict_when_world_has_entities(self):
+        """世界有对应对象 → 记忆可适用，无冲突。"""
+        bridge = self._bridge(
+            _MEMORY_HIT, self._world(available=True, entities=[{"name": "host"}]))
+        assert bridge._memory_conflict_hint("分析宿主机状态") == ""
+
+    def test_no_conflict_without_memory(self):
+        """无记忆 → 无冲突回落（空回落）。"""
+        bridge = self._bridge([], self._world(available=True, entities=[]))
+        assert bridge._memory_conflict_hint("任意任务") == ""
+
+    def test_no_conflict_without_world_source(self):
+        """未注入世界源 → 无冲突回落。"""
+        bridge = self._bridge(_MEMORY_HIT, None)
+        assert bridge._memory_conflict_hint("任意任务") == ""
