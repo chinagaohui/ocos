@@ -1076,8 +1076,16 @@ class AgentRuntime:
 
         挂载后 step 7 的 TaskDAG 任务与 step 8 的决策输出优先经
         DecisionBridge 风险分级执行; 未挂载或裸构造实例保持既有行为。
+        P1.2 (AGI 计划): 挂载时把本 runtime 的 learning_artifacts 绑定为
+        bridge 学习产物源（决策 prompt 注入通道）。
         """
         self._decision_bridge = bridge
+        attach = getattr(bridge, "attach_learning_source", None)
+        if attach is not None:
+            try:
+                attach(self.learning_artifacts)
+            except Exception as _lse:
+                logger.debug("learning source bind skipped: %s", _lse)
 
     def _replan_failed_task(self, task_id: str, task: Any,
                             reason: str) -> dict[str, Any]:
