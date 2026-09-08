@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 import threading
 import time
@@ -38,7 +39,87 @@ from ocos.agent.goal_store import GoalSQLiteStore
 from ocos.memory.hub import MemoryHub
 from ocos.storage.working_memory import SQLiteWorkingMemory
 
+# ── P0-2 (2026-09-08 事件复盘): 交付物相关性校验 ─────────────────────────
+# 事件: 「制定升级计划」目标 → LLM 被迫输出 RUN|cat ... --version → exit 0
+# → ✓ 成功。承诺的正文交付物缺席，命令回显冒充完成。规则: 任务描述要求
+# 计划/方案/报告类正文交付物，而执行证据仅为 shell 命令回显（bridge 打标
+# capability=shell，无 ANSWER 正文 / FILE_WRITE 落盘）→ 诚实降级为失败。
+# 采集/查询类子任务（查/采集/读取等动词）以命令输出为承诺物，豁免。
+_DELIVERABLE_GOAL_RE = re.compile(
+    r"制定|编制|起草|撰写|编写|规划|设计|计划|方案|蓝图|路线图")
+_DATA_COLLECT_RE = re.compile(
+    r"查询|采集|获取|读取|查看|检查|列出|扫描|探测|执行|运行|汇总|统计|监控")
+
+# 开发/构建类交付物（2026-09-08「开发虚拟人应用」假成功事件）：交付物 =
+# 落盘工件（项目结构/代码/依赖），纯只读探查（ls/--version/cat）在物理上
+# 不可能完成 → 命令行无写证据时诚实降级。不与采集豁免共用（开发类描述
+# 里常带"检查/运行"字样，如"确保可运行"，豁免会让条款形同虚设）。
+_BUILD_GOAL_RE = re.compile(
+    r"开发|实现|创建|构建|搭建|制作|安装|部署")
+# P0-2f 校准（2026-09-08「宿主机硬件画像」事件）: "部署可行性/部署方案评估"
+# 属探查评估意图，不是构建动作——描述命中评估词时 build 闸门不适用，
+# 否则纯只读画像任务（uname/df/free/nvidia-smi）被误降级【交付物缺失】
+_BUILD_ASSESS_RE = re.compile(
+    r"可行性|评估|分析|画像|调研|对比|选型")
+# 写证据检测对象 = stdout 中 "$ " 前缀的命令标签行（UX-J+ 实际执行命令）。
+# 高精度写指示符 — 命中任一即视为存在工件产出的可能：
+#   - 重定向/经典写命令（>, tee, mkdir, ...）
+#   - 包安装/构建（"install" 子串覆盖 npm/pip/apt install）
+#   - 脚本执行 node/python — 排除 --version/--help 探查（本事件教训：
+#     裸 "npm " 会把 npm --version 误判为写证据 → 假成功放行）
+_WRITE_EVIDENCE_RE = re.compile(
+    r">>|>|tee |mkdir|touch |mv |cp |rm |chmod|chown|sed -i"
+    r"|ln -s|dd |git init|clone|unzip|tar |make|cmake"
+    r"|install|npx |cargo |mvn |gradle|gcc|g\+\+|javac"
+    r"|node (?!--)|python\d? (?!--)"          # 空格内置防回溯绕过 lookahead
+    r"|npm (?:i |install|ci |run |exec |init|test)")
+# 检测前剥离的伪写指示（丢弃输出类重定向不产生工件）
+_WRITE_NOISE_RE = re.compile(r"2>&1|&>?/dev/null|\d?>\s*/dev/null")
+
+# P0-2c (2026-09-08「GitHub 数字生命调研」事件): 总结器自认不完整降级。
+# 事件: 用户授权"去 GitHub 学习数字生命并总结+升级方案"，规划器只规划了
+# 描述括号里枚举的本地命令（uname/df/free），零联网动作；总结器诚实自述
+# "任务未完整达成…缺少 GitHub 数字生命项目调研结果"，但描述含"检查/执行"
+# 命中 _DATA_COLLECT_RE 被采集豁免放行 → ✓ 假成功落库。
+# 规则: 【结论摘要】由固定 prompt（"判断是否达成任务"）生成的机器文本，
+# 其显式自认不完整是最直接的诚实信号 — 只检查摘要段（【原始输出】之前），
+# 避免原始命令输出中的引用误伤。与描述类正则（易被混合型目标绕过）互补。
+_SELF_INCOMPLETE_RE = re.compile(
+    r"未完整达成|未完整|部分达成|部分完成|未达成|任务未完成"
+    r"|缺少[^。\n]{0,24}(调研|项目|方案|结果|数据|内容|清单|交付)"
+    r"|未提供[^。\n]{0,24}(调研|项目|方案|清单|内容|数据)"
+    r"|需补充|缺失[^。\n]{0,16}(调研|项目|方案|清单|内容)")
+
+
+def _has_write_evidence(stdout: str) -> bool:
+    """从执行输出提取 "$ " 命令标签行，检测是否存在写指示符。"""
+    for line in str(stdout or "").splitlines():
+        if not line.startswith("$ "):
+            continue
+        cmd = _WRITE_NOISE_RE.sub("", line[2:].lower())
+        if _WRITE_EVIDENCE_RE.search(cmd):
+            return True
+    return False
+
 logger = logging.getLogger(__name__)
+
+
+def _truncate_text(text: Any, max_chars: int) -> str:
+    """UX-J+: 按行边界截断执行输出。
+
+    此前硬切字符数会把行切成半行（实测 `uname -a && nproc` 的输出在
+    `#28~24.0` 中间被切断、nproc 的 `12` 整行丢失），LLM 基于残行重组
+    【原始输出】时张冠李戴，得出"nproc 返回 os-release 内容"这类失真
+    结论并沉淀进记忆。现回退到最近行边界，尾附截断标记。
+    """
+    text = str(text or "")
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars]
+    nl = cut.rfind("\n")
+    if nl > 0:
+        cut = cut[:nl]
+    return f"{cut}\n…（已截断，原文 {len(text)} 字符）"
 
 
 class RuntimeState(Enum):
@@ -96,6 +177,9 @@ class AgentRuntime:
         self._memory_hub: Any = None
         self._wm_store: Any = None
         self._engine_loader = engine_loader
+        # UX-J 即时推送: goal_result episode 落库后的回调（daemon 注册
+        # _push_goal_results，实现"完成即推"，避免等 5-tick 节拍）
+        self._on_goal_result: Any = None
 
         self._state = RuntimeState.STOPPED
         self._homeostatic_check_interval = homeostatic_check_interval
@@ -137,6 +221,9 @@ class AgentRuntime:
         self._tick_latencies: deque[float] = deque(maxlen=1000)
         self._tick_errors: int = 0
         self._boot_time: Optional[float] = None
+        # UX-J+: 预算告警去重 — LLM 任务单 tick 17-29s 恒超 15s 预算，
+        # 连续执行时每个 tick 都告警无信息量（实测 4 目标连刷 20+ 条）
+        self._budget_warn_streak: int = 0
 
         # Phase G: User Model — 用户画像与记忆中枢
         self._user_memory: Any = None  # UserMemory, initialized in boot()
@@ -176,8 +263,14 @@ class AgentRuntime:
         return self._event_bus
 
     @property
-    def result_understanding_layer(self) -> Any:
-        """Phase 26: 延迟初始化 ResultUnderstandingLayer。"""
+    def _get_result_understanding_layer(self) -> Any:
+        """Phase 26: 延迟初始化 ResultUnderstandingLayer。
+
+        DEPRECATED（收敛裁决 R1，2026-09-08）：本层零生产调用，反思语义由
+        分布式现役链承载（_record_failure_lesson + _replan_failed_task +
+        dream 巩固）。裁决=ARCHIVE 不接线，见
+        docs/COGNITIVE_RUNTIME_CONVERGENCE_DECISION_v1.0.md。
+        """
         if self._result_understanding_layer is None:
             from ocos.capability.result_understanding import ResultUnderstandingLayer
             self._result_understanding_layer = ResultUnderstandingLayer()
@@ -483,10 +576,19 @@ class AgentRuntime:
             self._tick_latencies.append(tick_elapsed)
             budget_ok = tick_elapsed < self._tick_budget
             if not budget_ok:
-                logger.warning(
-                    "Tick budget exceeded: %.2fs > %.2fs (cycle=%d)",
-                    tick_elapsed, self._tick_budget, self._cycle_count,
-                )
+                self._budget_warn_streak += 1
+                # 连续超预算只报首告警 + 每 10 tick 一次节奏采样；
+                # 回到预算内即清零（下轮超预算重新首报）
+                if (self._budget_warn_streak == 1
+                        or self._budget_warn_streak % 10 == 0):
+                    logger.warning(
+                        "Tick budget exceeded: %.2fs > %.2fs (cycle=%d, "
+                        "streak=%d)",
+                        tick_elapsed, self._tick_budget, self._cycle_count,
+                        self._budget_warn_streak,
+                    )
+            else:
+                self._budget_warn_streak = 0
 
             result = {
                 "status": "completed",
@@ -1048,20 +1150,89 @@ class AgentRuntime:
 
             results = list(self._recent_results)[
                 max(getattr(self, "_result_mark", 0), len(self._recent_results) - 12):]
+            # P0-2: 交付物相关性最小校验 — 描述要求正文交付物而执行证据
+            # 仅为 shell 回显 → 诚实降级为失败（在汇总行/落库前生效）
+            for r in results:
+                _desc = str(r.get("description", ""))
+                if (r.get("success")
+                        and r.get("capability") == "shell"
+                        and _DELIVERABLE_GOAL_RE.search(_desc)
+                        and not _DATA_COLLECT_RE.search(_desc)):
+                    r["success"] = False
+                    r["output"] = ("【交付物缺失】该任务要求计划/方案/报告类"
+                                   "正文交付物，但执行证据仅为 shell 命令回显"
+                                   "（无 ANSWER 正文、无 FILE_WRITE 落盘），"
+                                   "诚实降级为失败。\n"
+                                   + str(r.get("output", "")))[:1600]
+                    logger.warning("deliverable gap downgraded: %s",
+                                   _desc[:60])
+                # P0-2b (2026-09-08「开发虚拟人应用」事件): 开发/构建类 —
+                # 交付物 = 落盘工件，执行证据全为只读探查（无写指示符）→
+                # 物理上不可能完成，诚实降级。独立判定采集豁免（开发类
+                # 描述常带"检查/运行"字样，采集豁免会使条款形同虚设）。
+                elif (r.get("success")
+                      and r.get("capability") == "shell"
+                      and _BUILD_GOAL_RE.search(_desc)
+                      # P0-2f 校准: 评估/画像类意图（"部署可行性评估"）不是
+                      # 构建动作，纯只读探查是其合法完成形态，不降级
+                      and not _BUILD_ASSESS_RE.search(_desc)
+                      and not _has_write_evidence(r.get("output", ""))):
+                    r["success"] = False
+                    r["output"] = ("【交付物缺失】该任务要求开发/构建类工件"
+                                   "（项目结构/代码/依赖落盘），但执行证据仅"
+                                   "为只读探查命令（无任何写操作），诚实降级"
+                                   "为失败。\n"
+                                   + str(r.get("output", "")))[:1600]
+                    logger.warning("build deliverable gap downgraded: %s",
+                                   _desc[:60])
+                # P0-2c: 总结器自认不完整 — 固定 prompt 要求"判断是否达成"，
+                # 摘要显式承认未完整/缺少调研 → 诚实降级（描述类正则的兜底，
+                # 混合型目标（联网调研+本地检查）靠采集豁免溜过上面两关）。
+                # P0-2c 校准（2026-09-08 E2E 复测）: 摘要可能在交付实质正文
+                # （调研表+升级方案 1500 字）的同时提及某子步骤（README 抓取）
+                # 未完成并自述"部分达成"——此时交付物已存在，降级会把真实
+                # 价值标成失败。规则收紧: 自认不完整 且 摘要缺乏实质交付
+                # 内容（<600 字）才降级；长摘要视为已含交付物正文。
+                elif r.get("success"):
+                    _out = str(r.get("output", ""))
+                    if _out.startswith("【结论摘要】"):
+                        _summary = _out.split("【原始输出】", 1)[0]
+                        if (_SELF_INCOMPLETE_RE.search(_summary)
+                                and len(_summary) < 600):
+                            r["success"] = False
+                            r["output"] = ("【执行不完整】结论摘要自认任务未"
+                                           "完整达成（存在缺失的调研/交付部"
+                                           "分），诚实降级为失败。\n" + _out)[:1600]
+                            logger.warning("self-admitted incomplete "
+                                           "downgraded: %s", _desc[:60])
             lines = []
             for r in results:
                 ok = "✓" if r.get("success") else "✗"
-                out = str(r.get("output", ""))[:1500]
+                out = _truncate_text(r.get("output", ""), 1500)
                 lines.append(f"{ok} {r.get('description', '')[:50]} → {out}")
             if not lines:
                 return
+            # P2: 能力级实测归因 — 同名能力多结果时 AND 聚合（一次目标内
+            # shell 全成功才算该次 shell 实测成功），供自我模型统计
+            _cap_success: dict[str, bool] = {}
+            for r in results:
+                _cap = r.get("capability")
+                if _cap:
+                    _cap_success[_cap] = bool(
+                        _cap_success.get(_cap, True)) and bool(r.get("success"))
             episode = Episode(
                 id=f"EPI-{uuid.uuid4().hex[:12]}",
                 experience_id=f"EXP-GOAL-{uuid.uuid4().hex[:8]}",
                 created_at=datetime.now(timezone.utc),
                 session_id=f"tick_{self._cycle_count}",
                 context={"task_count": len(results),
-                         "kind": "goal_execution_result"},
+                         "kind": "goal_execution_result",
+                         # P2: 此前 context 无 agent 键 → 自我模型把全部
+                         # 目标归到 "?"，agent 级成功率永远失真
+                         "agent": next((r.get("agent") for r in results
+                                        if r.get("agent")), "?"),
+                         "capabilities": [{"name": k, "success": v}
+                                          for k, v in sorted(_cap_success.items())]},
                 goal="目标执行结果汇总",
                 decision="\n".join(lines)[:4000],
                 action="goal_result",
@@ -1075,6 +1246,14 @@ class AgentRuntime:
             )
             self._memory_hub.episode.save(episode)
             logger.info("Goal result episode saved (%d tasks)", len(results))
+            # UX-J 即时推送: 通知宿主（daemon）立刻推送出站消息，
+            # 不等 5-tick 节拍；回调失败不阻断主流程
+            cb = getattr(self, "_on_goal_result", None)
+            if cb is not None:
+                try:
+                    cb()
+                except Exception as cb_e:  # noqa: BLE001
+                    logger.debug("on_goal_result callback failed: %s", cb_e)
             # P4.1 (AGI 计划): 目标完成后触发技能习得 — 从最近成功 goal_result
             # episode 归纳候选技能（只读自动提交、写类待审批）。失败不阻断。
             try:
@@ -1402,13 +1581,19 @@ class AgentRuntime:
                             _res = dag_result.get("result")
                             _stdout = (_res.get("stdout", "")
                                        if isinstance(_res, dict) else "")
-                            _out = str(_stdout or dag_result)[:1600]
+                            _out = _truncate_text(
+                                str(_stdout or dag_result), 1600)
                             self._recent_results.append({
                                 "task_id": tid,
                                 "description": task.description,
                                 "agent": task.agent_type,
                                 "output": _out,
                                 "success": dag_status == "completed",
+                                # P2: bridge 能力实测标签（shell/filesystem/
+                                # None=纯认知 ANSWER），供交付物校验与自我模型归因
+                                "capability": (_res.get("capability")
+                                               if isinstance(_res, dict)
+                                               else None),
                             })
                             self._dag_cursor += 1
                             return {
@@ -1994,8 +2179,15 @@ class AgentRuntime:
                 },
             }
 
-    def _save_identity_snapshot(self) -> dict[str, Any] | None:
-        """Phase 34E: 保存 Identity Snapshot 用于跨 session 连续性验证。"""
+    def _save_identity_snapshot(self, snapshot_id: str = "runtime_identity",
+                                extra: dict[str, Any] | None = None
+                                ) -> dict[str, Any] | None:
+        """Phase 34E: 保存 Identity Snapshot 用于跨 session 连续性验证。
+
+        snapshot_id 默认 "runtime_identity"（shutdown 路径，boot 时
+        _verify_identity_continuity 消费）；周期快照传独立 id +
+        extra 成长字段（weekly_identity），两类互不覆盖。
+        """
         if self._identity_store is None:
             return None
         try:
@@ -2013,16 +2205,73 @@ class AgentRuntime:
                 "state": self._state.name,
                 "version": "1.0-Phase34",
             }
+            if extra:
+                snapshot.update(extra)
             content = str(sorted(snapshot.items()))
             snapshot["continuity_hash"] = hashlib.sha256(content.encode()).hexdigest()[:16]
 
-            self._identity_store.save_snapshot("runtime_identity", snapshot)
-            logger.info("Phase 34E: Identity snapshot saved — hash=%s, cycle=%d",
-                        snapshot["continuity_hash"], self._cycle_count)
+            self._identity_store.save_snapshot(snapshot_id, snapshot)
+            logger.info("Phase 34E: Identity snapshot saved — id=%s, hash=%s, cycle=%d",
+                        snapshot_id, snapshot["continuity_hash"], self._cycle_count)
             return snapshot
         except Exception as e:
             logger.debug("Identity snapshot save skipped: %s", e)
             return None
+
+    def save_weekly_identity_snapshot(self) -> dict[str, Any] | None:
+        """周度身份快照（数字生命·自我连续性）。
+
+        此前 identity_snapshots 仅优雅 shutdown 路径写入（L2264 附近），
+        而 systemd 下 daemon 从不优雅关闭 → 表恒空，"我是谁"的时间序列
+        缺失。改为周键幂等：每 ISO 周首次调用落一份，payload 带成长统计
+        （本周完成目标/经历数），与成长叙事周记对齐。保留最近 26 周。
+        """
+        snap = None
+        try:
+            import sqlite3
+            from datetime import datetime as _dt, timezone as _tz
+            now = _dt.now(_tz.utc)
+            iso = now.isocalendar()
+            week_key = f"{iso[0]}-W{iso[1]:02d}"
+            snapshot_id = f"weekly-{week_key}"
+            if self._identity_store is not None:
+                existing = self._identity_store.load_snapshot(snapshot_id)
+                if existing is not None:
+                    return None                     # 本周已快照（幂等）
+            stats: dict[str, Any] = {"week_key": week_key}
+            try:
+                conn = sqlite3.connect(
+                    f"file:{self._db_path}?mode=ro", uri=True)
+                try:
+                    start = _dt.fromisocalendar(iso[0], iso[1], 1).replace(
+                        hour=0, tzinfo=_tz.utc).isoformat()
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM goals WHERE status IN "
+                        "('COMPLETED','completed','DONE','done') "
+                        "AND updated_at >= ?", (start,)).fetchone()
+                    stats["goals_completed_this_week"] = int(row[0] or 0)
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM episodes WHERE created_at >= ?",
+                        (start,)).fetchone()
+                    stats["episodes_this_week"] = int(row[0] or 0)
+                finally:
+                    conn.close()
+            except sqlite3.Error as e:
+                logger.debug("weekly snapshot stats degraded: %s", e)
+            snap = self._save_identity_snapshot(snapshot_id, extra=stats)
+            # 全局保留最近 26 周（save_snapshot 的 keep-10 仅按 id 生效）
+            if snap is not None:
+                self._identity_store.connection.execute(
+                    """DELETE FROM identity_snapshots
+                       WHERE snapshot_id LIKE 'weekly-%'
+                       AND id NOT IN (SELECT id FROM identity_snapshots
+                                      WHERE snapshot_id LIKE 'weekly-%'
+                                      ORDER BY id DESC LIMIT 26)""")
+                self._identity_store.connection.commit()
+        except Exception as e:
+            logger.debug("weekly identity snapshot skipped: %s", e)
+            return None
+        return snap
 
     def _verify_identity_continuity(self) -> None:
         """Phase 34E: Boot 时验证 Identity Continuity。

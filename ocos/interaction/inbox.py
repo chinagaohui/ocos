@@ -25,17 +25,20 @@ CREATE TABLE IF NOT EXISTS user_messages (
     consumed_at  TEXT,
     note         TEXT DEFAULT '',
     reply        TEXT DEFAULT '',
-    replied_at   TEXT
+    replied_at   TEXT,
+    kind         TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_user_messages_status ON user_messages(status);
 """
 
-_COLS = "id, sender, content, status, created_at, consumed_at, note, reply, replied_at"
+_COLS = ("id, sender, content, status, created_at, consumed_at, note, "
+         "reply, replied_at, kind")
 
 
 def _row_to_dict(row) -> dict:
     keys = ["id", "sender", "content", "status",
-            "created_at", "consumed_at", "note", "reply", "replied_at"]
+            "created_at", "consumed_at", "note", "reply", "replied_at",
+            "kind"]
     return dict(zip(keys, row))
 
 
@@ -53,7 +56,7 @@ class UserInbox:
             r[1] for r in conn.execute("PRAGMA table_info(user_messages)").fetchall()
         }
         if existing:
-            for col in ("reply", "replied_at"):
+            for col in ("reply", "replied_at", "kind"):
                 if col not in existing:
                     conn.execute(f"ALTER TABLE user_messages ADD COLUMN {col} TEXT DEFAULT ''")
         conn.commit()
@@ -134,15 +137,25 @@ class UserInbox:
             time.sleep(interval)
         return self.get(mid)
 
-    def post_outbound(self, content: str) -> str:
-        """UX-J: agent 主动消息（目标执行结果自动回推对话流）。"""
+    def post_outbound(self, content: str, kind: str = "result") -> str:
+        """UX-J: agent 主动消息（outbound 回推 TUI 对话流）。
+
+        kind 分类（D1 修复 2026-09-07 — TUI 按此选面板样式）:
+          result   目标执行结果/回复（青色「目标执行结果」面板）
+          proposal 主动提议/提醒（P5.2 交互、动机通知、制动状态 —
+                   黄色「主动提议」面板）
+          report   成长叙事/生命体征日报（绿色「成长报告」面板）
+        旧库无 kind 列时由 _conn() 迁移补列；kind 随 /ocos/outbox
+        透传给 TUI，无 kind 的历史行 TUI 按 result 兜底。
+        """
         mid = f"MSG-{uuid.uuid4().hex[:8]}"
         conn = self._conn()
         conn.execute(
             """INSERT INTO user_messages
-               (id, sender, content, status, created_at)
-               VALUES (?, 'ocos', ?, 'outbound', ?)""",
-            (mid, content[:4000], datetime.now(timezone.utc).isoformat()))
+               (id, sender, content, status, created_at, kind)
+               VALUES (?, 'ocos', ?, 'outbound', ?, ?)""",
+            (mid, content[:4000], datetime.now(timezone.utc).isoformat(),
+             (kind or "result")[:16]))
         conn.commit()
         return mid
 

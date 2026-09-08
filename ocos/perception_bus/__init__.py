@@ -257,6 +257,18 @@ class EventBus:
             payload={"endpoint": endpoint, "data": data},
         ))
 
+    def push_stimulus(self, stim: dict) -> CognitiveEvent:
+        """V3 感知-反应（2026-09-07）: 推送 StimulusScanner 环境刺激。
+
+        stim: {key, severity(low/high/critical), description, evidence}
+        severity 经 payload 传入，由 EventNormalizer 评估（RawEvent 无
+        severity 字段 — 严重性在归一化阶段定级）。
+        """
+        return self.push(RawEvent(
+            source=EventSource.SYSTEM,
+            payload={"stimulus": stim,
+                     "severity_hint": str(stim.get("severity", "low"))}))
+
     # ── Ingest (step 1 pulls) ──
 
     def ingest(self, max_events: int = 10) -> list[CognitiveEvent]:

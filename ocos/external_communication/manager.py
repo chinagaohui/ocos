@@ -1,5 +1,11 @@
 """Phase AK: ExternalCommunicationManager — 外部通信通道管理器。
 
+L2 沉睡支线归档（2026-09-07, 升级方案 v1.0 §L2）:
+    dormant=true — 全仓零生产引用。出站多通道职责由
+    ocos/interaction/channel.py（ExternalInteraction）+ ocos/daemon/
+    channel_link.py（OutboundChannelLink, L2-3 已上电）承担；
+    本包 MQTT/EMAIL/PUSH 等重型通道待真实需求出现再评估上电。
+
 整合多种通信通道，实现统一的外部通信层：
 - WebSocket 通道：实时双向通信
 - HTTP/REST 通道：标准 RESTful API

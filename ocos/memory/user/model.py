@@ -6,16 +6,21 @@ Freeze Phase 47: 记录用户偏好、习惯、人际关系、近期关注
 
 from __future__ import annotations
 import json
+import sqlite3
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# O-4: update_profile 对集合字段做合并而非整体替换
+_MERGE_DICT_FIELDS = frozenset({"preferences", "relationships", "habits", "context"})
+_MERGE_LIST_FIELDS = frozenset({"interests", "recent_focus"})
+
 
 @dataclass
 class UserProfile:
-    """用户画像 — 不可变快照， mutable 通过更新方法."""
+    """用户画像 — 经 UserMemory 的更新方法变更并持久化."""
     user_id: str
     name: str = ""
     description: str = ""           # 一句话描述用户
@@ -49,9 +54,14 @@ class UserMemoryStore:
         self._lock = threading.RLock()
         self._init_db()
 
+    def _connect(self) -> sqlite3.Connection:
+        """O-6: 统一连接入口 — busy_timeout 缓解并发写下的 locked 错误."""
+        conn = sqlite3.connect(self._path, timeout=10.0)
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
+
     def _init_db(self) -> None:
-        import sqlite3
-        conn = sqlite3.connect(self._path)
+        conn = self._connect()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS user_profiles (
                 user_id TEXT PRIMARY KEY,
@@ -70,20 +80,26 @@ class UserMemoryStore:
                 FOREIGN KEY (user_id) REFERENCES user_profiles(user_id)
             )
         """)
+        # O-6: WAL 与全仓 memory 层一致, 缓解并发读写下的 database is locked
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.commit()
         conn.close()
 
     def save(self, profile: UserProfile) -> bool:
-        import sqlite3
         with self._lock:
-            conn = sqlite3.connect(self._path)
+            conn = self._connect()
             try:
                 snapshot = json.dumps(profile.__dict__, default=str, ensure_ascii=False)
+                row = conn.execute(
+                    "SELECT version FROM user_profiles WHERE user_id = ?",
+                    (profile.user_id,),
+                ).fetchone()
+                version = (row[0] + 1) if row else 1  # O-9: 版本递增而非恒 1
                 conn.execute(
                     """INSERT OR REPLACE INTO user_profiles
                        (user_id, snapshot, version, updated_at)
                        VALUES (?, ?, ?, ?)""",
-                    (profile.user_id, snapshot, 1, profile.updated_at),
+                    (profile.user_id, snapshot, version, profile.updated_at),
                 )
                 conn.commit()
                 return True
@@ -91,24 +107,26 @@ class UserMemoryStore:
                 conn.close()
 
     def load(self, user_id: str) -> UserProfile | None:
-        import sqlite3
         with self._lock:
-            conn = sqlite3.connect(self._path)
+            conn = self._connect()
             try:
                 row = conn.execute(
                     "SELECT snapshot FROM user_profiles WHERE user_id = ?",
                     (user_id,),
                 ).fetchone()
                 if row:
-                    return UserProfile(**json.loads(row[0]))
+                    # O-5: 旧快照含已删字段/缺新字段时按现有字段过滤,
+                    # 缺失字段走默认值, 避免 schema 演进导致画像不可恢复加载
+                    data = json.loads(row[0])
+                    known = {f.name for f in fields(UserProfile)}
+                    return UserProfile(**{k: v for k, v in data.items() if k in known})
                 return None
             finally:
                 conn.close()
 
     def append_event(self, user_id: str, event_type: str, payload: dict) -> None:
-        import sqlite3
         with self._lock:
-            conn = sqlite3.connect(self._path)
+            conn = self._connect()
             try:
                 conn.execute(
                     """INSERT INTO memory_events
@@ -122,9 +140,8 @@ class UserMemoryStore:
                 conn.close()
 
     def get_events(self, user_id: str, limit: int = 20) -> list[dict]:
-        import sqlite3
         with self._lock:
-            conn = sqlite3.connect(self._path)
+            conn = self._connect()
             try:
                 rows = conn.execute(
                     """SELECT event_type, payload, created_at
@@ -175,14 +192,17 @@ class UserMemory:
             if self._profile is None:
                 self._profile = UserProfile.create("default")
             for key, value in kwargs.items():
-                if hasattr(self._profile, key):
+                if not hasattr(self._profile, key):
+                    continue
+                # O-4: 集合字段合并而非整体替换——原实现的合并分支不可达
+                # (dataclass 字段 hasattr 恒 True), 单键更新会清空其余偏好
+                if key in _MERGE_DICT_FIELDS and isinstance(value, dict):
+                    getattr(self._profile, key).update(value)
+                elif key in _MERGE_LIST_FIELDS and isinstance(value, list):
+                    current = getattr(self._profile, key)
+                    current.extend(v for v in value if v not in current)
+                else:
                     setattr(self._profile, key, value)
-                elif key in ("preferences", "interests", "relationships"):
-                    current = getattr(self._profile, key, {})
-                    if isinstance(current, dict):
-                        current.update(value)
-                    else:
-                        setattr(self._profile, key, value)
             self._profile.updated_at = datetime.now(timezone.utc).isoformat()
             self._store.save(self._profile)
             return self._profile

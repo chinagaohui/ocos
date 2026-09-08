@@ -1,5 +1,11 @@
 """Phase AF: ProactiveEngagementManager — 主动参与管理器。
 
+L2 沉睡支线归档（2026-09-07, 升级方案 v1.0 §L2）:
+    dormant=true（manager 本体）— 参与度信号链路已由 ocos/engagement/
+    signals.py（L2-2 已上电）+ ocos/daemon/active_interaction.py 承担；
+    本管理器的请求状态机与 signals 单向数据流重复，且其审批语义与
+    pending_actions 审批体系不同源。保留纯内存实现备查，不上生产线。
+
 整合 ProactiveOutput + TrueInitiative + ProactiveEngine，
 提供统一的主动参与接口：
 - 主动性决策（基于记忆召回/空闲检测/模式变化）

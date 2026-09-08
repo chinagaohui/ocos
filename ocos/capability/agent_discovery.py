@@ -15,11 +15,14 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -67,7 +70,7 @@ def default_agents_spec() -> list[dict[str, Any]]:
          "cli_candidates": ["claude"],
          "version_flags": ["--version"]},
         {"name": "opentale", "kind": "cli",
-         "cli_candidates": ["opentale", "ln"],
+         "cli_candidates": ["opentale"],
          "version_flags": ["--version", "version"]},
         {"name": "gemini", "kind": "cli",
          "cli_candidates": ["gemini"],
@@ -79,6 +82,16 @@ def default_agents_spec() -> list[dict[str, Any]]:
 
 class AgentDiscovery:
     """智能体软件自动分析器 — 确定性探查本机可用智能体软件。"""
+
+    # 防御: 智能体候选名不得命中系统核心工具 — 曾有 spec 把 "ln" 列为
+    # opentale 的候选，which 永远命中 /usr/bin/ln（coreutils），导致
+    # ① 未安装的智能体被误判 available=True；② 核心工具路径被动态放行
+    # 进沙盒；③ 保真闸门强制执行不存在的命令名（127 失败循环）。
+    _CORE_TOOL_BLACKLIST = frozenset({
+        "ln", "cp", "mv", "ls", "cat", "rm", "sh", "bash", "echo",
+        "grep", "find", "sed", "awk", "chmod", "chown", "dd", "df",
+        "du", "pwd", "touch", "mkdir", "rmdir", "tar",
+    })
 
     def __init__(
         self,
@@ -152,6 +165,11 @@ class AgentDiscovery:
         flags = spec.get("version_flags", ["--version"])
 
         for cand in candidates:
+            if cand in self._CORE_TOOL_BLACKLIST:
+                logger.warning(
+                    "AgentDiscovery: 候选名 %r 命中系统核心工具黑名单，跳过"
+                    "（防误判 available / 防核心工具被放行）", cand)
+                continue
             path = shutil.which(cand)
             if not path:
                 continue

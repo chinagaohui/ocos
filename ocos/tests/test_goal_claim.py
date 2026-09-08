@@ -134,6 +134,7 @@ class TestClaimMechanism:
         rt._runtime._goal_store.initialize()
         rt._goal_store = rt._runtime._goal_store
         rt._goal_processed = 0
+        rt._user_inbox = None   # 认领 progress 出站通道（2026-09-08 可见性）
         rt._domain_goal_store = __import__(
             "ocos.goal.store", fromlist=["GoalStore"]).GoalStore(db_path=db)
 
@@ -172,3 +173,196 @@ class TestClaimMechanism:
         # development 模板: 设计架构(create)/实现代码(execute)/测试验证(verify)
         descs = [t.description for t in runtime._active_dag.tasks.values()]
         assert any("设计架构" in d for d in descs)
+
+
+def _save_approved_self_goal(db: str, gid: str = "GOAL-AUTO-test1",
+                             approved: bool = True) -> None:
+    """模拟 autonomous_goal_sink 落库（approvals.py / factory.py 同款）。"""
+    from ocos.goal.store import GoalStore
+    GoalStore(db_path=db).save(
+        goal_id=gid, level="TASK", status="PENDING",
+        description="只读探测：验证信念", source="autonomous",
+        metadata={"autonomous": True, "kind": "probe",
+                  "approved": approved},
+        origin_level="SELF", authority="AUTONOMOUS")
+
+
+class TestClaimApprovedSelfGoals:
+    """V1 闭环最后一环 — 批准后的自主目标（SELF/PENDING）必须可认领。
+
+    缺陷史: 此前唯一认领通道 claim_pending_human 只认 origin_level='HUMAN'，
+    autonomous_goal_sink 落库的 SELF 目标永久滞留 PENDING（生产 5 条实证）。
+    """
+
+    def test_approved_self_goal_claimable(self, db):
+        from ocos.goal.store import GoalStore
+        _save_approved_self_goal(db)
+        store = GoalStore(db_path=db)
+        claimed = store.claim_pending_approved_self(limit=1)
+        assert len(claimed) == 1
+        assert claimed[0]["id"] == "GOAL-AUTO-test1"
+        # 原子性 — 二次认领为空
+        assert store.claim_pending_approved_self(limit=1) == []
+        assert store.load("GOAL-AUTO-test1")["status"] == "ACTIVE"
+
+    def test_unapproved_self_goal_not_claimable(self, db):
+        from ocos.goal.store import GoalStore
+        _save_approved_self_goal(db, "GOAL-AUTO-nope", approved=False)
+        store = GoalStore(db_path=db)
+        assert store.claim_pending_approved_self(limit=1) == []
+        assert store.load("GOAL-AUTO-nope")["status"] == "PENDING"
+
+    def test_human_claim_untouched_by_self_channel(self, db):
+        from ocos.goal.store import GoalStore
+        _create_goal_via_store(db)
+        store = GoalStore(db_path=db)
+        assert store.claim_pending_approved_self(limit=1) == []
+        assert len(store.claim_pending_human(limit=1)) == 1
+
+    def test_daemon_claims_self_goal_at_level1(self, db, monkeypatch):
+        """daemon 认领链: LEVEL>=1 时 SELF 目标经 fallback 认领入 runtime。"""
+        import types
+        _save_approved_self_goal(db)
+        # 钉死级别=1（覆盖文件优先级最高 — 隔离宿主机 ~/.ocos/autonomy_level）
+        override = db + ".level"
+        with open(override, "w") as f:
+            f.write("1")
+        monkeypatch.setenv("OCOS_AUTONOMY_OVERRIDE", override)
+
+        from ocos.daemon import ResidentRuntime
+        from ocos.agent.goal_store import GoalSQLiteStore
+        rt = ResidentRuntime.__new__(ResidentRuntime)
+        rt._runtime = types.SimpleNamespace(_goal_store=GoalSQLiteStore(db))
+        rt._runtime._goal_store.initialize()
+        rt._goal_store = rt._runtime._goal_store
+        rt._goal_processed = 0
+        rt._autonomous_inflight = []
+        rt._user_inbox = None   # 认领 progress 出站通道（2026-09-08 可见性）
+        rt._domain_goal_store = __import__(
+            "ocos.goal.store", fromlist=["GoalStore"]).GoalStore(db_path=db)
+
+        n = rt._claim_persisted_goals()
+        assert n == 1
+        assert rt._goal_processed == 1
+        # autonomous 目标入在途队列（防跑飞配对）
+        assert "GOAL-AUTO-test1" in rt._autonomous_inflight
+        assert rt._goal_store.load("GOAL-AUTO-test1") is not None
+
+    def test_daemon_skips_self_goal_at_level0(self, db, monkeypatch):
+        """LEVEL=0 = 只执行用户目标 — 批准过的 SELF 目标也不认领。"""
+        import types
+        _save_approved_self_goal(db)
+        override = db + ".level0"
+        with open(override, "w") as f:
+            f.write("0")
+        monkeypatch.setenv("OCOS_AUTONOMY_OVERRIDE", override)
+
+        from ocos.daemon import ResidentRuntime
+        from ocos.agent.goal_store import GoalSQLiteStore
+        rt = ResidentRuntime.__new__(ResidentRuntime)
+        rt._runtime = types.SimpleNamespace(_goal_store=GoalSQLiteStore(db))
+        rt._runtime._goal_store.initialize()
+        rt._goal_store = rt._runtime._goal_store
+        rt._goal_processed = 0
+        rt._autonomous_inflight = []
+        rt._user_inbox = None   # 认领 progress 出站通道（2026-09-08 可见性）
+        rt._domain_goal_store = __import__(
+            "ocos.goal.store", fromlist=["GoalStore"]).GoalStore(db_path=db)
+
+        assert rt._claim_persisted_goals() == 0
+        assert rt._goal_store.load("GOAL-AUTO-test1") is None
+        assert rt._domain_goal_store.load("GOAL-AUTO-test1")["status"] == "PENDING"
+
+    def test_daemon_claims_unapproved_self_goal_at_level2(self, db, monkeypatch):
+        """LEVEL=2 低风险自主执行 — goals_table 直写提案（无 approved
+        标记）可直接认领，无需批准环节。"""
+        import types
+        from ocos.goal.store import GoalStore
+        # 模拟 motivation._propose LEVEL>=2 直写（metadata 无 approved 键）
+        GoalStore(db_path=db).save(
+            goal_id="GOAL-AUTO-lv2", level="TASK", status="PENDING",
+            description="只读探测：宿主机", source="autonomous",
+            metadata={"autonomous": True, "kind": "probe", "score": 0.9},
+            origin_level="SELF", authority="AUTONOMOUS")
+        override = db + ".level2"
+        with open(override, "w") as f:
+            f.write("2")
+        monkeypatch.setenv("OCOS_AUTONOMY_OVERRIDE", override)
+
+        from ocos.daemon import ResidentRuntime
+        from ocos.agent.goal_store import GoalSQLiteStore
+        rt = ResidentRuntime.__new__(ResidentRuntime)
+        rt._runtime = types.SimpleNamespace(_goal_store=GoalSQLiteStore(db))
+        rt._runtime._goal_store.initialize()
+        rt._goal_store = rt._runtime._goal_store
+        rt._goal_processed = 0
+        rt._autonomous_inflight = []
+        rt._user_inbox = None   # 认领 progress 出站通道（2026-09-08 可见性）
+        rt._domain_goal_store = __import__(
+            "ocos.goal.store", fromlist=["GoalStore"]).GoalStore(db_path=db)
+
+        assert rt._claim_persisted_goals() == 1
+        assert "GOAL-AUTO-lv2" in rt._autonomous_inflight
+
+
+class TestAutoApprovalPump:
+    """全自动模式（OCOS_APPROVAL_MODE=auto）: daemon 每 tick 清空待批队列。
+
+    用户决策 2026-09-07: 个人使用不审批、全自动通过。泵走与人工批准
+    同一条溯源通道（decide(decided_by=auto) → execute_approved →
+    mark_executed），ask 模式下零开销空转。
+    """
+
+    def _make_daemon(self, db: str):
+        import types
+        from ocos.execution.bridge import DecisionBridge
+        from ocos.execution.pending import PendingStore
+        from ocos.daemon import ResidentRuntime
+
+        store = PendingStore(db_path=db)
+        sunk: list[dict] = []
+        bridge = DecisionBridge(
+            pending_store=store, db_path=db,
+            autonomous_goal_sink=lambda p: sunk.append(p))
+        bridge.attach_default_handlers()
+
+        rt = ResidentRuntime.__new__(ResidentRuntime)
+        rt._runtime = types.SimpleNamespace(_decision_bridge=bridge)
+        return rt, store, sunk
+
+    def test_pump_auto_approves_and_executes(self, db, monkeypatch):
+        monkeypatch.setenv("OCOS_APPROVAL_MODE", "auto")
+        rt, store, sunk = self._make_daemon(db)
+        pid = store.enqueue(
+            action_type="autonomous_goal", target="autonomous_goal",
+            payload={"goal_id": "GOAL-AUTO-pump1",
+                     "description": "只读探测：泵验证", "kind": "probe"},
+            text="自主目标提案", source="motivation")
+
+        n = rt._auto_approve_pending()
+        assert n == 1
+        row = store.get(pid)
+        assert row["status"] == "executed"
+        assert row["decided_by"] == "auto"
+        # autonomous_goal sink 被真实调用 → 目标落库（后续由认领通道消费）
+        assert sunk and sunk[0]["goal_id"] == "GOAL-AUTO-pump1"
+
+    def test_pump_noop_in_ask_mode(self, db, monkeypatch):
+        monkeypatch.setenv("OCOS_APPROVAL_MODE", "ask")
+        rt, store, sunk = self._make_daemon(db)
+        store.enqueue(action_type="autonomous_goal", target="",
+                      payload={"goal_id": "G1", "description": "x"})
+        assert rt._auto_approve_pending() == 0
+        assert sunk == []
+        assert store.list_by_status("pending")
+
+    def test_pump_marks_blocked_honestly(self, db, monkeypatch):
+        """无执行器的动作类型 → approved 但 blocked（诚实记录，不假装成功）。"""
+        monkeypatch.setenv("OCOS_APPROVAL_MODE", "auto")
+        rt, store, _sunk = self._make_daemon(db)
+        pid = store.enqueue(action_type="no_such_handler", target="",
+                            payload={})
+        rt._auto_approve_pending()
+        row = store.get(pid)
+        assert row["status"] == "blocked"
+        assert row["decided_by"] == "auto"

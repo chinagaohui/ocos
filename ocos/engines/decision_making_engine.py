@@ -90,10 +90,15 @@ class DecisionMakingEngine:
         self,
         event_bus: EventBus,
         working_memory: WorkingMemory,
+        memory_store: Any | None = None,
+        text_generator: Any | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._wm = working_memory
         self._traces: dict[str, DecisionMakingTrace] = {}
+        # L1: 可选注入 — 缺省时懒加载（生产路径 get_text_generator 缓存）
+        self._memory_store = memory_store
+        self._text_generator = text_generator
         logger.debug("__init__ completed", component="decision_making_engine")
 
     def __repr__(self) -> str:
@@ -166,7 +171,9 @@ class DecisionMakingEngine:
         ))
 
         return RuntimeResult(
-            success=not errors,
+            # L1 诚实降级语义: fallback（维度投票等）产出有效决策 → success=True，
+            # 降级事实保留在 trace.error 与 message，不把降级伪装成失败
+            success=bool(selected_id),
             message=f"Decision made: {selected_id} via {strat.value}"
                      + (f", errors: {errors}" if errors else ""),
             trace_id=trace.trace_id,
@@ -251,6 +258,9 @@ class DecisionMakingEngine:
         if not options:
             return [], "", "No options provided", ["no options"]
 
+        errors: list[str] = []
+        rationale = ""
+
         # 根据策略选择
         if strat == DecisionStrategy.SCORING:
             selected = max(options, key=lambda o: o.total_score)
@@ -262,16 +272,20 @@ class DecisionMakingEngine:
                     rank=i + 1, is_selected=(i == 0),
                 )
             selected = sorted_opts[0]
-        elif strat == DecisionStrategy.MAJORITY:
-            selected = max(options, key=lambda o: o.total_score)
         elif strat == DecisionStrategy.SATISFICING:
             threshold = context.get("threshold", 5.0)
             selected = next((o for o in options if o.total_score >= threshold), options[0])
-        elif strat == DecisionStrategy.OPPORTUNITY_COST:
-            selected = max(options, key=lambda o: o.total_score)
-        elif strat == DecisionStrategy.PARETO:
-            # 简单实现：选总分最高的
-            selected = max(options, key=lambda o: o.total_score)
+        elif strat in (DecisionStrategy.MAJORITY,
+                       DecisionStrategy.OPPORTUNITY_COST,
+                       DecisionStrategy.PARETO):
+            # L1 真实化: 真分支优先，降级保留确定性选择（诚实标注 degraded）
+            try:
+                selected, rationale = self._real_select(strat, options, context)
+            except Exception as e:
+                logger.warning("real decision unavailable (%s), degraded: %s",
+                               strat.value, e)
+                selected, rationale = self._fallback_select(strat, options)
+                errors.append(f"degraded: {e}")
         else:
             selected = options[0]
 
@@ -282,8 +296,260 @@ class DecisionMakingEngine:
             total_score=selected.total_score, rank=1, is_selected=True,
         )
 
-        rationale = f"{strat.value}: selected '{selected.label}' (score={selected.total_score:.1f})"
-        return options, options[selected_idx].option_id, rationale, []
+        rationale = (rationale or
+                     f"{strat.value}: selected '{selected.label}' "
+                     f"(score={selected.total_score:.1f})")
+        return options, options[selected_idx].option_id, rationale, errors
+
+    # ── L1 真实化: 三策略真分支 / 降级 ──────────────────────────────────
+
+    # 这些维度数值越低越好（Pareto/多数投票/效用计算时取负向）
+    _LOWER_IS_BETTER = {"cost", "risk", "effort", "latency", "time", "expense"}
+    DEFAULT_WEIGHTS = {"quality": 1.0, "cost": 0.5, "risk": 0.3}
+
+    @classmethod
+    def _utility(
+        cls,
+        o: DecisionOption,
+        weights: dict[str, float],
+    ) -> float:
+        """方向感知加权效用 — 负向维度（cost/risk 等）取反。"""
+        return sum(
+            v * weights.get(d, 1.0)
+            * (-1.0 if d.lower() in cls._LOWER_IS_BETTER else 1.0)
+            for d, v in o.scores.items()
+        )
+
+    def _real_select(
+        self,
+        strat: DecisionStrategy,
+        options: list[DecisionOption],
+        context: dict[str, Any],
+    ) -> tuple[DecisionOption, str]:
+        """三策略真分支。
+
+        Raises:
+            Exception: LLM/记忆不可用或数据不足（调用方降级）
+        """
+        weights = context.get("weights", self.DEFAULT_WEIGHTS)
+        if strat == DecisionStrategy.MAJORITY:
+            return self._select_by_majority(options, weights)
+        if strat == DecisionStrategy.OPPORTUNITY_COST:
+            return self._select_by_opportunity_cost(options, weights)
+        return self._select_by_pareto(options, weights)
+
+    # ── MAJORITY: LLM 三评审（质量/成本/风险）投票 ──────────────────────
+
+    def _select_by_majority(
+        self,
+        options: list[DecisionOption],
+        weights: dict[str, float],
+    ) -> tuple[DecisionOption, str]:
+        votes = self._llm_majority_votes(options)
+        tally: dict[str, int] = {}
+        for v in votes:
+            tally[v] = tally.get(v, 0) + 1
+        max_votes = max(tally.values())
+        tied = [o for o in options if tally.get(o.label, 0) == max_votes]
+        selected = max(tied, key=lambda o: self._utility(o, weights))
+        rationale = (
+            f"majority: 评审投票 {tally} → '{selected.label}'"
+            + ("（平票以方向感知效用决胜）" if len(tied) > 1 else "")
+        )
+        return selected, rationale
+
+    def _llm_majority_votes(self, options: list[DecisionOption]) -> list[str]:
+        """LLM 三评审投票，返回有效票 label 列表。
+
+        Raises:
+            Exception: LLM 不可用或有效票不足
+        """
+        import asyncio
+
+        if self._text_generator is None:
+            from ocos.engines.text_generator import get_text_generator
+            self._text_generator = get_text_generator()
+        provider = self._text_generator.provider
+        if not getattr(provider, "available", False):
+            raise RuntimeError("LLM provider unavailable")
+
+        opts_block = "\n".join(
+            f"- {o.label}: 维度分 {o.scores}（加权总分 {o.total_score}）"
+            for o in options
+        )
+        prompt = (
+            "对以下候选选项进行三方评审投票：质量官（重 quality）、"
+            "成本官（重 cost，越低越好）、风险官（重 risk，越低越好）。\n"
+            f"候选:\n{opts_block}\n\n"
+            "每人投一票给最推荐的选项，输出 3 行，格式严格为:\n"
+            "VOTE|<选项label>\n不要输出解释。"
+        )
+        raw = asyncio.run(provider.generate(
+            prompt,
+            system_prompt="你是 OCOS 的决策引擎。只输出 VOTE 行。",
+            temperature=0.2, max_tokens=200))
+        labels = {o.label for o in options if o.label}
+        votes: list[str] = []
+        for line in raw.splitlines():
+            line = line.strip().strip("`")
+            if line.startswith("VOTE|"):
+                v = line.split("|", 1)[1].strip()
+                if v in labels:
+                    votes.append(v)
+        if len(votes) < 2:
+            raise RuntimeError(f"LLM 有效票不足（{len(votes)}<2）")
+        return votes
+
+    # ── OPPORTUNITY_COST: episode 历史成功率 × 期望收益 ─────────────────
+
+    def _select_by_opportunity_cost(
+        self,
+        options: list[DecisionOption],
+        weights: dict[str, float],
+    ) -> tuple[DecisionOption, str]:
+        rates, global_rate = self._episode_success_rates(options)
+        evs: list[tuple[DecisionOption, float, float]] = []
+        for o in options:
+            rate = rates.get(o.label, global_rate)
+            utility = self._utility(o, weights)
+            evs.append((o, utility * rate, rate))
+        best = max(evs, key=lambda x: x[1])
+        alternatives = [x for x in evs if x[0] is not best[0]]
+        alt = max(alternatives, key=lambda x: x[1]) if alternatives else None
+        opportunity_cost = (best[1] - alt[1]) if alt else 0.0
+        rate_detail = "、".join(
+            f"{o.label}成功率 {r:.2f}" for o, _, r in evs) or "无历史"
+        rationale = (
+            f"opportunity_cost: 选用 '{best[0].label}' "
+            f"(EV={best[1]:.2f} = 效用 {self._utility(best[0], weights):.2f} "
+            f"× 成功率 {best[2]:.2f})，"
+            f"放弃 '{alt[0].label}' (EV={alt[1]:.2f})，"
+            f"机会成本差 {opportunity_cost:.2f}；[{rate_detail}]"
+            if alt else
+            f"opportunity_cost: 选用 '{best[0].label}' (EV={best[1]:.2f})；[{rate_detail}]"
+        )
+        return best[0], rationale
+
+    def _episode_success_rates(
+        self,
+        options: list[DecisionOption],
+    ) -> tuple[dict[str, float], float]:
+        """从 episode 记忆估计每个选项的历史成功率。
+
+        Returns:
+            (按选项匹配的成功率, 全局成功率)
+
+        Raises:
+            Exception: 记忆库不可用或可判成功与否的样本不足
+        """
+        if self._memory_store is None:
+            raise RuntimeError("memory_store unavailable")
+        episodes = self._memory_store.query_by_time(limit=100)
+
+        def _ok(ep: Any) -> bool | None:
+            outcome = getattr(ep, "outcome", None)
+            if isinstance(outcome, dict) and isinstance(outcome.get("success"), bool):
+                return outcome["success"]
+            return None
+
+        samples = [(ep, _ok(ep)) for ep in episodes]
+        usable = [(ep, s) for ep, s in samples if s is not None]
+        if len(usable) < 3:
+            raise RuntimeError(
+                f"episode 成功样本不足（{len(usable)}<3），无法估计期望收益")
+        global_rate = sum(1 for _, s in usable if s) / len(usable)
+
+        rates: dict[str, float] = {}
+        for o in options:
+            label = (o.label or "").strip()
+            tokens = [t for t in label.replace("：", " ").replace(":", " ").split()
+                      if len(t) >= 2]
+            matched: list[bool] = []
+            for ep, s in usable:
+                text = " ".join(filter(None, (
+                    getattr(ep, "goal", "") or "",
+                    getattr(ep, "decision", "") or "",
+                    getattr(ep, "action", "") or "",
+                )))
+                if (label and label in text) or any(t in text for t in tokens):
+                    matched.append(s)
+            if len(matched) >= 3:
+                rates[o.label] = sum(1 for s in matched if s) / len(matched)
+        return rates, global_rate
+
+    # ── PARETO: 真实非支配排序（纯计算，无 LLM 依赖）────────────────────
+
+    def _select_by_pareto(
+        self,
+        options: list[DecisionOption],
+        weights: dict[str, float],
+    ) -> tuple[DecisionOption, str]:
+        dims = sorted({d for o in options for d in o.scores})
+        if not dims:
+            raise RuntimeError("no score dimensions for pareto")
+
+        def vec(o: DecisionOption) -> tuple[float, ...]:
+            # 越低越好的维度取负，统一为“越大越好”
+            return tuple(
+                o.scores.get(d, 0.0) * (-1.0 if d.lower() in self._LOWER_IS_BETTER else 1.0)
+                for d in dims
+            )
+
+        vecs = {o.option_id: vec(o) for o in options}
+        front: list[DecisionOption] = []
+        for o in options:
+            v = vecs[o.option_id]
+            dominated = any(
+                all(w >= z for w, z in zip(vecs[q.option_id], v))
+                and any(w > z for w, z in zip(vecs[q.option_id], v))
+                for q in options if q.option_id != o.option_id
+            )
+            if not dominated:
+                front.append(o)
+        if not front:
+            raise RuntimeError("pareto front empty（异常）")
+        # 非支配前沿内以方向感知效用决胜
+        selected = max(front, key=lambda o: self._utility(o, weights))
+        rationale = (
+            f"pareto: 非支配前沿 {[o.label for o in front]}，"
+            f"前沿内效用最高 '{selected.label}' "
+            f"(utility={self._utility(selected, weights):.2f})"
+        )
+        return selected, rationale
+
+    # ── 降级分支（确定性，诚实标注）─────────────────────────────────────
+
+    def _fallback_select(
+        self,
+        strat: DecisionStrategy,
+        options: list[DecisionOption],
+    ) -> tuple[DecisionOption, str]:
+        """降级选择 — 不依赖 LLM/记忆库的确定性逻辑。"""
+        weights = self.DEFAULT_WEIGHTS
+        if strat == DecisionStrategy.MAJORITY:
+            # 维度多数投票：每个维度最优者得一票，票多者当选（平票以效用决胜）
+            dims = sorted({d for o in options for d in o.scores})
+            tally: dict[str, int] = {}
+            for d in dims:
+                lower = d.lower() in self._LOWER_IS_BETTER
+                best = (min if lower else max)(
+                    options, key=lambda o: o.scores.get(d, 0.0))
+                tally[best.label] = tally.get(best.label, 0) + 1
+            max_votes = max(tally.values()) if tally else 0
+            tied = [o for o in options if tally.get(o.label, 0) == max_votes] or options
+            selected = max(tied, key=lambda o: self._utility(o, weights))
+            return selected, (
+                f"[degraded:majority] 维度投票 {tally} → '{selected.label}'")
+        if strat == DecisionStrategy.OPPORTUNITY_COST:
+            # 无历史数据 → 期望收益退化为方向感知效用
+            selected = max(options, key=lambda o: self._utility(o, weights))
+            return selected, (
+                f"[degraded:opportunity_cost] 无历史成功率数据，"
+                f"退化为方向感知效用 → '{selected.label}'")
+        # PARETO 真分支为纯计算，仅维度缺失才会到此
+        selected = max(options, key=lambda o: self._utility(o, weights))
+        return selected, (
+            f"[degraded:pareto] 无有效评分维度，退化为方向感知效用 → '{selected.label}'")
 
 
 # ── 便利函数 ────────────────────────────────────────────────────────────────

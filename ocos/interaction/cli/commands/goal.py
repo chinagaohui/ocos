@@ -5,6 +5,28 @@ from __future__ import annotations
 from ocos.goal.models import GoalDomain, GoalStatus
 from ocos.interaction.base import GoalRequest, InteractionSession, PermissionGuard
 
+# UX-J+: 域关键词推断 — 此前 --domain 默认硬编码 writing，系统分析类
+# 任务全部被标为 writing（域调度/统计失真）。显式传参仍优先。
+# 优先序: research（调研/趋势是任务性质信号）> writing > analysis。
+_DOMAIN_HINTS: list[tuple[GoalDomain, tuple[str, ...]]] = [
+    (GoalDomain.RESEARCH, ("调研", "研究", "趋势", "市场", "对比", "综述",
+                           "评估")),
+    (GoalDomain.WRITING, ("写", "创作", "小说", "文章", "文案", "草稿",
+                          "剧本", "大纲", "章节")),
+    (GoalDomain.ANALYSIS, ("分析", "系统", "监控", "磁盘", "内存", "cpu",
+                           "负载", "状态", "排查", "健康", "宿主", "扫描",
+                           "发现", "检查", "统计", "总结", "复盘", "学习")),
+]
+
+
+def infer_domain(description: str) -> GoalDomain:
+    """按描述关键词推断目标域（调研 > 写作 > 分析 > 默认开发）。"""
+    text = (description or "").lower()
+    for domain, words in _DOMAIN_HINTS:
+        if any(w in text for w in words):
+            return domain
+    return GoalDomain.DEVELOPMENT
+
 
 def cmd_goal_create(args, session: InteractionSession) -> int:
     """ocos goal create "description" [--domain writing] [--priority 3]
@@ -18,8 +40,9 @@ def cmd_goal_create(args, session: InteractionSession) -> int:
         print(f"Permission denied: {', '.join(result.violations)}")
         return 1
 
-    # 2. 构建 GoalRequest
-    domain = GoalDomain(args.domain)
+    # 2. 构建 GoalRequest（--domain 缺省时按描述关键词推断）
+    domain = GoalDomain(args.domain) if args.domain else infer_domain(
+        args.input)
     try:
         req = GoalRequest.create(
             raw_input=args.input,
@@ -53,7 +76,7 @@ def cmd_goal_create(args, session: InteractionSession) -> int:
         source=goal.caller,
         origin_level="HUMAN",   # caller="cli" 白名单 → 人类来源目标
         authority="FRAMEWORK",
-        metadata={"domain": args.domain},  # UX-1: daemon 认领时按域分解
+        metadata={"domain": domain.value},  # UX-1: daemon 认领时按域分解
     )
     db_path = resolve_db_path()
 

@@ -77,16 +77,24 @@ def register_planning_strategy(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class PlanningEngine:
-    """规划引擎 — 为 ProcessType.PLANNING 提供规划能力。"""
+    """规划引擎 — 为 ProcessType.PLANNING 提供规划能力。
+
+    L1 真实化（升级方案）:
+      - _real_plan:     复用 bridge 已验证的 LLM 规划链（同款提示词格式
+                        STEP|<步骤>|<工作量>），Engine 只做格式转换与校验
+      - _fallback_plan: 固定步数模板降级（诚实标注 degraded）
+    """
 
     def __init__(
         self,
         event_bus: EventBus,
         working_memory: WorkingMemory,
+        text_generator: Any | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._wm = working_memory
         self._traces: dict[str, PlanningTrace] = {}
+        self._text_generator = text_generator
         logger.debug("__init__ completed", component="planning_engine")
 
     def __repr__(self) -> str:
@@ -162,7 +170,10 @@ class PlanningEngine:
         ))
 
         return RuntimeResult(
-            success=not errors,
+            # L1 诚实降级语义: fallback 模板产出仍是有效规划 → success=True，
+            # 降级事实保留在 trace.error 与 message（"degraded: ..."），
+            # 不把降级伪装成失败（降级 ≠ 失败）
+            success=bool(steps),
             message=f"Planning complete: {len(steps)} steps with {strat.value} strategy"
                      + (f", errors: {errors}" if errors else ""),
             trace_id=trace.trace_id,
@@ -220,16 +231,87 @@ class PlanningEngine:
             except Exception as e:
                 return [], 0, [str(e)]
 
-        # 内置规划策略
-        return self._default_plan(strat, process, inputs)
+        # 内置规划策略 — L1 真实化: 真分支优先，降级保留模板
+        try:
+            steps, total_effort = self._real_plan(strat, process, inputs)
+            return steps, total_effort, []
+        except Exception as e:
+            logger.warning("real planning unavailable, degraded: %s", e)
+            steps, total_effort = self._fallback_plan(strat, process, inputs)
+            return steps, total_effort, [f"degraded: {e}"]
 
-    def _default_plan(
+    # ── L1 真实化: _real_plan / _fallback_plan ──────────────────────────
+
+    def _real_plan(
         self,
         strat: PlanningStrategy,
         process: TransformProcess,
         inputs: dict[str, Any] | None,
-    ) -> tuple[list[PlanningStep], int, list[str]]:
-        """默认规划逻辑。"""
+    ) -> tuple[list[PlanningStep], int]:
+        """真规划 — LLM 分解 + 逐步校验（非空、可解析、步数上限）。
+
+        Raises:
+            Exception: LLM 不可用/输出无有效步骤（调用方降级到模板）
+        """
+        import asyncio
+
+        if self._text_generator is None:
+            from ocos.engines.text_generator import get_text_generator
+            self._text_generator = get_text_generator()
+        provider = self._text_generator.provider
+        if not getattr(provider, "available", False):
+            raise RuntimeError("LLM provider unavailable")
+
+        goal_desc = (inputs or {}).get("goal", "") or ""
+        constraints = (inputs or {}).get("constraints", []) or []
+        prompt = (
+            f"目标: {goal_desc or process.description or process.process_id}\n"
+            + (f"约束: {constraints}\n" if constraints else "")
+            + "\n把目标分解为可执行步骤。每行一个步骤、最多 6 行，格式严格为:\n"
+            "STEP|<步骤描述>|<预估工作量 1-100 整数>\n"
+            "步骤必须具体可执行（有明确产出），按依赖顺序排列。不要输出解释。"
+        )
+        raw = asyncio.run(provider.generate(
+            prompt,
+            system_prompt="你是 OCOS 的规划引擎。只输出指定格式的步骤行。",
+            temperature=0.2, max_tokens=1200))
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.strip("`").lstrip()
+
+        steps: list[PlanningStep] = []
+        for line in raw.splitlines():
+            line = line.strip().strip("`")
+            if not line.startswith("STEP|"):
+                continue
+            parts = line.split("|", 2)
+            if len(parts) < 2 or not parts[1].strip():
+                continue
+            try:
+                effort = int(parts[2]) if len(parts) == 3 else 10
+            except ValueError:
+                effort = 10
+            effort = max(1, min(100, effort))
+            steps.append(PlanningStep(
+                description=parts[1].strip()[:200],
+                depends_on=tuple(s.step_id for s in steps),
+                estimated_effort=effort,
+                status=PlanStatus.DRAFT,
+            ))
+            if len(steps) >= 6:
+                break
+        if not steps:
+            raise RuntimeError("LLM 规划无有效步骤（校验不通过）")
+        total_effort = sum(s.estimated_effort for s in steps)
+        return steps, total_effort
+
+    def _fallback_plan(
+        self,
+        strat: PlanningStrategy,
+        process: TransformProcess,
+        inputs: dict[str, Any] | None,
+    ) -> tuple[list[PlanningStep], int]:
+        """降级规划 — 固定步数模板（诚实标注 degraded）。"""
         goal_desc = inputs.get("goal", "") if inputs else ""
         n_steps = {
             PlanningStrategy.TOP_DOWN: 4,
@@ -243,14 +325,14 @@ class PlanningEngine:
         steps: list[PlanningStep] = []
         for i in range(n_steps):
             steps.append(PlanningStep(
-                description=f"[{strat.value}] Step {i+1}" + (f": {goal_desc}" if goal_desc else ""),
+                description=f"[degraded:{strat.value}] Step {i+1}" + (f": {goal_desc}" if goal_desc else ""),
                 depends_on=tuple(steps[j].step_id for j in range(i) if j < i),
                 estimated_effort=(i + 1) * 10,
                 status=PlanStatus.DRAFT,
             ))
 
         total_effort = sum(s.estimated_effort for s in steps)
-        return steps, total_effort, []
+        return steps, total_effort
 
 # ── Engine Manifest ──────────────────────────────────────────────────────────
 from ocos.platform.engine_manifest import EngineManifest

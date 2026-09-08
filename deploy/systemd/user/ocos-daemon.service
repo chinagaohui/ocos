@@ -1,0 +1,15 @@
+[Unit]
+Description=OCOS cognitive tick daemon
+After=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=5
+Environment=OCOS_DB_PATH=%h/.ocos/ocos.db
+ExecStart=@VENV_BIN@/ocos run
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from ocos.memory.episode.store import EpisodeStore
 from ocos.memory.belief.store import BeliefStore
@@ -34,6 +35,13 @@ class MemoryHub:
 
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self._db_path = str(db_path)
+        # O-2: sqlite3 下 ":memory:" 每个连接各得一个私有内存库，四 Store
+        # 会静默分裂。改用 per-hub shared-cache URI：同一 Hub 内四库共享
+        # 同一内存库，不同 Hub 实例之间仍相互隔离。
+        if self._db_path == ":memory:":
+            self._store_path = f"file:memhub-{uuid4().hex}?mode=memory&cache=shared"
+        else:
+            self._store_path = self._db_path
         self._episode: Optional[EpisodeStore] = None
         self._belief: Optional[BeliefStore] = None
         self._semantic: Optional[SemanticStore] = None
@@ -75,13 +83,14 @@ class MemoryHub:
     def initialize(self) -> None:
         """初始化所有 Memory Store。
 
-        使用共享 SQLite 文件——各 Store 通过独立的 sqlite3.Connection 访问，
-        但共享同一个 WAL journal 以保证并发安全。
+        使用共享 SQLite 文件——各 Store 经连接池共享同一连接，
+        并共享同一个 WAL journal 以保证并发安全。
+        ":memory:" 时使用 per-hub shared-cache URI（O-2），四库同库不分裂。
         """
-        self._episode = EpisodeStore(self._db_path)
-        self._belief = BeliefStore(self._db_path)
-        self._semantic = SemanticStore(self._db_path)
-        self._pattern = PatternStore(self._db_path)
+        self._episode = EpisodeStore(self._store_path)
+        self._belief = BeliefStore(self._store_path)
+        self._semantic = SemanticStore(self._store_path)
+        self._pattern = PatternStore(self._store_path)
 
         self._episode.initialize()
         self._belief.initialize()
@@ -96,6 +105,12 @@ class MemoryHub:
         for store in [self._episode, self._belief, self._semantic, self._pattern]:
             if store is not None:
                 store.close()
+        # O-8: 置空引用——shutdown 后经 property 访问得到明确的
+        # RuntimeError，而非已关闭连接的裸 sqlite3.ProgrammingError
+        self._episode = None
+        self._belief = None
+        self._semantic = None
+        self._pattern = None
         self._initialized = False
         logger.info("MemoryHub shutdown complete.")
 
@@ -112,5 +127,6 @@ class MemoryHub:
             "initialized": True,
             "episode_count": self._episode.count() if self._episode else 0,
             "belief_count": self._belief.count_by_status().get("active", 0) if self._belief else 0,
+            "semantic_count": self._semantic.count() if self._semantic else 0,
             "pattern_count": self._pattern.count() if self._pattern else 0,
         }

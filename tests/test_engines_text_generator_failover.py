@@ -50,6 +50,19 @@ class UnavailableStub(StubProvider):
         return False
 
 
+class StreamStub(StubProvider):
+    """带 generate_stream 的 stub（流式网关拦截测试用）。"""
+
+    async def generate_stream(self, prompt, system_prompt=None,
+                              temperature=0.8, max_tokens=2000,
+                              on_chunk=None) -> str:
+        out = await self.generate(prompt, system_prompt,
+                                  temperature, max_tokens)
+        if on_chunk:
+            on_chunk(out)
+        return out
+
+
 def test_primary_ok_no_failover():
     primary = StubProvider("primary", text="A")
     fallback = StubProvider("fallback", text="B")
@@ -105,6 +118,51 @@ def test_name_and_available():
     fp = FailoverProvider(StubProvider("p"), StubProvider("f"))
     assert fp.name == "failover(p->f)"
     assert fp.available
+
+
+# ── GATEWAY-FAILOVER（2026-09-07）：HTTP 200 + 拦截文本也切换 ──
+
+def test_gateway_signal_detection():
+    """拦截特征大小写不敏感；正常文本不误伤。"""
+    hit = FailoverProvider._hit_gateway
+    assert hit("请求被网关拒绝: CMD_INJECTION 规则触发")
+    assert hit("content filtering policy violation")
+    assert hit("This violates our Usage Policy.")
+    assert hit("detected PROMPT_INJECTION attempt")
+    assert not hit("磁盘 62%，内存 13G，负载 2.77")
+    assert not hit("")
+    assert not hit(None)
+
+
+def test_failover_on_gateway_block_text():
+    """primary 返回 200 + 网关拦截文本 → 切 fallback（非异常路径）。"""
+    primary = StubProvider(
+        "primary", text="shell 命令被权限网关拦截（触发 CMD_INJECTION 与 SSRF 规则）")
+    fallback = StubProvider("fallback", text="df: / 62% used")
+    out = asyncio.run(FailoverProvider(primary, fallback).generate("hi"))
+    assert out == "df: / 62% used"
+    assert primary.calls == 1 and fallback.calls == 1
+
+
+def test_gateway_block_propagates_fallback_meta():
+    """拦截切换后 last_model 应来自 fallback 而非 primary。"""
+    primary = StreamStub("primary", text="CMD_INJECTION blocked")
+    fallback = StreamStub("fallback", text="fine")
+    fp = FailoverProvider(primary, fallback)
+    fp._fallback.last_model = "deepseek-chat"
+    out = asyncio.run(fp.generate("hi"))
+    assert out == "fine"
+    assert fp.last_model == "deepseek-chat"
+
+
+def test_gateway_block_stream_failover():
+    """流式路径同样检测拦截文本并切换。"""
+    primary = StreamStub("primary", text="blocked by content filtering policy")
+    fallback = StreamStub("fallback", text="stream-ok")
+    out = asyncio.run(
+        FailoverProvider(primary, fallback).generate_stream("hi"))
+    assert out == "stream-ok"
+    assert fallback.calls == 1
 
 
 def test_auto_provider_config_gate(tmp_path, monkeypatch):

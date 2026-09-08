@@ -98,8 +98,8 @@ Examples:
                       help="恢复最近的会话")
     chat.add_argument("-r", "--resume", type=str, default=None, metavar="ID|TITLE",
                       help="通过 ID 或标题恢复指定会话")
-    chat.add_argument("--mouse", action="store_true",
-                      help="启用程序内鼠标（默认关闭以保留终端原生选中/复制/粘贴）")
+    chat.add_argument("--no-mouse", action="store_true",
+                      help="关闭程序内鼠标，保留终端原生选中/复制/粘贴（默认已开启鼠标滚轮翻动聊天区）")
 
     # ── restart（整合重启 OCOS 系统 + 网关） ─────────────────────
     rst = subparsers.add_parser(
@@ -110,16 +110,48 @@ Examples:
                      action="append", metavar="NAME",
                      help="仅重启指定组件（可重复, 覆盖 --env 默认集）")
 
-    # ── gateway（消息网关管理） ──────────────────────────────────
-    gw = subparsers.add_parser("gateway", help="OCOS 消息网关（hermes-gateway）管理")
+    # ── gateway（OCOS 内核网关：server+daemon 常驻管理） ─────────────
+    gw = subparsers.add_parser(
+        "gateway", help="OCOS 内核网关（ocos-server + ocos-daemon 常驻服务）管理")
     gw_sub = gw.add_subparsers(dest="gateway_action")
-    gw_rst = gw_sub.add_parser("restart", help="重启消息网关")
+    gw_rst = gw_sub.add_parser("restart", help="重启 OCOS 内核网关（顺序 server→daemon）")
     gw_rst.add_argument("--env", choices=["dev", "test", "prod"], default="prod",
                         help="记录到操作日志的环境标签 (default: prod)")
+    gw_st = gw_sub.add_parser("status",
+                              help="查看 OCOS 内核网关常驻状态（服务/端口/WS）")
 
 
     # ── growth（Phase 50：成长模块 — 外部信号→自我优化） ──────────────
     _add_growth_parser(subparsers)
+
+    # ── stop（L0-5: 制动开关 STOP 神经） ───────────────────────────────
+    stp = subparsers.add_parser(
+        "stop", help="停止/制动 daemon（--soft 软制动：对话仍响应）")
+    stp.add_argument("--soft", action="store_true",
+                     help="软制动（SIGUSR2）：完成当前 tick 后挂起自主活动，"
+                          "对话/心跳/自检保留")
+    stp.add_argument("--resume", action="store_true",
+                     help="与 --soft 连用：解除软制动，恢复自主活动")
+
+    # ── autonomy（L0-3: 自主行为总闸） ────────────────────────────────
+    au = subparsers.add_parser(
+        "autonomy", help="查看/切换自主级别 OCOS_AUTONOMY_LEVEL (0-3)")
+    au.add_argument("level", type=int, nargs="?", default=None,
+                    choices=[0, 1, 2, 3],
+                    help="目标级别：0=只执行用户目标 1=可自主提案需批 "
+                         "2=低风险自主执行 3=全自主（省略=仅查看）")
+
+    # ── vitals（L0-6: 生命体征仪表盘） ────────────────────────────────
+    vit = subparsers.add_parser(
+        "vitals", help="生命体征仪表盘（§3.1 指标聚合 + 阈值判定）")
+    vit.add_argument("--db", type=str, default="", help="SQLite 路径")
+    vit.add_argument("--window", type=int, default=7,
+                     help="统计窗口天数（默认 7）")
+    vit.add_argument("--check", action="store_true",
+                     help="§3.4 验收 Gate: 按阶段阈值判定（不达标 exit 2）")
+    vit.add_argument("--phase", type=str, default="L4",
+                     choices=["L0", "L1", "L2", "L3", "L4"],
+                     help="验收阶段（默认 L4）")
 
     return parser
 
@@ -131,9 +163,10 @@ def _add_goal_parser(subparsers: argparse._SubParsersAction) -> None:
     # ocos goal create "text"
     create = goal_sub.add_parser("create", help="Create a new goal")
     create.add_argument("input", type=str, help="Goal description")
-    create.add_argument("--domain", type=str, default="writing",
-                        choices=["writing", "analysis", "research", "development"],
-                        help="Goal domain (default: writing)")
+    create.add_argument("--domain", type=str, default="",
+                        choices=["writing", "analysis", "research",
+                                 "development", ""],
+                        help="Goal domain (缺省按描述关键词推断)")
     create.add_argument("--priority", type=int, default=3, choices=[1, 2, 3, 4, 5],
                         help="Priority 1-5 (default: 3)")
     create.add_argument("--constraint", type=str, action="append", default=[],

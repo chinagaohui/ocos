@@ -17,7 +17,33 @@ def _store_and_bridge():
 
     db_path = resolve_db_path()
     store = PendingStore(db_path=db_path)
-    bridge = DecisionBridge(pending_store=store, db_path=db_path)
+
+    def _autonomous_goal_sink(payload: dict) -> None:
+        """L3: 自主目标批准落地 — 写 goals 表 PENDING（daemon 自动认领）。"""
+        from ocos.goal.store import GoalStore
+        GoalStore(db_path=db_path).save(
+            goal_id=payload.get("goal_id", ""),
+            level="TASK", status="PENDING",
+            description=payload.get("description", ""),
+            source="autonomous",
+            metadata={"autonomous": True, "kind": payload.get("kind", ""),
+                      "score": payload.get("score", 0),
+                      "evidence": payload.get("evidence", ""),
+                      "approved": True},
+            origin_level="SELF", authority="AUTONOMOUS")
+
+    def _constitution_sink(payload: dict) -> dict:
+        """L4-1: 宪法修改批准落地 — save_version 落新版本（只增不改）。"""
+        from ocos.constitution.versioned import VersionedConstitution
+        snap = VersionedConstitution(db_path=db_path).save_version(
+            principles=payload.get("principles", []),
+            reason=payload.get("reason", ""),
+            approved_by="human")
+        return {"version": snap.version}
+
+    bridge = DecisionBridge(pending_store=store, db_path=db_path,
+                            autonomous_goal_sink=_autonomous_goal_sink,
+                            constitution_sink=_constitution_sink)
     bridge.attach_default_handlers()
     return store, bridge, db_path
 

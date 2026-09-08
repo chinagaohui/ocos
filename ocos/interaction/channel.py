@@ -158,6 +158,7 @@ class WebhookChannel(BaseChannel):
         url: str,
         timeout: float = 5.0,
         priority: int = 7,
+        secret: str = "",
     ) -> None:
         super().__init__(ChannelConfig(
             channel_type=ChannelType.WEBHOOK,
@@ -167,6 +168,10 @@ class WebhookChannel(BaseChannel):
         ))
         self._url = url
         self._timeout = timeout
+        # D2（2026-09-07）: per-route HMAC secret — 配置后对每次 POST 计算
+        # X-Hub-Signature-256（sha256=<hexdigest>），与 hermes-gateway
+        # webhook 路由的校验格式一致（GitHub 风格）。
+        self._secret = secret or ""
 
     def send(self, message: str, priority: int = 0) -> bool:
         try:
@@ -177,10 +182,17 @@ class WebhookChannel(BaseChannel):
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "channel": self._config.name,
             }).encode("utf-8")
+            headers = {"Content-Type": "application/json"}
+            if self._secret:
+                import hashlib
+                import hmac
+                sig = hmac.new(self._secret.encode("utf-8"), payload,
+                               hashlib.sha256).hexdigest()
+                headers["X-Hub-Signature-256"] = f"sha256={sig}"
             req = urllib.request.Request(
                 self._url,
                 data=payload,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
@@ -346,8 +358,10 @@ class ExternalInteraction:
         url: str,
         timeout: float = 5.0,
         priority: int = 7,
+        secret: str = "",
     ) -> WebhookChannel:
-        return WebhookChannel(name=name, url=url, timeout=timeout, priority=priority)
+        return WebhookChannel(name=name, url=url, timeout=timeout,
+                              priority=priority, secret=secret)
 
     @classmethod
     def create_broadcast_channel(cls, name: str = "broadcast") -> BroadcastChannel:

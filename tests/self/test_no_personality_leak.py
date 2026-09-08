@@ -67,6 +67,10 @@ def test_no_personality_leak_in_self_dir():
             "experience_profile.py",
             "self_types.py",  # 领域类型定义（PreferenceType/PreferenceEntry）
             "__init__.py",  # 领域导出（PreferenceModel/update_preferences）
+            # 2026-09-07 L4-2: agent_self_model 为实测统计领域本体——
+            # '风险偏好/risk_preference' 是数据模型术语（审批比例统计），
+            # '诚实' 仅出现于"未校准不虚构"的工程约束描述，非人格表述
+            "agent_self_model.py",
         ):
             continue
         filepath = os.path.join(SELF_DIR, filename)

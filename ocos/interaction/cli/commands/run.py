@@ -93,6 +93,10 @@ def cmd_run(args, session) -> int:
     print(f"  perception: 感知管线已挂载 ({len(sensors)} sensor, "
           f"watch={watch_dirs or '无'})")
     print("  engines  : reasoner/planner/decision/reflection/learning 已注册 (AUD-F9)")
+    from ocos.execution.autonomy import LEVEL_DESCRIPTIONS, get_autonomy_level
+    _lvl = get_autonomy_level()
+    print(f"  autonomy : LEVEL={_lvl} [{LEVEL_DESCRIPTIONS.get(_lvl, '?')}] "
+          f"(ocos autonomy <0-3> 切换；SIGUSR2 软制动)")
     print("  hint     : 另开终端 — ocos status | ocos say --wait '...' | ocos approvals list")
     print("               Web 聊天: ocos-server 后访问 http://127.0.0.1:8900/ui")
     # GAP-P1-2: 周期健康体检（AlertManager Log+File 通道 → ~/.ocos/alerts/）
@@ -116,6 +120,10 @@ def cmd_run(args, session) -> int:
 
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
+
+    # L0-5: STOP 神经 — SIGUSR2 软制动切换（完成当前 tick 后挂起自主活动，
+    # 对话仍响应）。触发: kill -USR2 <pid> 或 ocos stop --soft / --resume
+    signal.signal(signal.SIGUSR2, lambda *_: rt.toggle_brake())
 
     try:
         if args.ticks and args.ticks > 0:

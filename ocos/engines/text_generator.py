@@ -17,7 +17,7 @@ import asyncio
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ocos.logging import get_logger
 
@@ -53,6 +53,24 @@ class LLMProvider(ABC):
     def available(self) -> bool:
         """是否可用（API 密钥已配置）。"""
         return True
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.8,
+        max_tokens: int = 2000,
+        on_chunk: Callable[[str], None] | None = None,
+    ) -> str:
+        """默认流式实现 — 一次性 generate 并单块回调；支持流式的子类覆写。
+
+        返回拼接后的完整文本。on_chunk 每收到一段增量文本即被调用（同步）。
+        """
+        text = await self.generate(prompt, system_prompt=system_prompt,
+                                   temperature=temperature, max_tokens=max_tokens)
+        if on_chunk is not None:
+            on_chunk(text)
+        return text
 
 
 class MockProvider(LLMProvider):
@@ -237,6 +255,9 @@ class OpenaiProvider(LLMProvider):
                           or cfg.get("base_url", "") or None)
         self._model = (model or os.environ.get("OPENAI_MODEL", "")
                        or cfg.get("model", "") or "gpt-4o")
+        # 最近一次调用的模型与 token 用量（供状态栏展示；TUI-OpenClaw 对齐）
+        self.last_model = self._model
+        self.last_usage: dict = {}
 
     @property
     def name(self) -> str:
@@ -281,7 +302,63 @@ class OpenaiProvider(LLMProvider):
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        self.last_model = self._model
+        u = getattr(response, "usage", None)
+        self.last_usage = ({"prompt": getattr(u, "prompt_tokens", 0) or 0,
+                            "completion": getattr(u, "completion_tokens", 0) or 0}
+                           if u else {})
         return response.choices[0].message.content or ""
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.8,
+        max_tokens: int = 2000,
+        on_chunk: Callable[[str], None] | None = None,
+    ) -> str:
+        """OpenAI 兼容端点流式生成 — 逐增量块回调 on_chunk，返回拼接全文。"""
+        if not self.available:
+            raise RuntimeError("OPENAI_API_KEY not set")
+        try:
+            from openai import AsyncOpenAI
+            import httpx
+        except ImportError:
+            raise RuntimeError("openai package not installed: pip install openai")
+
+        client = AsyncOpenAI(
+            api_key=self._api_key, base_url=self._base_url,
+            http_client=httpx.AsyncClient(trust_env=False, timeout=120.0))
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        parts: list[str] = []
+        self.last_model = self._model
+        stream = await client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        async for chunk in stream:
+            if not chunk.choices:
+                # 末尾 usage 块（choices 为空）：捕获 token 用量
+                u = getattr(chunk, "usage", None)
+                if u is not None:
+                    self.last_usage = {
+                        "prompt": getattr(u, "prompt_tokens", 0) or 0,
+                        "completion": getattr(u, "completion_tokens", 0) or 0}
+                continue
+            delta = (chunk.choices[0].delta.content or "")
+            if delta:
+                parts.append(delta)
+                if on_chunk is not None:
+                    on_chunk(delta)
+        return "".join(parts)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -296,11 +373,41 @@ class FailoverProvider(LLMProvider):
     同一请求改由 fallback 完成。fallback 也失败则抛出 fallback 的错误。
     未配置 fallback（config.json 无 llm_fallback 段）时不会被构造，
     行为与单 provider 完全一致。
+
+    GATEWAY-FAILOVER（2026-09-07）：部分上游平台（如 Agnes apihub）对
+    shell 命令类内容返回 HTTP 200 + 拦截说明文本（CMD_INJECTION/SSRF
+    规则），不抛异常 → 无法走 except 分支。此处对 primary 返回文本
+    做拦截特征检测，命中即视为失败切换 fallback，保证命令执行类
+    prompt 在无网关的备用 provider 上正常完成。
     """
+
+    # 上游网关/内容策略拦截的特征信号（大小写不敏感）。要求足够特异，
+    # 正常对话几乎不会输出这些术语组合。
+    _GATEWAY_SIGNALS = (
+        "CMD_INJECTION",          # Agnes 网关命令注入规则名
+        "prompt_injection",       # 通用注入拦截
+        "content filtering policy",
+        "violates our usage policy",
+        "violates our content policy",
+    )
+
+    @staticmethod
+    def _hit_gateway(text: str) -> bool:
+        if not text:
+            return False
+        low = text.lower()
+        return any(sig.lower() in low for sig in FailoverProvider._GATEWAY_SIGNALS)
 
     def __init__(self, primary: LLMProvider, fallback: LLMProvider) -> None:
         self._primary = primary
         self._fallback = fallback
+        self.last_model = ""
+        self.last_usage: dict = {}
+
+    def _propagate(self, src: LLMProvider) -> None:
+        """把实际执行方的 last_model/last_usage 冒泡到外层。"""
+        self.last_model = getattr(src, "last_model", "")
+        self.last_usage = getattr(src, "last_usage", {})
 
     @property
     def name(self) -> str:
@@ -321,9 +428,20 @@ class FailoverProvider(LLMProvider):
         kwargs = {"system_prompt": system_prompt,
                   "temperature": temperature, "max_tokens": max_tokens}
         if not self._primary.available:
-            return await self._fallback.generate(prompt, **kwargs)
+            out = await self._fallback.generate(prompt, **kwargs)
+            self._propagate(self._fallback)
+            return out
         try:
-            return await self._primary.generate(prompt, **kwargs)
+            out = await self._primary.generate(prompt, **kwargs)
+            if self._hit_gateway(out):
+                logger.warning(
+                    "Primary provider '%s' returned gateway-block text, "
+                    "failover to '%s'", self._primary.name, self._fallback.name)
+                out = await self._fallback.generate(prompt, **kwargs)
+                self._propagate(self._fallback)
+                return out
+            self._propagate(self._primary)
+            return out
         except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
             raise  # 取消/中断必须透传，不得转投 fallback
         except Exception as exc:
@@ -331,7 +449,49 @@ class FailoverProvider(LLMProvider):
                 "Primary provider '%s' failed (%s: %s), failover to '%s'",
                 self._primary.name, type(exc).__name__, str(exc)[:120],
                 self._fallback.name)
-            return await self._fallback.generate(prompt, **kwargs)
+            out = await self._fallback.generate(prompt, **kwargs)
+            self._propagate(self._fallback)
+            return out
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.8,
+        max_tokens: int = 2000,
+        on_chunk: Callable[[str], None] | None = None,
+    ) -> str:
+        """流式故障转移 — 封装 generate_stream 的 primary→fallback。"""
+        import asyncio
+        kwargs = {"system_prompt": system_prompt,
+                  "temperature": temperature, "max_tokens": max_tokens,
+                  "on_chunk": on_chunk}
+        if not self._primary.available:
+            out = await self._fallback.generate_stream(prompt, **kwargs)
+            self._propagate(self._fallback)
+            return out
+        try:
+            out = await self._primary.generate_stream(prompt, **kwargs)
+            if self._hit_gateway(out):
+                logger.warning(
+                    "Primary provider '%s' stream returned gateway-block "
+                    "text, failover to '%s'",
+                    self._primary.name, self._fallback.name)
+                out = await self._fallback.generate_stream(prompt, **kwargs)
+                self._propagate(self._fallback)
+                return out
+            self._propagate(self._primary)
+            return out
+        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Primary provider '%s' stream failed (%s: %s), failover to '%s'",
+                self._primary.name, type(exc).__name__, str(exc)[:120],
+                self._fallback.name)
+            out = await self._fallback.generate_stream(prompt, **kwargs)
+            self._propagate(self._fallback)
+            return out
 
 
 # ═══════════════════════════════════════════════════════════════

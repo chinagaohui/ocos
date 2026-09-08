@@ -190,6 +190,18 @@ def main(argv: list[str] | None = None) -> int:
             from ocos.interaction.cli.commands.growth import cmd_growth
             return cmd_growth(args, session)
 
+        elif args.command == "stop":
+            from ocos.interaction.cli.commands.stop import cmd_stop
+            return cmd_stop(args, session)
+
+        elif args.command == "autonomy":
+            from ocos.interaction.cli.commands.autonomy import cmd_autonomy
+            return cmd_autonomy(args, session)
+
+        elif args.command == "vitals":
+            from ocos.interaction.cli.commands.vitals import cmd_vitals
+            return cmd_vitals(args, session)
+
         else:
             parser.print_help()
             return 1

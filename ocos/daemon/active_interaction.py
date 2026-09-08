@@ -34,7 +34,9 @@ from ocos.interaction.interaction_types import (
 from ocos.interaction.interaction_validator import (
     InteractionValidator, ValidationVerdict,
 )
-from ocos.interaction.need_monitor import NeedMonitor, create_default_rules
+from ocos.interaction.need_monitor import (
+    NeedMonitor, NeedRule, create_default_rules,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +59,13 @@ class ActiveInteractionEngine:
         permission_guard: Any = None,
         constitution: Any = None,
         stale_threshold_days: Optional[int] = None,
+        db_path: Optional[str] = None,
     ) -> None:
         self.goal_store = goal_store
         self.output_callback = output_callback
         self.permission_guard = permission_guard
         self.constitution = constitution
+        self.db_path = db_path
         # 目标停滞阈值：默认 30 天（白皮书语义）；OCOS_INTERACTION_STALE_DAYS
         # 可调低（验收场景如 3 天）— "目标依赖数据过期"的判定窗口。
         env_days = os.environ.get("OCOS_INTERACTION_STALE_DAYS", "").strip()
@@ -74,9 +78,49 @@ class ActiveInteractionEngine:
         self.monitor = NeedMonitor()
         for rule in create_default_rules():
             self.monitor.register_rule(rule)
+        # L2-2: 参与度信号规则（对话频率/目标完成度 → 低参与唤醒）。
+        # 规则内部惰性取参与度快照（缺 db 静默跳过）。
+        self._last_engagement: dict[str, Any] = {}
+        self.monitor.register_rule(NeedRule(
+            name="engagement_low",
+            check_fn=self._rule_engagement,
+            cooldown_seconds=6 * 3600,   # 每 6 小时最多触发一次（防骚扰）
+        ))
         self.trigger = AttentionTrigger()
         self.validator = InteractionValidator()
         self.scheduler = InteractionScheduler()
+
+    # ── L2-2: 参与度规则 ─────────────────────────────────────────────
+
+    def _rule_engagement(self, monitor: NeedMonitor,
+                         ctx: dict) -> Optional[NeedSignal]:
+        """参与度信号：用户 N 天未交互 → 低参与唤醒提议（TIME_BASED）。
+
+        N 默认 3 天（OCOS_ENGAGEMENT_IDLE_DAYS 可调）。快照存
+        self._last_engagement 供观测/测试。采集失败 → None（诚实沉默）。
+        """
+        if not self.db_path:
+            return None
+        try:
+            from ocos.engagement.signals import collect_engagement
+            snap = collect_engagement(self.db_path)
+        except Exception:
+            return None
+        self._last_engagement = snap.to_context()
+        env_idle = os.environ.get("OCOS_ENGAGEMENT_IDLE_DAYS", "").strip()
+        idle_days = float(env_idle) if env_idle.replace(".", "", 1).isdigit() else 3.0
+        age = snap.last_interaction_age_days
+        if age < 0 or age < idle_days:
+            return None
+        urgency = min(0.6, 0.2 + age / 20.0)   # 低参与 ≠ 紧急，封顶 0.6
+        return NeedSignal(
+            need_type=NeedType.TIME_BASED,
+            source="engagement",
+            description=(f"用户已 {age:.0f} 天未交互"
+                         f"（参与度 {snap.engagement_score:.2f}）"),
+            urgency=urgency,
+            context={**snap.to_context(), "idle_days": idle_days},
+        )
 
     # ── 入口 ─────────────────────────────────────────────────────────
 

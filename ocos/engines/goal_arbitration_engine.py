@@ -185,6 +185,15 @@ class GoalArbitrationEngine:
             raise ValueError(f"Unknown arbitration strategy: {strategy}")
 
         results = arbitrator(candidates, ctx)
+
+        # L1: 自主级别闸门 — 统一取自 autonomy 模块（context.autonomy_level 可覆盖，
+        # 供测试/显式注入）；级别实时生效（L0 闸随 tick 即时检测切换）
+        level = ctx.get("autonomy_level")
+        if level is None:
+            from ocos.execution.autonomy import get_autonomy_level
+            level = get_autonomy_level()
+        results = self._apply_autonomy_gate(results, level)
+
         selected_ids = tuple(
             r.goal_id for r in results if r.selected
         )
@@ -204,6 +213,42 @@ class GoalArbitrationEngine:
         )
         self._traces[trace.trace_id] = trace
         return best, trace
+
+    # ── L1: 自主级别闸门 ──────────────────────────────────────────────
+
+    @staticmethod
+    def _apply_autonomy_gate(
+        results: list[ArbitrationResult],
+        level: int,
+    ) -> list[ArbitrationResult]:
+        """按自主级别改写仲裁结果（ArbitrationResult frozen → replace 重建）。
+
+        - LEVEL 0: 全部挂起，不允许任何自主目标执行
+        - LEVEL 1: 保留选择（提案语义），理由标注"需审批后执行"
+        - LEVEL >= 2: 原样通过
+        """
+        import dataclasses as _dc
+
+        if level >= 2:
+            return results
+        gated: list[ArbitrationResult] = []
+        for r in results:
+            if level == 0:
+                gated.append(_dc.replace(
+                    r,
+                    selected=False,
+                    reason=("[autonomy:L0] 自主行为被闸门关闭 — "
+                            f"目标挂起 | {r.reason}"),
+                ))
+            else:  # level == 1
+                if r.selected:
+                    gated.append(_dc.replace(
+                        r,
+                        reason=f"{r.reason} | [autonomy:L1] 提案需审批后执行",
+                    ))
+                else:
+                    gated.append(r)
+        return gated
 
     # ── 执行接口 ──────────────────────────────────────────────────────
 

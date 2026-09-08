@@ -219,10 +219,43 @@ def cmd_restart(args, session: InteractionSession) -> int:
 
 
 def cmd_gateway(args, session: InteractionSession) -> int:
-    """ocos gateway restart — 仅重启消息网关。"""
+    """ocos gateway — 管理 OCOS 内核网关（ocos-server + ocos-daemon 常驻服务）。
+
+    restart 按固定顺序 server→daemon 重启并做健康检查；status 只读展示。
+    说明: 本"内核网关"≠ restart.py 里的 hermes-gateway(外部消息网关)组件。
+    """
     action = getattr(args, "gateway_action", None)
-    if action != "restart":
-        print("用法: ocos gateway restart [--env dev|test|prod]")
-        return 1
     env = getattr(args, "env", "prod") or "prod"
-    return _do_restart(["gateway"], env)
+    if action == "restart":
+        return _do_restart(["server", "daemon"], env)
+    if action == "status":
+        return _gateway_status()
+    print("用法: ocos gateway <restart|status> [--env dev|test|prod]")
+    return 1
+
+
+def _gateway_status() -> int:
+    """展示 OCOS 内核网关常驻状态：server/daemon is-active、端口、WS。"""
+    print("OCOS Gateway（内核常驻 = ocos-server + ocos-daemon）")
+    print("=" * 52)
+    label = {"server": "API/WS 服务", "daemon": "认知 daemon"}
+    ok = True
+    for name, unit in (("server", "ocos-server.service"),
+                       ("daemon", "ocos-daemon.service")):
+        code, state = _systemctl("is-active", unit)
+        active = code == 0 and state == "active"
+        ok = ok and active
+        line = f"  [{'OK' if active else 'DOWN'}]  {name:<8} {label[name]:<10} "
+        line += f"{'active' if active else ('系统服务未运行: ' + (state or 'unknown'))}"
+        if name == "server" and active:
+            port = _port_ready(SERVER_PORT, 0.5)
+            line += f" · 端口 {SERVER_PORT} {'就绪' if port else '未监听'}"
+            line += " · WS /ws" if port else ""
+        print(f"{line}  ({unit})")
+    # 开机自启状态
+    enabled, _ = _systemctl("is-enabled", "ocos-server.service")
+    print(f"  server 开机自启: {'是' if enabled == 0 else '否'}"
+          f" · daemon 开机自启: "
+          f"{'是' if _systemctl('is-enabled', 'ocos-daemon.service')[0] == 0 else '否'}")
+    print(f"  结果: {'内核网关常驻正常' if ok else '存在未运行组件'}")
+    return 0 if ok else 1

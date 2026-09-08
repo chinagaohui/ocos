@@ -3,6 +3,11 @@
 将 Narrative Contract 的参数转化为 WriterEngine 可消费的章节规划约束。
 独立于 opentale 包，纯规则推导。
 
+范围澄清（L2 沉睡器官评估, 2026-09-07）:
+    本模块服务 opentale 小说规划域（opentale_bridge），不是"成长叙事"。
+    OCOS 自我成长叙事由 ocos/daemon/growth_narrative.py（L2-5 已上电）
+    从 episode 流生成，两者无代码依赖。
+
 三种覆盖模式（参见 override-strategy.md）:
   - Blend:   强度混合（50/50）
   - Override:直接覆盖

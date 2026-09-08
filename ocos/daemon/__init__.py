@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -87,24 +88,14 @@ class ResidentRuntime:
             self._orchestrator = LifeCycleOrchestrator(agent)
         except Exception as e:
             logger.warning("LifeCycleOrchestrator unavailable: %s", e)
-        # Phase E: 自我演化监控 — 定期检查 SelfModel 是否需要演化
+        # Phase E: 自我演化监控 — 定期检查 SelfModel 是否需要演化。
+        # 装配期只置空：memory hub 在 runtime.boot() 才存在，旧装配分支
+        # 在 __init__ 期取 hub（恒 None）+ `belief()` 误作方法（property）
+        # → 双重失效且静默，自演化检查在生产从未启用（2026-09-07 排查
+        # MotivationHub 零提案时发现，同族"装配期捕获 boot 期资源"病灶）。
+        # 真实初始化移至 start() 的 boot 之后 — 见 _init_self_monitor()。
         self._self_monitor: Any = None
         self._self_monitor_eligible: bool = False
-        try:
-            from ocos.self.monitor import SelfMonitor
-            from ocos.self.builder import SelfModelBuilder
-            from ocos.self.governor import SelfGovernor
-            from ocos.self.identity_boundary import IdentityBoundary
-            belief_store = self.memory_hub.belief() if self.memory_hub else None
-            if belief_store is not None:
-                boundary = IdentityBoundary.create_default()
-                builder = SelfModelBuilder(belief_store, boundary)
-                governor = SelfGovernor(boundary)
-                self._self_monitor = SelfMonitor(builder, governor, belief_store)
-                self._self_monitor_eligible = True
-                logger.info("SelfMonitor initialized — evolution checks enabled")
-        except Exception as e:
-            logger.debug("SelfMonitor unavailable (evolution passive): %s", e)
         # P1-C 循环收敛: 认知循环宿主 = RuntimeKernel（默认自建）。
         # kernel 不 import ocos.agent — AgentRuntime.tick 经 driver 注入。
         if kernel is None:
@@ -152,10 +143,14 @@ class ResidentRuntime:
         self._responder: Any = None
         self._last_result_rowid: int = 0    # UX-J: goal_result 增量游标
         self._result_cursor_init: bool = False
+        self._result_push_lock = threading.Lock()  # 即时回调与 5-tick 兜底并发推送去重
         if db_path and db_path != ":memory:":
             try:
                 from ocos.interaction.inbox import UserInbox
                 self._user_inbox = UserInbox(db_path=db_path)
+                # UX-J 即时推送: goal_result 落库即刻回调推送（秒级到达 TUI），
+                # 5-tick 定时推送保留为兜底
+                self._runtime._on_goal_result = self._push_goal_results
             except Exception as e:
                 logger.warning("UserInbox unavailable, say channel disabled: %s", e)
             try:
@@ -169,6 +164,14 @@ class ResidentRuntime:
                 )
             except Exception as e:
                 logger.warning("ChatResponder unavailable: %s", e)
+        # L2-3: 出站多通道链路（hermes-gateway 等第二出口）— 无配置时
+        # 诚实沉默；只分发结果类消息，非结果闲聊仍仅进 outbox。
+        self._channel_link: Any = None
+        try:
+            from ocos.daemon.channel_link import OutboundChannelLink
+            self._channel_link = OutboundChannelLink()
+        except Exception as e:
+            logger.warning("OutboundChannelLink unavailable: %s", e)
         # P5.2 (AGI 计划): Phase 53 主动交互唤醒 — 沉睡器官生产接线。
         # NeedMonitor→AttentionTrigger→Validator→Scheduler 全链由
         # ActiveInteractionEngine 承担；产出经 outbox 进入对话流。
@@ -179,19 +182,101 @@ class ResidentRuntime:
 
             def _post_proposal(message: str) -> None:
                 if self._user_inbox is not None:
-                    self._user_inbox.post_outbound(message)
+                    self._user_inbox.post_outbound(message, kind="proposal")
                     logger.info("Active interaction proposal posted to outbox")
                 else:
                     logger.info("[active-interaction] %s", message)
+                self._dispatch_result(message)   # L2-3: 提议类附加外发
 
             self._active_interaction = ActiveInteractionEngine(
                 goal_store=self._domain_goal_store,
                 output_callback=_post_proposal,
                 permission_guard=getattr(agent, "_permission_guard", None),
                 constitution=getattr(agent, "_constitution", None),
+                db_path=db_path,   # L2-2: 参与度信号数据源
             )
         except Exception as e:
             logger.warning("ActiveInteraction unavailable (Phase 53 passive): %s", e)
+        # L3 (升级方案 v1.0): MotivationHub — 自主性涌现（目标自生成）。
+        # 信号聚合（lesson/belief 边界/goal_result）→ 评分 → 提案；
+        # LEVEL>=1 才提案，低风险 LEVEL>=2 直接进 goals 表，其余待批。
+        self._motivation: Any = None
+        self._autonomous_inflight: deque = deque()   # 在途自主目标（FIFO 近似配对）
+        try:
+            from ocos.daemon.motivation import MotivationHub
+
+            def _notify_motivation(message: str) -> None:
+                if self._user_inbox is not None:
+                    self._user_inbox.post_outbound(message, kind="proposal")
+                else:
+                    logger.info("[motivation] %s", message)
+                self._dispatch_result(message)
+
+            # 根因修复（2026-09-07 生产零提案排查）：LEVEL1 提案走待批通道，
+            # 此前 pending_store 未接线 → _propose 走"无落地通道"静默 return，
+            # 生产 4 候选全过阈值仍 0 提案。同库 PendingStore 与 bridge 审批侧
+            # 共享 pending_actions 表。belief_store 传惰性提供者（memory hub
+            # 在 runtime.boot() 才初始化，构造时为 None）——boot 后每次 scan
+            # 解析为持久 BeliefStore（有 query_by_confidence）。原先传内存
+            # BeliefSystem（query(statement, threshold) 签名不匹配），
+            # PROBE 通道 TypeError 被 collect_candidates 吞掉。
+            from ocos.execution.pending import PendingStore
+
+            def _belief_provider():
+                hub = self.memory_hub
+                try:
+                    return hub.belief if hub else None   # belief 是 property
+                except RuntimeError:        # O-8: hub shutdown 后诚实沉默
+                    return None
+
+            self._motivation = MotivationHub(
+                db_path=db_path,
+                goal_store=self._domain_goal_store,
+                pending_store=PendingStore(db_path=db_path),
+                belief_store=_belief_provider,
+                notify_fn=_notify_motivation,
+            )
+        except Exception as e:
+            logger.warning("MotivationHub unavailable (L3 passive): %s", e)
+        # V3 感知-反应（2026-09-07 感知层上电）: StimulusScanner +
+        # EventBus — 真实环境刺激（磁盘/内存/失败聚集/目标卡死）
+        # → 感知事件 → 低风险 PROBE（与动机候选同通道落地）。
+        self._stimulus: Any = None
+        self._event_bus: Any = None
+        try:
+            from ocos.perception.stimulus_scanner import StimulusScanner
+            from ocos.perception_bus import EventBus
+
+            self._stimulus = StimulusScanner(db_path=db_path)
+            self._event_bus = EventBus()
+            logger.info(
+                "StimulusScanner initialized — perception wired (V3)")
+        except Exception as e:
+            logger.warning("StimulusScanner unavailable (V3 passive): %s", e)
+        # L4-2 (升级方案 v1.0): 自我模型 — boot 加载实测画像
+        # （"我是谁"：能力实测/性格参数/当前专注），每 N tick 校准。
+        self._self_model: Any = None
+        self._self_model_caps: list[str] = []
+        self._self_model_ticks = max(
+            1, int(os.environ.get("OCOS_SELF_MODEL_TICKS", "50")))
+        try:
+            from ocos.self.agent_self_model import AgentSelfModel
+            self._self_model = AgentSelfModel(db_path)
+            snap = self._self_model.load()
+            if snap:
+                logger.info("SelfModel boot: v%s hash=%s",
+                            snap["version"], snap["content_hash"][:12])
+            else:
+                logger.info("SelfModel boot: 未校准（首次运行属正常）")
+        except Exception as e:
+            logger.warning("SelfModel unavailable (L4-2 passive): %s", e)
+        try:
+            from ocos.capability_reality.adapter_discovery import AdapterDiscovery
+            registry, _ = AdapterDiscovery().run()
+            self._self_model_caps = [c.descriptor.name
+                                     for c in registry.list_all()]
+        except Exception:
+            pass  # 能力名缺省 → 校准只统计 episode 实测（诚实降级）
         self._tick_interval = tick_interval
         self._max_idle_cycles = max_idle_cycles
         self._state: DaemonState = DaemonState.STOPPED
@@ -204,6 +289,13 @@ class ResidentRuntime:
         self._goal_submitted: int = 0
         self._goal_processed: int = 0
         self._idle_ticks: int = 0
+        # L0-3: 自主行为总闸 — 启动读取，tick 期检测切换（即时生效+审计）
+        from ocos.execution.autonomy import get_autonomy_level
+        self._db_path = db_path  # dream/审计等共用（原引用为隐式依赖）
+        self._autonomy_level: int = get_autonomy_level()
+        # L0-5: STOP 神经 — SIGUSR2 软制动（完成当前 tick 后挂起自主活动，
+        # 保留对话响应与心跳；ocos stop --soft 触发 / 再次触发恢复）
+        self._braked: bool = False
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -259,6 +351,37 @@ class ResidentRuntime:
             except Exception:
                 pass
 
+    def _init_self_monitor(self) -> None:
+        """Phase E: SelfMonitor 装配 — 必须在 runtime.boot() 之后调用。
+
+        2026-09-07 修复：旧装配在 __init__ 期执行——memory hub 当时恒为
+        None（AgentRuntime.boot() 才建）且 `belief()` 误作方法（实为
+        property）→ 双重失效且 debug 级静默，自演化检查在生产从未启用。
+        失败如实 warning（不再 debug 级吞掉）。
+        """
+        if getattr(self, "_self_monitor", None) is not None:
+            return                          # 幂等（start 重入不重复装配）
+        try:
+            hub = self.memory_hub
+            belief_store = hub.belief if hub else None   # belief 是 property
+            if belief_store is None:
+                logger.warning(
+                    "SelfMonitor not wired — memory hub unavailable "
+                    "(evolution passive)")
+                return
+            from ocos.self.monitor import SelfMonitor
+            from ocos.self.builder import SelfModelBuilder
+            from ocos.self.governor import SelfGovernor
+            from ocos.self.identity_boundary import IdentityBoundary
+            boundary = IdentityBoundary.create_default()
+            builder = SelfModelBuilder(belief_store, boundary)
+            governor = SelfGovernor(boundary)
+            self._self_monitor = SelfMonitor(builder, governor, belief_store)
+            self._self_monitor_eligible = True
+            logger.info("SelfMonitor initialized — evolution checks enabled")
+        except Exception as e:
+            logger.warning("SelfMonitor unavailable (evolution passive): %s", e)
+
     def start(self) -> None:
         """启动 daemon — boot AgentRuntime + RuntimeKernel，启动 tick 线程。
 
@@ -272,6 +395,8 @@ class ResidentRuntime:
             self._state = DaemonState.STARTING
             self._stop_event.clear()
             self._runtime.boot()
+            # Phase E: SelfMonitor 装配（boot 后 memory hub 就绪才可能成功）
+            self._init_self_monitor()
             # S2.2 (修复方案评审 R3): auto 模式下 ASK 类动作自动执行——
             # 启动时显著警告，生产环境建议 OCOS_APPROVAL_MODE=ask。
             # 全局默认值切换按评审版 Sprint 3 收尾统一执行。
@@ -301,12 +426,61 @@ class ResidentRuntime:
             if self._kernel.state.name != "RUNNING":
                 self._kernel.start()
             self._kernel.attach_agent_driver(lambda tick_id: self._runtime.tick())
+            # L4-3 (升级方案 v1.0): boot 时 V5 跨重启一致性校验 —
+            # 身份参数 hash（锚+宪法）+ 记忆计数断言；漂移即告警。
+            try:
+                from ocos.daemon.continuity import ContinuityChecker
+                identity_params: dict = {}
+                agent_obj = getattr(self._runtime, "agent", None)
+                anchor = getattr(agent_obj, "identity", None)
+                if anchor is not None and hasattr(anchor, "get_born_at"):
+                    identity_params = {
+                        "agent_id": anchor.get_identity_id(),
+                        "born_at": anchor.get_born_at(),
+                        "name": anchor.get_name(),
+                    }
+                self._continuity_checker = ContinuityChecker(self._db_path)
+                _v5 = self._continuity_checker.boot_check(
+                    identity_params=identity_params)
+                if _v5.get("drift") or _v5.get("memory_loss"):
+                    msg = ("⚠ V5 连续性校验: "
+                           + ("；".join(_v5.get("details", []))
+                              or "异常"))
+                    self._notify_brake(msg)
+                    self._dispatch_result(msg)
+            except Exception:
+                logger.exception("V5 continuity check failed")
+            # 数字生命·启动自省 — 每次启动像人一样先审视自身：采集
+            # 系统/GPU/网络/自身状态 + 停机推断，分析后写环境先验
+            # （boot_context.json，bridge 注入目标执行）+ 异常条件转
+            # 刺激提案（复用升级阶梯/预算/饱和三道闸）+ 报告推对话流。
+            # 只读探查 + 失败降级，不阻断启动（网络探测最坏 ~6s）。
+            try:
+                from ocos.daemon.boot_awareness import run_boot_awareness
+                _post = (lambda msg: self._user_inbox.post_outbound(
+                    msg, kind="report")
+                    if self._user_inbox is not None else None)
+                _stim = (lambda stimuli: self._motivation.propose_stimulus(
+                    stimuli, self._autonomy_level)
+                    if self._motivation is not None else None)
+                _boot = run_boot_awareness(
+                    self._db_path, post_fn=_post, stimulus_fn=_stim,
+                    level=self._autonomy_level)
+                logger.info("Boot awareness done: %s",
+                            _boot.get("summary_line", "?"))
+            except Exception:
+                logger.exception("Boot awareness failed")
             self._tick_thread = threading.Thread(
                 target=self._tick_loop, name="ocos-daemon", daemon=True,
             )
             self._tick_thread.start()
             self._state = DaemonState.RUNNING
-            logger.info("ResidentRuntime daemon started (interval=%.1fs)", self._tick_interval)
+            from ocos.execution.autonomy import LEVEL_DESCRIPTIONS
+            logger.info("ResidentRuntime daemon started (interval=%.1fs, "
+                        "autonomy_level=%d [%s], braked=%s)",
+                        self._tick_interval, self._autonomy_level,
+                        LEVEL_DESCRIPTIONS.get(self._autonomy_level, "?"),
+                        self._braked)
 
     def stop(self, timeout: float = 30.0) -> None:
         """优雅关闭 daemon — 停止 tick 线程，触发 orchestrator 安全关闭。"""
@@ -326,6 +500,60 @@ class ResidentRuntime:
                 pass
             self._state = DaemonState.STOPPED
             logger.info("ResidentRuntime daemon stopped. %d goals processed.", self._goal_processed)
+
+    # ── L0-5: STOP 神经（软制动） ────────────────────────────────────────────
+
+    def brake(self) -> None:
+        """软制动 — 完成当前 tick 后挂起自主活动；对话/心跳/自检保留。"""
+        with self._lock:
+            if self._braked:
+                return
+            self._braked = True
+        from ocos.execution.autonomy import audit_brake
+        audit_brake(self._db_path, braked=True)
+        self._notify_brake("⏸ 自主活动已制动（STOP 神经）— 对话仍响应，"
+                           "发送 SIGUSR2 或 ocos stop --soft --resume 恢复")
+        logger.warning("Daemon BRAKED — autonomous activity suspended "
+                       "(conversation & heartbeat stay alive)")
+
+    def resume(self) -> None:
+        """解除软制动 — 自主活动恢复。"""
+        with self._lock:
+            if not self._braked:
+                return
+            self._braked = False
+        from ocos.execution.autonomy import audit_brake
+        audit_brake(self._db_path, braked=False)
+        self._notify_brake("▶ 制动已解除 — 自主活动恢复")
+        logger.info("Daemon brake released — autonomous activity resumed")
+
+    def toggle_brake(self) -> bool:
+        """SIGUSR2 处理：制动 ↔ 恢复 切换。返回切换后的 braked 状态。"""
+        if self._braked:
+            self.resume()
+        else:
+            self.brake()
+        return self._braked
+
+    def _notify_brake(self, message: str) -> None:
+        """制动状态变更推送 outbox（TUI 可见）— 无 inbox 时仅日志。"""
+        try:
+            if self._user_inbox is not None:
+                self._user_inbox.post_outbound(message, kind="proposal")
+        except Exception:
+            logger.debug("brake notify failed", exc_info=True)
+
+    def _dispatch_result(self, message: str) -> None:
+        """L2-3: 结果类消息附加外发到注册通道（hermes-gateway 等）。
+
+        outbox（TUI 对话流）是主出口、永远先行且不受影响；本方法失败
+        静默降级（计数在 channel_link 内部），绝不阻断主流程。
+        """
+        try:
+            if self._channel_link is not None:
+                self._channel_link.dispatch(message)
+        except Exception:
+            logger.debug("channel dispatch failed", exc_info=True)
 
     def submit_goal(self, description: str, domain: str = "development",
                     priority: int = 2) -> int:
@@ -368,6 +596,8 @@ class ResidentRuntime:
                 "submitted": self._goal_submitted,
                 "processed": self._goal_processed,
                 "idle_ticks": self._idle_ticks,
+                "braked": self._braked,
+                "autonomy_level": self._autonomy_level,
                 "memory": getattr(self._runtime, "memory", None),
                 "beliefs": getattr(self._runtime, "beliefs", None),
             }
@@ -379,8 +609,32 @@ class ResidentRuntime:
 
         Phase B: 伴生 LifeCycleOrchestrator 负责疲劳检测 + 主动输出触发，
         不替换主认知路径（kernel.tick_loop）以避免双重重跑认知循环。
+        L0-3: 每 tick 检测自主级别切换（即时生效 + audit episode + outbox 通知）。
+        L0-5: 制动（braked）时挂起全部自主活动 — 只保留对话响应、心跳与自检。
+        自愈兜底（2026-09-08）: 循环体最外层 try/except — 子系统各自有
+        精细保护，兜底捕获一切残余异常并继续循环。tick 线程死亡 = 心跳
+        停更 = 全部自愈循环（自检/修复/动机/目标）同时停摆且进程仍存活
+        （systemd Restart=on-failure 不触发）→ 必须在线程级兜底。
         """
         while not self._stop_event.is_set():
+          try:
+            # L0-3: 自主级别运行期切换检测（ocos autonomy <n> 写覆盖文件）
+            try:
+                from ocos.execution.autonomy import (
+                    audit_level_change, get_autonomy_level)
+                lvl = get_autonomy_level()
+                if lvl != self._autonomy_level:
+                    old = self._autonomy_level
+                    self._autonomy_level = lvl
+                    audit_level_change(self._db_path, old, lvl,
+                                       source="runtime_override")
+                    self._notify_brake(
+                        f"⚖ 自主级别切换 {old} → {lvl}")
+                    logger.warning("Autonomy level changed %d -> %d (audited)",
+                                   old, lvl)
+            except Exception:
+                logger.exception("autonomy level check failed")
+
             # UX-F3: 心跳落盘（每 5 tick 一次, 降低写盘对 tick 时序的影响）
             self._hb_ticks += 1
             if self._hb_ticks % 5 == 0:
@@ -388,69 +642,127 @@ class ResidentRuntime:
                     self._write_heartbeat()
                 except Exception:
                     pass
-            # UX-J: 目标完成 → 自动回推结果到对话流
-            if self._hb_ticks % 5 == 0:
+
+            # L0-5: 软制动 — 自主活动全部挂起；对话（inbox 消费）、
+            # 心跳与周期自检保留，保证"制动后 tick 停、对话仍答"。
+            if not self._braked:
+                # UX-J: 目标完成 → 自动回推结果到对话流
+                if self._hb_ticks % 5 == 0:
+                    try:
+                        self._push_goal_results()
+                    except Exception:
+                        logger.exception("goal result push failed")
+
+                # P1-1: 周期性 dream 巩固（Episode → Belief/Pattern/Wisdom）
+                if self._hb_ticks % max(1, self.dream_interval_ticks) == 0:
+                    try:
+                        self._run_dream_cycle()
+                    except Exception:
+                        logger.exception("Dream consolidation failed")
+                # Phase 33: 将队列中的目标导入 runtime 的 goal_store
+                self._drain_goal_queue()
+                # 全自动模式: 待批队列自动通过（ask 模式零开销空转）
                 try:
-                    self._push_goal_results()
+                    self._auto_approve_pending()
                 except Exception:
-                    logger.exception("goal result push failed")
+                    logger.exception("auto approve pump failed")
+                # UX-1: 认领 CLI 创建的持久化目标（每 tick 最多 1 个）
+                self._claim_persisted_goals()
 
-            # P1-1: 周期性 dream 巩固（Episode → Belief/Pattern/Wisdom）
-            if self._hb_ticks % max(1, self.dream_interval_ticks) == 0:
+                # P1-C: 一次认知 tick = kernel.tick_loop(1)（8 空壳 stage + agent driver）
                 try:
-                    self._run_dream_cycle()
+                    self._kernel.tick_loop(max_ticks=1)
+                    self._idle_ticks = 0
                 except Exception:
-                    logger.exception("Dream consolidation failed")
-            # Phase 33: 将队列中的目标导入 runtime 的 goal_store
-            self._drain_goal_queue()
-            # UX-1: 认领 CLI 创建的持久化目标（每 tick 最多 1 个）
-            self._claim_persisted_goals()
-            # UX-P2: 消费用户消息（ocos say）
-            self._drain_user_inbox()
+                    logger.exception("Tick failed (cycle=%d)", self._runtime._cycle_count)
 
-            # P1-C: 一次认知 tick = kernel.tick_loop(1)（8 空壳 stage + agent driver）
-            try:
-                self._kernel.tick_loop(max_ticks=1)
-                self._idle_ticks = 0
-            except Exception:
-                logger.exception("Tick failed (cycle=%d)", self._runtime._cycle_count)
-
-            # Phase B: 伴生 orchestrator 疲劳检测 + 主动输出 — 不重跑认知循环，只做状态检查
-            if self._orchestrator is not None:
-                try:
-                    agent_obj = getattr(self._runtime, "agent", None)
-                    attention = getattr(agent_obj, "attention", None) if agent_obj is not None else None
-                    if attention is not None and hasattr(attention, "needs_sleep"):
-                        if attention.needs_sleep():
-                            logger.info("Fatigue detected at tick %d — triggering sleep/dream", self._hb_ticks)
+                # Phase B: 伴生 orchestrator 疲劳检测 + 主动输出 — 不重跑认知循环，只做状态检查
+                if self._orchestrator is not None:
+                    try:
+                        agent_obj = getattr(self._runtime, "agent", None)
+                        attention = getattr(agent_obj, "attention", None) if agent_obj is not None else None
+                        if attention is not None and hasattr(attention, "needs_sleep"):
+                            if attention.needs_sleep():
+                                logger.info("Fatigue detected at tick %d — triggering sleep/dream", self._hb_ticks)
+                                try:
+                                    self._run_dream_cycle()
+                                except Exception:
+                                    logger.exception("Fatigue dream failed")
+                        # 定期主动输出（每 60 tick ≈ 5min @ 5s/tick）
+                        # L0-3: 主动输出属自主行为 — LEVEL>=1 才允许
+                        if (self._hb_ticks % 60 == 0
+                                and self._autonomy_level >= 1):
+                            if agent_obj is not None and hasattr(agent_obj, "maybe_proactive_output"):
+                                agent_obj.maybe_proactive_output()
+                        # P5.2 (AGI 计划): Phase 53 主动交互唤醒 — 空闲期基于
+                        # 目标状态（停滞/依赖数据过期）产出交互提议，走 outbox。
+                        # L0-3: 提案属自主行为 — LEVEL>=1 才允许（0=零自主）
+                        if (self._active_interaction is not None
+                                and self._hb_ticks % 60 == 0
+                                and self._autonomy_level >= 1):
                             try:
-                                self._run_dream_cycle()
+                                self._active_interaction.scan_and_interact()
                             except Exception:
-                                logger.exception("Fatigue dream failed")
-                    # 定期主动输出（每 60 tick ≈ 5min @ 5s/tick）
-                    if self._hb_ticks % 60 == 0:
-                        if agent_obj is not None and hasattr(agent_obj, "maybe_proactive_output"):
-                            agent_obj.maybe_proactive_output()
-                    # P5.2 (AGI 计划): Phase 53 主动交互唤醒 — 空闲期基于
-                    # 目标状态（停滞/依赖数据过期）产出交互提议，走 outbox。
-                    if (self._active_interaction is not None
-                            and self._hb_ticks % 60 == 0):
-                        try:
-                            self._active_interaction.scan_and_interact()
-                        except Exception:
-                            logger.exception("Active interaction scan failed")
-                except Exception:
-                    pass
+                                logger.exception("Active interaction scan failed")
+                        # L3: MotivationHub 自主目标扫描（每 120 tick ≈ 10min）。
+                        # 提案属自主行为 — LEVEL>=1 才允许；内部再按
+                        # LEVEL>=2 + 低风险白名单决定落地通道。
+                        if (self._motivation is not None
+                                and self._hb_ticks % 120 == 0
+                                and self._autonomy_level >= 1):
+                            try:
+                                stats = self._motivation.scan()
+                                if stats.get("proposed"):
+                                    logger.info(
+                                        "MotivationHub scan: %s", stats)
+                            except Exception:
+                                logger.exception("Motivation scan failed")
+                            # V2 行为级验收扫描（REPAIR 完成后 6h 核对
+                            # 复发/先验注入 → reflection_adoption_rate）
+                            try:
+                                vstats = self._motivation.verify_repairs()
+                                if vstats.get("checked"):
+                                    logger.info("REPAIR verify: %s", vstats)
+                            except Exception:
+                                logger.exception("REPAIR verify failed")
+                        # V3 感知-反应（每 30 tick ≈ 2.5min）: 环境刺激
+                        # 扫描 → EventBus 留痕 → 低风险 PROBE 落地。
+                        # LEVEL>=1 才允许（0=零自主，与提案语义一致）。
+                        if (self._stimulus is not None
+                                and self._hb_ticks % 30 == 0
+                                and self._autonomy_level >= 1):
+                            try:
+                                self._perceive()
+                            except Exception:
+                                logger.exception("Stimulus scan failed")
+                    except Exception:
+                        pass
 
-            # Phase E: 自我演化监控 — 每 120 tick（≈10min）检查一次 SelfModel 是否需要演化
-            if self._self_monitor_eligible and self._self_monitor is not None:
-                try:
-                    if self._hb_ticks % 120 == 0:
-                        result = self._self_monitor.run_once()
-                        logger.info("Self evolution check: action=%s message=%s",
-                                   result.action.value, result.message)
-                except Exception:
-                    logger.debug("SelfMonitor tick failed", exc_info=True)
+                # L4-2: 自我模型校准（每 N tick，默认 50）—
+                # 实测画像随行为演进（能力成功率/性格参数/当前专注）
+                if (self._self_model is not None
+                        and self._hb_ticks % self._self_model_ticks == 0):
+                    try:
+                        self._self_model.calibrate(
+                            capability_names=self._self_model_caps)
+                    except Exception:
+                        logger.exception("SelfModel calibrate failed")
+
+                # Phase E: 自我演化监控 — 每 120 tick（≈10min）检查一次 SelfModel 是否需要演化
+                if self._self_monitor_eligible and self._self_monitor is not None:
+                    try:
+                        if self._hb_ticks % 120 == 0:
+                            result = self._self_monitor.run_once()
+                            logger.info("Self evolution check: action=%s message=%s",
+                                       result.action.value, result.message)
+                    except Exception:
+                        logger.debug("SelfMonitor tick failed", exc_info=True)
+            elif self._hb_ticks % 60 == 0:
+                logger.info("Braked — tick %d suspended (conversation alive)",
+                            self._hb_ticks)
+
+            # UX-P2: 消费用户消息（ocos say）— 对话响应在制动期间保持
+            self._drain_user_inbox()
 
             # GAP-P1-2: 周期健康体检（HealthLoop 内部按 interval_ticks 节流）
             if self._health_loop is not None:
@@ -459,7 +771,53 @@ class ResidentRuntime:
                 except Exception:
                     logger.exception("Health loop tick failed")
 
-            # AUD-F1: 感知周期（无传感器时零开销零写入）
+            # L2-5: 成长叙事周报（内部按 ISO 周切换节流，其余 tick 零开销）
+            if not self._braked and self._hb_ticks % 100 == 0:
+                try:
+                    from ocos.daemon.growth_narrative import check_week_rollover
+                    report = check_week_rollover(self._db_path)
+                    if report is not None and self._user_inbox is not None:
+                        summary = (f"[成长叙事 第{report.chapter}章"
+                                   f"（{report.week_key}）] 本周完成目标 "
+                                   f"{report.goals_completed} 个，沉淀经历 "
+                                   f"{report.episodes_total} 段"
+                                   + (f"，学到 {len(report.lessons)} 条经验"
+                                      if report.lessons else ""))
+                        self._user_inbox.post_outbound(summary, kind="report")
+                        self._dispatch_result(summary)   # V1 主动汇报出口
+                except Exception:
+                    logger.exception("Growth narrative check failed")
+
+                # 数字生命·自我连续性: 周度身份快照（周键幂等，同周首次
+                # tick 落一份）。此前 identity_snapshots 仅优雅 shutdown
+                # 路径写入，systemd 下 daemon 从不优雅关闭 → 表恒空。
+                if self._runtime is not None:
+                    try:
+                        snap = self._runtime.save_weekly_identity_snapshot()
+                        if snap is not None:
+                            logger.info(
+                                "Weekly identity snapshot: %s "
+                                "(goals_completed=%s, episodes=%s)",
+                                snap.get("week_key"),
+                                snap.get("goals_completed_this_week"),
+                                snap.get("episodes_this_week"))
+                    except Exception:
+                        logger.exception(
+                            "Weekly identity snapshot failed")
+
+                # §3.1: 生命体征日报告（内部按日切换节流，其余 tick 零开销）
+                try:
+                    from ocos.daemon.vitals_report import check_day_rollover
+                    vreport = check_day_rollover(self._db_path)
+                    if vreport is not None and self._user_inbox is not None:
+                        summary = vreport.summary()
+                        self._user_inbox.post_outbound(summary, kind="report")
+                        self._dispatch_result(summary)   # V1 主动汇报出口
+                except Exception:
+                    logger.exception("Vitals daily report check failed")
+
+            # AUD-F1: 感知周期（无传感器时零开销零写入）— 被动感知，
+            # 制动期间保留（只记录环境，不触发行为）
             if self._perception_pipeline is not None:
                 try:
                     self._perception_pipeline.tick()
@@ -477,6 +835,13 @@ class ResidentRuntime:
                 if self._stop_event.is_set():
                     break
                 time.sleep(0.1)
+          except Exception:
+            # 自愈兜底: 残余异常不得杀死 tick 线程（线程死亡 = 认知
+            # 循环/心跳/全部自愈循环停摆且 systemd 不重启）。记录后
+            # 继续下一 tick；连续异常由睡眠自然节流。
+            logger.exception("Tick loop residual failure (cycle=%s)",
+                             getattr(self._runtime, "_cycle_count", "?"))
+            time.sleep(self._tick_interval)
 
     def _drain_goal_queue(self) -> int:
         """将目标队列中的 goal 导入 runtime 的 goal_store（线程安全）。
@@ -495,11 +860,13 @@ class ResidentRuntime:
         return 1
 
     def _import_goal(self, description: str, domain: str,
-                     goal_id: str | None, caller: str = "daemon") -> bool:
+                     goal_id: str | None, caller: str = "daemon",
+                     self_origin: bool = False) -> bool:
         """构造 agent 层 Goal 并写入 runtime._goal_store（Step 6 可消费）。
 
         UX-1 修复: 此前构造 UserGoal 传入期望 Goal 对象的 save()
         （属性名不匹配 → AttributeError 被吞），队列目标静默丢失。
+        L3: self_origin=True 时 origin=SELF（自生成目标的诚实标注）。
         """
         try:
             from ocos.kernel.goal_types import Goal, GoalDomain, GoalLevel
@@ -517,7 +884,8 @@ class ResidentRuntime:
                 raw_input=description,
                 objective=description,
                 domain=domain_map.get(domain, GoalDomain.DEVELOPMENT),
-                origin_level=GoalOriginLevel.HUMAN,   # UX-F4: 用户目标是人类来源
+                origin_level=(GoalOriginLevel.SELF if self_origin
+                              else GoalOriginLevel.HUMAN),   # UX-F4: 用户目标=人类来源
                 authority=GoalAuthority.FRAMEWORK,
                 caller=caller,   # UX-I: chat 目标 → Step6 单任务直执行
             )
@@ -534,31 +902,66 @@ class ResidentRuntime:
             return False
 
     def _push_goal_results(self) -> None:
-        """UX-J: 新 goal_result episode → 出站消息（UI 自动弹出结果）。"""
+        """UX-J: 新 goal_result episode → 出站消息（UI 自动弹出结果）。
+
+        可被两条路径并发调用（即时回调 + 5-tick 兜底），全程持锁
+        防止同批 episode 重复推送。
+        """
         if self._user_inbox is None:
             return
-        conn = __import__("sqlite3").connect(
-            self._user_inbox._db_path)  # noqa — 只读查询同库
-        try:
-            if not self._result_cursor_init:
-                # 首次调用: 游标定位到当前最大 rowid（历史不重播），
-                # 之后新增的 goal_result 全部推送（修掉游标 -1 永久抑制的 bug）
-                self._last_result_rowid = conn.execute(
-                    "SELECT COALESCE(MAX(rowid), 0) FROM episodes "
-                    "WHERE tags LIKE '%goal_result%'").fetchone()[0]
-                self._result_cursor_init = True
-                return
-            rows = conn.execute(
-                "SELECT rowid, substr(decision,1,4000), created_at FROM episodes "
-                "WHERE tags LIKE '%goal_result%' AND rowid > ? "
-                "ORDER BY rowid LIMIT 5",
-                (self._last_result_rowid,)).fetchall()
-        finally:
-            conn.close()
-        for rid, decision, created in rows:
-            self._user_inbox.post_outbound(
-                f"目标执行完成（{created[11:19]}）：\n{decision}")
-            self._last_result_rowid = rid
+        with self._result_push_lock:
+            conn = __import__("sqlite3").connect(
+                self._user_inbox._db_path)  # noqa — 只读查询同库
+            try:
+                if not self._result_cursor_init:
+                    # 首次调用: 游标定位到当前最大 rowid（历史不重播），
+                    # 之后新增的 goal_result 全部推送（修掉游标 -1 永久抑制的 bug）
+                    self._last_result_rowid = conn.execute(
+                        "SELECT COALESCE(MAX(rowid), 0) FROM episodes "
+                        "WHERE tags LIKE '%goal_result%'").fetchone()[0]
+                    self._result_cursor_init = True
+                    return
+                rows = conn.execute(
+                    "SELECT rowid, substr(decision,1,4000), created_at, outcome "
+                    "FROM episodes WHERE tags LIKE '%goal_result%' AND rowid > ? "
+                    "ORDER BY rowid LIMIT 5",
+                    (self._last_result_rowid,)).fetchall()
+            finally:
+                conn.close()
+            for rid, decision, created, outcome in rows:
+                result_text = f"目标执行完成（{created[11:19]}）：\n{decision}"
+                self._user_inbox.post_outbound(result_text)
+                self._dispatch_result(result_text)   # L2-3: 结果类附加外发
+                self._last_result_rowid = rid
+                # L3 防跑飞: 在途自主目标的结果 → 连续失败计数/自动降级。
+                # FIFO 配对为近似（daemon 单线程串行认领），诚实标注于
+                # _autonomous_inflight 定义处；outcome.success 是执行器
+                # 真值，非自报告。
+                # V2 行为级验收: REPAIR 目标完成 → 打点（验收扫描在
+                # motivation.verify_repairs，每 120 tick）。无此打点，
+                # 复盘永远只是"产出文本"——验收使其成为可观测变更。
+                if self._motivation is not None:
+                    m = re.search(r"复盘并验证「(.+?)」", decision)
+                    if m:
+                        try:
+                            self._motivation.record_repair_completion(
+                                m.group(1), goal_ref=decision[:60])
+                        except Exception:
+                            logger.debug("repair completion mark failed",
+                                         exc_info=True)
+                if self._autonomous_inflight:
+                    self._autonomous_inflight.popleft()
+                    if self._motivation is not None:
+                        success = True
+                        try:
+                            oc = json.loads(outcome or "{}")
+                            success = bool(oc.get("success", True))
+                        except (ValueError, TypeError):
+                            pass
+                        try:
+                            self._motivation.record_result(success)
+                        except Exception:
+                            logger.exception("Motivation record_result failed")
 
     def _run_dream_cycle(self) -> None:
         """P1-1: 完整睡眠巩固序列 — 修复生命周期相位后 sleep→dream。
@@ -590,19 +993,120 @@ class ResidentRuntime:
                 logger.info("Persisted %d learning rule(s) after dream", saved)
         except Exception:
             logger.debug("dream rules persistence skipped")
+        # V2/S1: 技能合成 — 同型成功经验 ≥2 次 → SkillGraph 落注册表
+        # （经验→技能写入端；bridge _skill_replay_hint 为重放读侧）
+        try:
+            self._synthesize_skills()
+        except Exception:
+            logger.exception("Skill synthesis failed")
         logger.info("Dream consolidation: wisdom_total=%s consolidation=%s",
                     (out.get("wisdom_stats") or {}).get("wisdom_total", "?"),
                     out.get("consolidation_stats", {}))
 
+    def _synthesize_skills(self) -> int:
+        """V2/S1: 技能合成 — 同型成功经验 ≥2 次 → SkillGraph（无 LLM）。
+
+        口径: goal_result 成功记录（decision 以 ✓/✅ 开头）按目标描述
+        （context.goal，缺省取 decision 摘要）前 40 字聚合；同型 ≥2 次
+        且注册表无同名图 → 合成单步 decision 技能图落 capability.db
+        （与主库同目录）。重放读侧 = bridge._skill_replay_hint。
+        """
+        import sqlite3
+        import uuid as _uuid
+        from pathlib import Path as _P
+        from ocos.capability.skill_registry import SkillRegistry
+        from ocos.capability.models import Skill, SkillGraph
+        conn = sqlite3.connect(self._db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT decision, context FROM episodes "
+                "WHERE source='goal_result' AND action='goal_result' "
+                "ORDER BY created_at DESC LIMIT 120").fetchall()
+        finally:
+            conn.close()
+        patterns: dict = {}
+        for r in rows:
+            d = str(r["decision"] or "").strip()
+            if not (d.startswith("✓") or d.startswith("✅")):
+                continue
+            try:
+                ctx = json.loads(r["context"] or "{}")
+            except (ValueError, TypeError):
+                ctx = {}
+            goal = str(ctx.get("goal") or "").strip()
+            key = (goal or d.split("→", 1)[0]).strip()[:40]
+            if key:
+                patterns.setdefault(key, []).append(d[:200])
+        if not patterns:
+            return 0
+        reg = SkillRegistry(
+            db_path=str(_P(self._db_path).parent / "capability.db"))
+        reg.init_db()
+        try:
+            existing = {g.name for g in reg.list_graphs()}
+        except Exception:
+            existing = set()
+        created = 0
+        for key, results in patterns.items():
+            if len(results) < 2 or key in existing:
+                continue
+            skill = Skill(
+                id=f"SK-{_uuid.uuid4().hex[:10]}",
+                name=key,
+                description=("已验证经验（成功 %d 次）：%s"
+                             % (len(results), results[0][:120])),
+                input_state={"task": key},
+                required_capability="decision",
+            )
+            graph = SkillGraph(
+                id=f"SG-{_uuid.uuid4().hex[:10]}",
+                name=key,
+                description="同型成功经验 ≥2 次自动合成（dream 巩固）",
+                skills=[skill],
+                entry_point=skill.id,
+            )
+            try:
+                reg.save_skill(skill)
+                reg.save_graph(graph)
+                created += 1
+            except Exception as e:
+                logger.debug("skill save failed: %s", e)
+        if created:
+            logger.info("Synthesized %d skill graph(s) from "
+                        "successful experience", created)
+            base = os.environ.get("OCOS_AUDIT_DIR", "").strip()
+            audit_dir = (_P(base).expanduser() if base
+                         else _P.home() / ".ocos" / "audit")
+            try:
+                audit_dir.mkdir(parents=True, exist_ok=True)
+                with (audit_dir / "learning.jsonl").open(
+                        "a", encoding="utf-8") as f:
+                    f.write(json.dumps({
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "type": "skill_synthesized", "count": created,
+                    }, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+        return created
+
     def _write_heartbeat(self) -> None:
-        """UX-F3: 每 tick 写心跳文件（Web 侧栏/状态命令判断存活）。"""
+        """UX-F3: 每 tick 写心跳文件（Web 侧栏/状态命令判断存活）。
+
+        L0-3/L0-5: 心跳携带自主级别与制动状态 — `ocos status`/vitals
+        可判断"进程活着但被制动"（区别于僵死）。
+        """
         import json
         from pathlib import Path
-        hb = Path.home() / ".ocos" / "daemon_heartbeat.json"
+        hb = Path(os.environ.get(
+            "OCOS_HEARTBEAT_PATH",
+            str(Path.home() / ".ocos" / "daemon_heartbeat.json")))
         hb.parent.mkdir(parents=True, exist_ok=True)
         hb.write_text(json.dumps({
             "pid": os.getpid(),
             "cycle": getattr(self._runtime, "_cycle_count", 0),
+            "braked": self._braked,
+            "autonomy_level": self._autonomy_level,
             "ts": datetime.now(timezone.utc).isoformat(),
         }), encoding="utf-8")
 
@@ -653,23 +1157,106 @@ class ResidentRuntime:
                     except Exception:
                         logger.exception("Inbox failure reply write-back failed: %s", msg["id"])
             # fallback: 旧路径（_responder 为 None 时）
-            result = self._runtime.inject_user_message(
-                msg["content"], sender=msg.get("sender", "say"))
-            if result.get("accepted"):
-                logger.info("User message delivered: %s (%s)",
-                            msg["id"], msg["content"][:40])
+            try:
+                result = self._runtime.inject_user_message(
+                    msg["content"], sender=msg.get("sender", "say"))
+                if result.get("accepted"):
+                    logger.info("User message delivered: %s (%s)",
+                                msg["id"], msg["content"][:40])
+            except Exception:
+                # fallback 也必须保护 — 此函数被主 tick 循环裸调用
+                logger.exception("inject_user_message fallback failed: %s",
+                                 msg["id"])
         return len(messages)
+
+    def _perceive(self) -> dict:
+        """V3 感知-反应神经: 刺激扫描 → EventBus 留痕 → PROBE 落地。
+
+        这是 OCOS 第一条"刺激驱动"行为通路（此前全部行为皆目标驱动
+        或用户驱动）。扫描无刺激时零开销。
+        """
+        if self._stimulus is None:
+            return {"fired": 0, "proposed": 0}
+        stimuli = self._stimulus.scan()
+        for s in stimuli:
+            try:
+                self._event_bus.push_stimulus(s)
+            except Exception:
+                logger.debug("event bus push failed", exc_info=True)
+        if stimuli and self._motivation is not None:
+            stats = self._motivation.propose_stimulus(
+                stimuli, level=self._autonomy_level)
+            logger.info("Perception → motivation: %s", stats)
+            return {"fired": len(stimuli), **stats}
+        return {"fired": len(stimuli), "proposed": 0}
+
+    def _auto_approve_pending(self, cap: int = 10) -> int:
+        """全自动模式（OCOS_APPROVAL_MODE=auto）: 待批队列每 tick 自动通过。
+
+        用户决策（2026-09-07，个人使用模式）: 不使用人工审批，全部自动
+        通过。治理留痕完整保留 — decide(decided_by="auto") 与 execute_approved
+        走与人工批准同一条溯源通道（approval_id 校验、ExecutionAudit、
+        result_summary 回写均不绕过）；ask 模式下本方法为零开销空转。
+        cap/tick 防积压一次性爆发挤爆 tick 预算。
+        """
+        bridge = getattr(self._runtime, "_decision_bridge", None)
+        store = getattr(bridge, "_pending_store", None)
+        if bridge is None or store is None:
+            return 0
+        from ocos.execution.pending import approval_disabled
+        if not approval_disabled():
+            return 0
+        try:
+            rows = store.list_by_status("pending")[:cap]
+        except Exception:
+            logger.exception("auto approve: list pending failed")
+            return 0
+        n = 0
+        for row in rows:
+            pid = row.get("id", "")
+            try:
+                if not store.decide(pid, approved=True, decided_by="auto"):
+                    continue
+                payload = json.loads(row.get("payload_json") or "{}")
+                payload.setdefault("approval_id", pid)
+                dispatched = bridge.execute_approved(
+                    row["action_type"], payload)
+                ok = (dispatched is not None
+                      and getattr(dispatched, "status", "") == "done")
+                summary = (str(getattr(dispatched, "result", ""))[:500]
+                           if dispatched is not None else "no executor")
+                store.mark_executed(pid, result_summary=summary, executed=ok)
+                n += 1
+                logger.info("Auto-approved %s (%s) -> %s",
+                            pid, row["action_type"],
+                            "executed" if ok else "blocked")
+            except Exception:
+                logger.exception("auto approve failed: %s", pid)
+        return n
 
     def _claim_persisted_goals(self) -> int:
         """UX-1: 认领 goals 表中 CLI 创建的 PENDING 人类目标。
 
         每 tick 最多认领 1 个（与队列同款节流）。认领 = goals 表置 ACTIVE
         （防重复），内容写入 runtime._goal_store 供 Step 6 分解消费。
+        V1 闭环: 无 HUMAN 待领时认领已批准的自主目标（SELF + approved，
+        LEVEL>=1 门控 — 批准即 authority，LEVEL=0 仍全程静默）。
         """
         if self._domain_goal_store is None:
             return 0
         try:
             claimed = self._domain_goal_store.claim_pending_human(limit=1)
+            if not claimed:
+                from ocos.execution.autonomy import can_autonomous_execute, can_propose
+                if can_autonomous_execute():
+                    # LEVEL>=2 低风险自主执行 — goals_table 直写提案
+                    # （无 approved 标记）也可认领
+                    claimed = self._domain_goal_store.claim_pending_approved_self(
+                        limit=1, require_approved=False)
+                elif can_propose():
+                    # LEVEL>=1 — 仅认已批准（人工/自动通过）的自主目标
+                    claimed = self._domain_goal_store.claim_pending_approved_self(
+                        limit=1, require_approved=True)
         except Exception:
             logger.exception("Goal claim failed")
             return 0
@@ -682,10 +1269,33 @@ class ResidentRuntime:
                 except ValueError:
                     metadata = {}
             domain = (metadata or {}).get("domain", "writing") if isinstance(metadata, dict) else "writing"
+            is_autonomous = (isinstance(metadata, dict)
+                             and bool(metadata.get("autonomous")))
+            if is_autonomous:
+                # L3: 自主目标入在途队列（FIFO 近似配对 goal_result，
+                # 驱动防跑飞连续失败计数）
+                self._autonomous_inflight.append(row["id"])
             if self._import_goal(description=row.get("description", ""),
                                  domain=domain, goal_id=row["id"],
-                                 caller=src_channel):
+                                 caller="motivation" if is_autonomous else src_channel,
+                                 self_origin=is_autonomous):
                 self._goal_processed += 1
-                logger.info("Claimed persisted goal: %s (domain=%s)",
-                            row["id"], domain)
+                logger.info("Claimed persisted goal: %s (domain=%s, autonomous=%s)",
+                            row["id"], domain, is_autonomous)
+                # P1 执行可见性（2026-09-08 用户反馈"不知道后台是在做还是
+                # 断了"）: 认领即发 progress 出站消息 — 执行起点在 TUI/
+                # WebUI 对话流可见（执行窗口常短于前端 6s 轮询，仅靠
+                # feed 活动徽章会错过起点，此消息为可靠锚点）
+                if self._user_inbox is not None:
+                    try:
+                        self._user_inbox.post_outbound(
+                            f"⟳ 已认领目标 {row['id']}："
+                            f"{row.get('description', '')[:80]}\n"
+                            f"（domain={domain}，"
+                            f"{'自主' if is_autonomous else '人工'}目标 — "
+                            f"执行完成后结果自动回推本对话）",
+                            kind="progress")
+                    except Exception:
+                        logger.debug("claim progress outbound failed",
+                                     exc_info=True)
         return len(claimed)

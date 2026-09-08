@@ -190,9 +190,44 @@ class GoalStore:
         rows = conn.execute(
             f"""SELECT {self._GOAL_COLS} FROM goals
                 WHERE status = 'PENDING' AND origin_level = 'HUMAN'
-                ORDER BY created_at LIMIT ?""",
+                ORDER BY priority DESC, created_at LIMIT ?""",
             (limit,),
         ).fetchall()
+        claimed = []
+        for row in rows:
+            cur = conn.execute(
+                """UPDATE goals SET status = 'ACTIVE', updated_at = ?
+                   WHERE id = ? AND status = 'PENDING'""",
+                (now, row[0]),
+            )
+            if cur.rowcount:
+                claimed.append(self._goal_row_to_dict(row))
+        conn.commit()
+        return claimed
+
+    def claim_pending_approved_self(self, limit: int = 1,
+                                    require_approved: bool = True) -> list[dict]:
+        """认领自主目标（origin_level='SELF'，PENDING）。
+
+        V1 闭环最后一环：MotivationHub 提案 → 待批/直写 → goals 表
+        origin_level='SELF'；此前唯一认领通道只认 HUMAN，自主目标永久
+        滞留 PENDING（生产 5 条实证）。本方法补上 SELF 认领。
+
+        两档语义（调用方负责 LEVEL 门控）:
+          require_approved=True  — 仅认 metadata.approved=true（批准即
+            authority，LEVEL>=1 生效）；
+          require_approved=False — LEVEL>=2 低风险自主执行语义：经
+            _propose goals_table 直写的低风险提案（无 approved 标记）
+            也可认领。
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._conn()
+        sql = (f"""SELECT {self._GOAL_COLS} FROM goals
+                   WHERE status = 'PENDING' AND origin_level = 'SELF'""")
+        if require_approved:
+            sql += " AND metadata LIKE '%\"approved\": true%'"
+        sql += " ORDER BY priority DESC, created_at LIMIT ?"
+        rows = conn.execute(sql, (limit,)).fetchall()
         claimed = []
         for row in rows:
             cur = conn.execute(

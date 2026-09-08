@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from ocos.interaction.api.models import APIResponse
 from ocos.interaction.cli.paths import resolve_db_path
@@ -71,6 +72,190 @@ async def converse(body: dict[str, Any]) -> APIResponse:
               "mock": out["mock"], "goal_id": out.get("goal_id"),
               "kind": out.get("kind")},
     )
+
+
+# ── 对话（R1b: 流式 SSE — token 打字机） ─────────────────────────────
+
+@router.post("/ocos/converse/stream", tags=["converse"])
+async def converse_stream(body: dict[str, Any]) -> StreamingResponse:
+    """POST /ocos/converse/stream — 与数字生命对话（流式 SSE）。
+
+    请求: {"message": "...", "session_id": "..."}
+    返回 text/event-stream：
+      data: <delta text>                 # 逐段增量
+      event: done / data: {…meta json}   # 结束，携带 provider/reply/goal_id/kind
+      event: error / data: <message>     # 失败
+    """
+    _guard_or_403("create_goal")
+    message = str(body.get("message", "")).strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    session_id = str(body.get("session_id", "") or "").strip()[:64] or "web"
+
+    from ocos.interaction.converse import (ChatResponder,
+                                           make_default_tool_executor)
+    responder = ChatResponder(db_path=_db(),
+                              tool_executor=make_default_tool_executor(_db()))
+    q: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+    main_loop = asyncio.get_running_loop()
+
+    def emit(text: str) -> None:
+        main_loop.call_soon_threadsafe(q.put_nowait, ("text", text))
+
+    def _worker() -> None:
+        """在工作线程独立事件循环里跑 respond_stream，增量经 emit 回投主循环。"""
+        try:
+            out = responder.respond_auto(message, session_id=session_id,
+                                         _emit=emit)
+            main_loop.call_soon_threadsafe(
+                q.put_nowait, ("done", json.dumps({
+                    "reply": out["reply"], "provider": out.get("provider", ""),
+                    "mock": out.get("mock", False),
+                    "goal_id": out.get("goal_id"),
+                    "kind": out.get("kind"),
+                })))
+        except asyncio.CancelledError:
+            main_loop.call_soon_threadsafe(q.put_nowait, ("error", "cancelled"))
+        except Exception as e:  # noqa: BLE001
+            main_loop.call_soon_threadsafe(
+                q.put_nowait, ("error", f"{type(e).__name__}: {e}"))
+
+    worker = asyncio.create_task(asyncio.to_thread(_worker))
+
+    async def _gen():
+        try:
+            while True:
+                kind, payload = await q.get()
+                if kind == "text":
+                    # SSE 帧内不能含裸换行：按行拆成多条 data: 帧
+                    for line in payload.split("\n"):
+                        if line:
+                            yield f"data: {line}\n\n"
+                elif kind == "done":
+                    yield f"event: done\ndata: {payload}\n\n"
+                    break
+                else:  # error
+                    yield f"event: error\ndata: {payload}\n\n"
+                    break
+        finally:
+            worker.cancel()
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+# ── 目标执行结果回推（CHAT-ROUTE FIX 2026-09-07） ────────────────────
+
+def _daemon_activity() -> dict[str, Any]:
+    """daemon 心跳存活快照（feed/summary 共用）。
+
+    OCOS_HEARTBEAT_PATH 环境变量优先（测试隔离），默认
+    ~/.ocos/daemon_heartbeat.json；读不到 → alive=False（诚实报告）。
+    """
+    import os as _os
+    from pathlib import Path as _Path
+    env = _os.environ.get("OCOS_HEARTBEAT_PATH", "")
+    hb_file = _Path(env) if env else _Path.home() / ".ocos" / "daemon_heartbeat.json"
+    try:
+        hb = json.loads(hb_file.read_text(encoding="utf-8"))
+        age = time.time() - datetime.fromisoformat(hb["ts"]).timestamp()
+        return {"alive": age < 30, "age_s": round(age, 1),
+                "cycle": hb.get("cycle", 0)}
+    except (OSError, ValueError, KeyError):
+        return {"alive": False, "age_s": None, "cycle": 0}
+
+
+def _goal_activity(conn: Any) -> dict[str, Any]:
+    """在执行/排队目标快照 — 前端活动徽章数据源（执行可见性）。"""
+    from datetime import datetime as _dt, timezone as _tz
+    out: dict[str, Any] = {"active_goal": None, "pending_goals": 0}
+    try:
+        row = conn.execute(
+            "SELECT id, description, origin_level, updated_at FROM goals "
+            "WHERE status='ACTIVE' ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+        if row:
+            elapsed: Any = None
+            try:
+                t0 = _dt.fromisoformat(str(row[3]))
+                if t0.tzinfo is None:
+                    t0 = t0.replace(tzinfo=_tz.utc)
+                elapsed = round(max(0.0, (_dt.now(_tz.utc) - t0)
+                                    .total_seconds()), 1)
+            except ValueError:
+                pass
+            out["active_goal"] = {"id": str(row[0]),
+                                  "description": str(row[1] or "")[:120],
+                                  "origin": str(row[2] or ""),
+                                  "elapsed_s": elapsed}
+        out["pending_goals"] = int(conn.execute(
+            "SELECT COUNT(*) FROM goals WHERE status='PENDING'"
+        ).fetchone()[0])
+    except Exception:   # goals 表缺失/损坏 — 诚实降级为空快照
+        pass
+    return out
+
+
+@router.get("/ocos/converse/feed", tags=["converse"])
+async def converse_feed(since: str = "") -> APIResponse:
+    """GET /ocos/converse/feed?since=<ISO> — 目标执行结果增量流。
+
+    Web UI 对话流轮询此端点：返回 created_at > since 的 goal_result
+    episodes（升序，最多 5 条）。个人单用户模式不按 session 过滤 —
+    所有目标执行结果都推给主人对话流，兑现"结果自动出现在本对话"。
+    空结果返回 items=[]（前端据此跳过渲染）。
+
+    2026-09-08 执行可见性: 响应附 activity 快照（daemon 心跳存活、
+    在执行目标及耗时、排队目标数）— 前端据此渲染常驻状态徽章，
+    区分"空闲待命 / 执行中 / 后台离线"三态（用户此前无从分辨）。
+    """
+    import sqlite3 as _sq
+    from datetime import datetime as _dt, timezone as _tz
+
+    since_dt: Any = None
+    if since:
+        try:
+            since_dt = _dt.fromisoformat(since)
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=_tz.utc)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="bad since timestamp")
+
+    conn = _sq.connect(f"file:{_db()}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT id, created_at, decision, outcome "
+            "FROM episodes WHERE action='goal_result' "
+            "ORDER BY created_at DESC LIMIT 25").fetchall()
+        activity = _goal_activity(conn)
+    finally:
+        conn.close()
+    activity["daemon"] = _daemon_activity()
+
+    items: list[dict[str, Any]] = []
+    for rid, created, decision, outcome in rows:
+        try:
+            row_dt = _dt.fromisoformat(str(created))
+            if row_dt.tzinfo is None:
+                row_dt = row_dt.replace(tzinfo=_tz.utc)
+        except ValueError:
+            continue
+        if since_dt is not None and row_dt <= since_dt:
+            continue
+        success = True
+        try:
+            success = bool(json.loads(outcome or "{}").get("success", True))
+        except Exception:
+            pass
+        items.append({"id": rid, "created_at": str(created),
+                      "decision": str(decision or "")[:1600],
+                      "success": success})
+        if len(items) >= 5:
+            break
+    items.reverse()   # 升序：前端按序追加
+    return APIResponse(success=True, message="ok",
+                       data={"items": items, "server_time":
+                             _dt.now(_tz.utc).isoformat(),
+                             "activity": activity})
 
 
 # ── 状态总览（侧栏数据源） ──────────────────────────────────────────
@@ -138,9 +323,19 @@ async def summary() -> APIResponse:
 
 @router.get("/ocos/outbox", tags=["converse"])
 async def outbox(after: int = 0) -> APIResponse:
-    """GET /ocos/outbox?after=<rowid> — 增量拉取 agent 主动消息。"""
+    """GET /ocos/outbox?after=<rowid> — 增量拉取 agent 主动消息。
+
+    after=-1 → 仅返回当前游标（max rowid），不取历史：UI 首刷据此
+    跳过存量回放（与 converse/feed "首刷只校准不回放"语义对齐；
+    此前 cursor=0 从最老 20 条开始爬，永远追不上新消息）。
+    """
     from ocos.interaction.inbox import UserInbox
-    rows = UserInbox(db_path=_db()).list_outbound_after(after)
+    inbox = UserInbox(db_path=_db())
+    if after == -1:
+        return APIResponse(success=True, message="ok",
+                           data={"messages": [],
+                                 "next_cursor": inbox.max_rowid()})
+    rows = inbox.list_outbound_after(after)
     next_cursor = max((r["rid"] for r in rows), default=after)
     return APIResponse(success=True, message="ok",
                        data={"messages": rows, "next_cursor": next_cursor})
@@ -212,10 +407,13 @@ async def goals_from_chat(body: dict[str, Any]) -> APIResponse:
 
 @router.get("/ocos/approvals", tags=["converse"])
 async def list_approvals() -> APIResponse:
-    from ocos.execution.pending import PendingStore
+    from ocos.execution.pending import PendingStore, approval_disabled
     rows = PendingStore(db_path=_db()).list_by_status("pending")
+    # P2-UX (2026-09-08): 前端需感知审批模式 — auto 模式下待批项秒级被
+    # daemon 自动通过，用户点击时 404 属预期，面板应明示而非误导
     return APIResponse(success=True, message="ok",
-                       data={"pending": rows})
+                       data={"pending": rows,
+                             "mode": "auto" if approval_disabled() else "ask"})
 
 
 @router.post("/ocos/approvals/{pid}/approve", tags=["converse"])

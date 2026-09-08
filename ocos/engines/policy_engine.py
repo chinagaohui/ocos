@@ -157,6 +157,27 @@ class PolicyEngine:
             eval_result = self._evaluate_rule(rule, ctx)
             evaluations.append(eval_result)
 
+        # L1: 自主级别闸门 — 合成一条 autonomy_gate 评估（context.autonomy_level
+        # 可覆盖，供测试/显式注入）；LEVEL=0 时策略评估整体不通过
+        level = ctx.get("autonomy_level")
+        if level is None:
+            from ocos.execution.autonomy import get_autonomy_level
+            level = get_autonomy_level()
+        gate_passed = level >= 1
+        level_desc = ("可自主执行" if level >= 2
+                      else "可自主提案(需审批)" if level == 1
+                      else "自主行为关闭")
+        evaluations.append(PolicyEvaluation(
+            rule_id="autonomy_gate",
+            rule_name="autonomy_gate",
+            effect=PolicyEffect.DENY,
+            passed=gate_passed,
+            detail=(
+                f"autonomy_level={level} ({level_desc}): "
+                f"{'PASS' if gate_passed else 'FAIL — LEVEL=0 禁止自主行为'}"
+            ),
+        ))
+
         all_passed = all(e.passed for e in evaluations)
         output_addrs = (
             (f"addr:policy:pass:{uuid.uuid4().hex}",) if all_passed

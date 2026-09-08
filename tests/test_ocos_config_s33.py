@@ -37,6 +37,8 @@ class TestOCOSConfig:
     def test_approval_mode_via_config(self, tmp_path, monkeypatch):
         """approval_disabled 走统一配置（迁移样板 3）。"""
         monkeypatch.setenv("OCOS_DB_PATH", str(tmp_path / "t.db"))
+        # 隔离宿主机 ~/.ocos/config.json（可能已置 auto — 2026-09-07 全自动模式）
+        monkeypatch.setenv("OCOS_CONFIG_PATH", str(tmp_path / "cfg.json"))
         monkeypatch.delenv("OCOS_APPROVAL_MODE", raising=False)
         from ocos.execution.pending import approval_disabled
         assert approval_disabled() is False  # S3.13: 默认已切 ask

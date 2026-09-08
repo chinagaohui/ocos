@@ -24,10 +24,10 @@ import os
 import re
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ocos.logging import get_logger
 from ocos.interaction.context import InteractionContext
@@ -43,7 +43,11 @@ _SYSTEM_PROMPT = (\
     "- 用中文，极简输出，只要结果不要过程\n"\
     "- 禁止使用任何 markdown 格式（# ** - 等；USE| 动作行除外），纯文本输出\n"\
     "- 禁止分点罗列、禁止标题、禁止解释性文字\n"\
-    "- 历史与记忆类问题 → 只基于【自我认知】【最近对话】【最近目标结果】说话，不要编造\n"\
+    "- 历史与记忆类问题 → 只基于【自我认知】【最近对话】【最近目标结果】说话，不要编造\n"
+    "- 诚实性硬规则（E2E-T7）: 上下文里没有的事必须直说'我没有相关记录'，"
+    "禁止顺着用户的预设续写（如用户说'昨天你查的X'但上下文无此事，"
+    "回答'我这边没有昨天查过X的记录'并请用户补充信息），"
+    "绝不能虚构'查过了但还没落定'之类的过程性说法\n"\
     "- 查询/查看类请求（看/查/状态/多少/还剩）→ 直接用 USE| 动作行取数作答，"\
     "不建目标、不转后台\n"\
     "- 需要机器当前实时数据（磁盘/内存/进程/文件内容/系统状态等）→ 先输出 USE| "\
@@ -82,7 +86,40 @@ _USE_ALLOWED = ("shell", "fs_read")
 # 消除"LLM 是否选择行动"的随机性（行动由启发式保证，动作内容由 LLM 决定）
 _REALTIME_HINT = re.compile(
     r"现在|当前|实时|此刻|还剩|剩余|使用率|占用|磁盘|内存|CPU|cpu|"
-    "网络|进程|看看|查一下|读一下|打开.{0,12}\.(py|txt|md|json|ya?ml|log|sh|toml)")
+    "网络|进程|看看|查一下|读一下|打开.{0,12}\\.(py|txt|md|json|ya?ml|log|sh|toml)")
+
+# P0-2d (2026-09-08): 纯推进词/状态查询 — continue 命中已完成目标时，只有
+# 实质重做请求才重新入队；裸推进词与结果询问维持"汇报结果"语义不建新目标
+_BARE_CONTINUE_RE = re.compile(
+    r"^\s*(继续|开始|go|ok|okay|好|好的|嗯|是的|然后呢|接着来|再说)"
+    r"(?:[!！。？?~，,\s]|吧|呀|啊|呢|嘛|哦|呗)*$", re.IGNORECASE)
+_CONTINUE_QUERY_RE = re.compile(
+    r"结果|怎么样|怎样|如何|进展|进度|好了吗|完成了吗|状态|多久|什么时候")
+
+# P0-2e (2026-09-08): 显式任务开头词 — 编译器 LLM 分类抖动的确定性兜底，
+# 命中即强制按 task 建目标（实测"新建任务：访问 GitHub 学习…"被连续误判）
+_EXPLICIT_TASK_RE = re.compile(
+    r"^\s*(新(建|开)(一?个)?(任务|目标)|执行(这个|该|以下)?任务|"
+    r"重新执行|帮我?执行|任务[:：])")
+
+# 深度内视触发（2026-09-07）: 自检/列模块类问题 → 注入实扫模块清单 +
+# 全量内部状态，替代浅层概念罗列（用户实测反馈"自检太简单"）
+_INTROSPECT_RE = re.compile(
+    r"自检|自省|内视|检视|列出.{0,8}模块|自身.{0,6}模块|所有模块|"
+    r"模块清单|你有哪些|你有什么|检查自己|审视自己|自我检查")
+
+# 知识边界触发（2026-09-07 V4 元认知）: "你知道什么/不知道什么"类问题
+# → 注入实测边界块，强制"我不知道X，因为Y"格式（禁编造）
+_BOUNDARY_RE = re.compile(
+    r"不知道|知道什么|知识边界|能力边界|你能做|你不能|不懂|不了解|"
+    r"什么都会|无所不能|局限|盲区|不确定")
+
+_BOUNDARY_DIRECTIVE = (
+    "\n\n【回答格式】涉及你不知道的内容时，必须按"
+    "「我不知道X，因为Y」作答（Y=下方知识边界块中的具体缺口条目），"
+    "并给出下一步可行建议（如何获得/谁来答/替代方案）。"
+    "禁止编造知识或假装知道。"
+)
 
 
 _REALTIME_DIRECTIVE = (
@@ -264,6 +301,20 @@ class ChatResponder:
                             f"认知引擎: {self._engines()}",
                             f"真实能力: {self._capabilities()}"]
 
+        # L4-1: 价值观宪法 — 人格底线随上下文注入（版本可追溯）
+        try:
+            from ocos.constitution.versioned import VersionedConstitution
+            lines.append(VersionedConstitution(self._db_path).render_principles())
+        except Exception as e:
+            logger.debug("constitution context failed: %s", e)
+
+        # L4-2: 自我模型 — "我是谁"实测画像（daemon boot 加载 + tick 校准）
+        try:
+            from ocos.self.agent_self_model import AgentSelfModel
+            lines.append(AgentSelfModel(self._db_path).render())
+        except Exception as e:
+            logger.debug("self model context failed: %s", e)
+
         # 记忆
         try:
             from ocos.memory.hub import MemoryHub
@@ -397,6 +448,236 @@ class ChatResponder:
         return "\n".join(lines)
 
     # ── E: 内视（深度自省报告） ──────────────────────────────────────
+
+    _MODULE_INVENTORY_CACHE: dict[str, str] = {}
+
+    def _module_inventory(self) -> str:
+        """自身源码模块实扫清单（pkgutil 遍历 ocos 包，进程级缓存）。
+
+        "列出自身所有模块"的地面真值 — 不依赖 LLM 记忆或人工清单。
+        每子包列模块名（>12 个截断显示），总量如实标注。
+        """
+        cached = ChatResponder._MODULE_INVENTORY_CACHE.get("block")
+        if cached:
+            return cached
+        try:
+            import importlib
+            import pkgutil
+            import ocos as _pkg
+            groups: dict[str, list[str]] = {}
+            for m in pkgutil.iter_modules(_pkg.__path__):
+                name = m.name
+                if m.ispkg:
+                    try:
+                        sub_mod = importlib.import_module(f"ocos.{name}")
+                        sub_paths = list(getattr(sub_mod, "__path__", []))
+                    except Exception:
+                        sub_paths = []
+                    mods = [mi.name
+                            for p in sub_paths
+                            for mi in pkgutil.iter_modules([p])
+                            if not mi.ispkg]
+                    groups[name] = sorted(set(mods))
+                else:
+                    groups.setdefault("_toplevel", []).append(name)
+            lines = [f"代码模块实扫（子包 {len(groups)} 组）:"]
+            total = 0
+            for pkg in sorted(groups):
+                mods = groups[pkg]
+                total += len(mods)
+                if not mods and pkg != "_toplevel":
+                    # 命名空间壳包（无直接子模块）只记名不占行
+                    lines.append(f"  {pkg}(0)")
+                    continue
+                shown = ", ".join(mods[:12])
+                more = (f" …共{len(mods)}个" if len(mods) > 12 else "")
+                lines.append(f"  {pkg}({len(mods)}): {shown}{more}")
+            lines.append(f"合计 {total} 个模块。")
+            block = "\n".join(lines)
+            ChatResponder._MODULE_INVENTORY_CACHE["block"] = block
+            return block
+        except Exception as e:
+            return f"模块清单不可用 ({e})"
+
+    def _behavioral_facts(self) -> str:
+        """行为事实（自主目标/学习闭环/外协）— 模块结构反推不出的真值。
+
+        缺陷史（2026-09-07 自检审计）: 模块计数推断出"目标源单一/
+        社交嵌入缺失"，与生产行为相悖（MotivationHub 当日执行 10+
+        自主目标；openclaw 真实外协成功）。本块以 DB + learning.jsonl
+        实测打点为准，供差距分析纠偏。
+        """
+        facts: list[str] = []
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        try:
+            conn = sqlite3.connect(self._db_path)
+            auto = conn.execute(
+                "SELECT COUNT(*) FROM goals WHERE created_at >= ? AND "
+                "(metadata LIKE '%autonomous%' OR source='motivation')",
+                (week_ago,)).fetchone()[0]
+            auto_done = conn.execute(
+                "SELECT COUNT(*) FROM goals WHERE created_at >= ? AND "
+                "status='COMPLETED' AND (metadata LIKE '%autonomous%' "
+                "OR source='motivation')",
+                (week_ago,)).fetchone()[0]
+            lessons = conn.execute(
+                "SELECT COUNT(*) FROM episodes WHERE source='lesson'"
+            ).fetchone()[0]
+            conn.close()
+            facts.append(
+                f"近7天自主目标={auto}(完成{auto_done}, MotivationHub "
+                "自主提案 — 非主人驱动)")
+            facts.append(f"lessons 合成={lessons}(L7/L8 学习闭环运行中)")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            base = os.environ.get("OCOS_AUDIT_DIR", "").strip()
+            audit_dir = (Path(base).expanduser() if base
+                         else Path.home() / ".ocos" / "audit")
+            path = audit_dir / "learning.jsonl"
+            marks: list[dict] = []
+            if path.exists():
+                with path.open(encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            marks.append(json.loads(line))
+                        except ValueError:
+                            continue
+            extra = []
+            inj = sum(1 for m in marks
+                      if m.get("type") == "lesson_prior_injected")
+            syn = sum(1 for m in marks if m.get("type") == "skill_synthesized")
+            soc = [m for m in marks if m.get("type") == "external_agent_call"]
+            if inj:
+                extra.append(f"lesson先验注入={inj}")
+            if syn:
+                extra.append(f"技能合成={syn}")
+            if soc:
+                extra.append(f"外部智能体调用={len(soc)}"
+                             f"(成功{sum(1 for m in soc if m.get('ok'))})")
+            if extra:
+                facts.append("行为打点: " + ", ".join(extra))
+        except Exception:
+            logger.debug("behavioral facts: marks unavailable", exc_info=True)
+        return "；".join(facts)
+
+    def _deep_introspection_block(self) -> str:
+        """深度内视文本块 — 自检类问题的回答素材（全部实测真值）。"""
+        try:
+            inv = self._module_inventory()
+            data = self.build_introspection()
+            # 引擎双层清单: 注册名（engine_bridge）+ 真实引擎模块
+            # （L1 真实化后的九大引擎等，此前只报 3 个遗留注册名）
+            engine_mods = ""
+            try:
+                import pkgutil
+                import ocos.engines as _eng
+                mods = sorted(
+                    mi.name for mi in pkgutil.iter_modules(_eng.__path__)
+                    if mi.name.endswith("_engine") or mi.name in (
+                        "narrative_pipeline", "consolidation_engine"))
+                if mods:
+                    engine_mods = f"引擎模块(ocos.engines/{len(mods)}): " \
+                                  f"{', '.join(mods)}"
+            except Exception:
+                pass
+            lines = [
+                f"身份: {data.get('identity', '未知')}",
+                f"引擎注册: {data.get('engines', '未知')}",
+            ]
+            if engine_mods:
+                lines.append(engine_mods)
+            lines += [
+                inv[:1500],  # 清单限幅 — 防截断吞掉后面的行为事实/目标段
+                f"能力: {data.get('capabilities', '未知')}",
+            ]
+            ms = data.get("memory_stats")
+            if isinstance(ms, dict):
+                brief = ", ".join(f"{k}={v}" for k, v in list(ms.items())[:8])
+                lines.append(f"记忆统计: {brief}")
+            bf = self._behavioral_facts()
+            if bf:
+                lines.append(f"行为事实: {bf}"
+                             "（分析能力差距时以此为准，"
+                             "不得凭模块数量推断能力缺失）")
+            goals = data.get("active_goals")
+            if isinstance(goals, list):
+                lines.append(
+                    "活跃目标: " + (", ".join(
+                        f"{g['id']}({g['status']})" for g in goals[:5])
+                        or "无"))
+            pend = data.get("pending_actions")
+            if isinstance(pend, list):
+                lines.append(f"待批动作: {len(pend)} 条")
+            sk = data.get("self_knowledge")
+            if sk:
+                lines.append(f"自我知识: {str(sk)[:150]}")
+            return "\n".join(lines)[:3200]
+        except Exception as e:
+            logger.debug("deep introspection failed: %s", e)
+            return ""
+
+    def _knowledge_boundary_block(self) -> str:
+        """知识边界自省块（V4 元认知，2026-09-07）— "我不知道X，因为Y"。
+
+        全部实测真值: 语义知识条数（production 库 semantics 尚无数据流
+        ——诚实报缺口）、低置信信念、近 30 天失败集中域、能力边界。
+        """
+        lines = ["【知识边界（实测）】"]
+        try:
+            conn = sqlite3.connect(self._db_path)
+            sem = 0
+            try:
+                sem = conn.execute(
+                    "SELECT COUNT(*) FROM knowledge").fetchone()[0]
+            except sqlite3.OperationalError:
+                pass
+            lines.append(
+                f"- 语义知识库 {sem} 条 — 外部事实/背景知识缺口；"
+                "事实型问题（人物/新闻/专业领域）应声明无此知识")
+            low_beliefs = 0
+            try:
+                low_beliefs = conn.execute(
+                    "SELECT COUNT(*) FROM belief WHERE confidence < 0.5"
+                ).fetchone()[0]
+            except sqlite3.OperationalError:
+                pass
+            if low_beliefs:
+                lines.append(
+                    f"- 低置信信念 {low_beliefs} 条 — 相关判断需先验证再答")
+            conn.close()
+        except sqlite3.Error as e:
+            logger.debug("knowledge boundary scan failed: %s", e)
+        # 近 30 天失败集中域（历史失败 → 任务把握低的诚实依据）
+        try:
+            since = (datetime.now(timezone.utc)
+                     - timedelta(days=30)).isoformat()
+            conn = sqlite3.connect(self._db_path)
+            rows = conn.execute(
+                "SELECT tags FROM episodes WHERE source='lesson' "
+                "AND created_at >= ?", (since,)).fetchall()
+            conn.close()
+            causes: dict[str, int] = {}
+            for (tags_raw,) in rows:
+                try:
+                    tl = json.loads(tags_raw or "[]")
+                except (ValueError, TypeError):
+                    tl = []
+                for t in (tl if isinstance(tl, list) else []):
+                    if t and t != "failure_lesson":
+                        causes[str(t)] = causes.get(str(t), 0) + 1
+            if causes:
+                top = sorted(causes.items(), key=lambda kv: -kv[1])[:3]
+                detail = ", ".join(f"{k}({n})" for k, n in top)
+                lines.append(
+                    f"- 近30天失败集中: {detail} — 此类任务置信低，"
+                    "回答时须说明依据与不确定度")
+        except sqlite3.Error as e:
+            logger.debug("failure domain scan failed: %s", e)
+        lines.append(
+            "- 能力边界: shell 仅白名单只读 / 无多模态传感器 / "
+            "写操作与 HTTP 走审批（auto 模式下自动通过但全程审计）")
+        return "\n".join(lines)
 
     def build_introspection(self) -> dict:
         """完整内视 — agent 对自身内部状态的深度检视。"""
@@ -756,7 +1037,8 @@ class ChatResponder:
         return bool(_read_llm_config().get("api_key"))
 
     def respond(self, message: str, goal_note: str = "",
-                session_id: str = "web") -> dict:
+                session_id: str = "web",
+                _emit: Callable[[str], None] | None = None) -> dict:
         """生成回复。返回 {reply, provider, mock}。
 
         goal_note: UX-H 目标受理提示（auto 受理时注入 prompt，
@@ -766,6 +1048,22 @@ class ChatResponder:
         USE| 动作行 → 沙盒执行观察 → 观察累积回注 → 再推理，
         直到给出最终回答或工具预算（_MAX_TOOL_ROUNDS）耗尽。"""
         context = self.build_context(message, session_id=session_id)
+        # 自检/内视类问题 → 注入深度内视块（实扫模块清单 + 全量内部状态）
+        # （2026-09-07 用户实测反馈"自检太简单"——此前只列高层概念）
+        if _INTROSPECT_RE.search(message or ""):
+            deep = self._deep_introspection_block()
+            if deep:
+                context = (
+                    f"{context}\n\n【深度内视（自检模式）】\n{deep}\n\n"
+                    "【回答要求】模块/引擎/子系统清单必须按上方实扫结果"
+                    "逐组列出（含数量），不得只给高层概念；对清单之外的"
+                    "部分如实标注'未在本次扫描覆盖'。")
+        # 知识边界类问题（V4 元认知）→ 注入实测边界块 + "我不知道X，
+        # 因为Y"格式强制（2026-09-07）
+        if _BOUNDARY_RE.search(message or ""):
+            context = (
+                f"{context}\n\n{self._knowledge_boundary_block()}"
+                f"{_BOUNDARY_DIRECTIVE}")
         if goal_note:
             context = f"{context}\n【内部提示】\n{goal_note}"
         if not self._has_real_llm():
@@ -810,10 +1108,13 @@ class ChatResponder:
                                     + "\n\n" + guidance)
                     else:
                         prompt_i = styled
-                    reply = asyncio.run(tg._provider.generate(
-                        prompt_i,
-                        system_prompt=_SYSTEM_PROMPT,
-                        temperature=0.6, max_tokens=2000)).strip()
+                    if _emit is not None:
+                        reply = self._generate_stream(tg, prompt_i, _emit)
+                    else:
+                        reply = asyncio.run(tg._provider.generate(
+                            prompt_i,
+                            system_prompt=_SYSTEM_PROMPT,
+                            temperature=0.6, max_tokens=2000)).strip()
                     if round_i >= max_rounds:
                         break  # 预算耗尽（或无执行器）→ 本轮即最终回答
                     use_lines = _parse_use_lines(reply)
@@ -829,22 +1130,33 @@ class ChatResponder:
 
                 # 协议行不进对话流
                 reply = _strip_use_lines(reply)
-                # PW-1.2: personalize_response 依画像微调（DIRECT=原样）
-                try:
-                    style_engine = getattr(self, "_style_engine", None)
-                    if style_engine is not None:
-                        reply = style_engine.personalize_response(reply)
-                except Exception:
-                    pass
-                out = {"reply": reply, "provider": tg._provider.name,
-                       "mock": False}
+                # E2E-T8 修复（2026-09-08）: LLM 偶发返回空串（截断/纯协议
+                # 行被剥净）→ 用户看到空白回复。空文本不是有效回答，降级
+                # 到状态回复兜底（诚实显示当前状态，绝不沉默）。
+                if not reply.strip():
+                    logger.warning("LLM returned empty reply, "
+                                   "falling back to state reply")
+                    out = self._state_reply(message, context, degraded=True)
+                else:
+                    # PW-1.2: personalize_response 依画像微调（DIRECT=原样）
+                    try:
+                        style_engine = getattr(self, "_style_engine", None)
+                        if style_engine is not None:
+                            reply = style_engine.personalize_response(reply)
+                    except Exception:
+                        pass
+                    out = {"reply": reply, "provider": tg._provider.name,
+                           "model": getattr(tg._provider, "last_model", ""),
+                           "usage": getattr(tg._provider, "last_usage", None),
+                           "mock": False}
             except Exception as e:
                 # 注: ocos.logging 封装的 .exception() 会因 extra 撞 'exc_info'
-                # 而崩溃 — 用 error(exception=...) 签名
+                # 而崩溃 — 用 error(exception=...) 签名。
+                # P1 修复（2026-09-07）: 异常细节只进日志，用户侧给干净
+                # 降级文案 — 此前 Invalid http_client 原文直泄对话流。
                 logger.error("LLM reply failed, falling back to state reply",
                              exception=e)
-                out = self._state_reply(message, context)
-                out["reply"] = f"（LLM 调用失败: {e}）\n" + out["reply"]
+                out = self._state_reply(message, context, degraded=True)
 
         # A: 无论走哪条路，这轮对话都沉淀为记忆
         self._remember_conversation(message, out["reply"], session_id=session_id)
@@ -856,6 +1168,47 @@ class ChatResponder:
             except Exception as e:
                 logger.debug("Session append failed: %s", e)
         return out
+
+    def _generate_stream(self, tg: Any, prompt_i: str,
+                         emit: Callable[[str], None]) -> str:
+        """流式单轮生成 — 逐行剥离 USE| 协议行，非协议内容实时 emit。
+
+        返回完整轮文本（含协议行），供 _parse_use_lines 判断是否进入工具轮；
+        emit 只收到"最终将展示"的增量文本（对齐 SSE 打字机）。
+        """
+        import asyncio
+        out_parts: list[str] = []
+        line_buf = ""
+
+        def on_chunk(text: str) -> None:
+            nonlocal line_buf, out_parts
+            line_buf += text
+            while "\n" in line_buf:
+                line, line_buf = line_buf.split("\n", 1)
+                out_parts.append(line + "\n")
+                stripped = _strip_use_lines(line + "\n")
+                if stripped:
+                    emit(stripped)
+
+        asyncio.run(tg._provider.generate_stream(
+            prompt_i, system_prompt=_SYSTEM_PROMPT, temperature=0.6,
+            max_tokens=2000, on_chunk=on_chunk))
+        if line_buf:
+            out_parts.append(line_buf)
+            stripped = _strip_use_lines(line_buf)
+            if stripped:
+                emit(stripped)
+        return "".join(out_parts).strip()
+
+    def respond_stream(self, message: str, goal_note: str = "",
+                       session_id: str = "web",
+                       emit: Callable[[str], None] | None = None) -> dict:
+        """流式回复 — 复用 respond 的核心逻辑，LLM 增量文本经 emit 实时外推。
+
+        emit 为同步回调（由调用方桥接线程 → SSE 事件循环）。
+        """
+        return self.respond(message, goal_note=goal_note, session_id=session_id,
+                            _emit=emit)
 
     def _gateway_check(self, capability: str, params: dict) -> str | None:
         """S1.3 (白皮书 P1-2b): USE| 动作执行前的权限网关裁决（fail-closed）。
@@ -890,6 +1243,18 @@ class ChatResponder:
         if getattr(result, "allowed", True):
             return None
         violations = getattr(result, "violations", None) or []
+        # CHAT-ROUTE FIX (2026-09-07): 个人使用模式（OCOS_SANDBOX_DISABLED
+        # =true）下 SSRF 文本信号放行 — owner 已声明信任本机回环目标，
+        # USE|curl http://127.0.0.1:* 与 bridge 侧豁免语义保持一致；
+        # REVERSE_CTRL/CMD_INJECTION/PATH_TRAVERSAL 仍拦。
+        from ocos.operations.sandbox_ops import sandbox_disabled
+        if sandbox_disabled():
+            violations = [v for v in violations
+                          if "SSRF" not in str(v).upper()]
+            if not violations:
+                logger.info("converse gateway: SSRF signal allowed under "
+                            "personal mode (capability=%s)", capability)
+                return None
         reason = "; ".join(str(v) for v in violations[:3]) or getattr(
             result, "reason", "") or "denied by permission gateway"
         return reason[:200]
@@ -928,15 +1293,26 @@ class ChatResponder:
                 blocks.append(f"[{name}] 失败: {err}")
         return "\n".join(blocks)
 
-    def _state_reply(self, message: str, context: str) -> dict:
-        """无 LLM 时的诚实回复 — 报告真实状态，不伪装对话。"""
+    def _state_reply(self, message: str, context: str,
+                     degraded: bool = False) -> dict:
+        """无 LLM 时的诚实回复 — 报告真实状态，不伪装对话。
+
+        degraded=True: LLM 已配置但调用失败（429/网络/客户端错误等）
+        — 头部如实标注"模型暂不可用"，不误称"未配置 LLM key"。
+        """
+        if degraded:
+            head = "[降级模式 — 模型暂不可用，以下为真实状态而非生成文本]"
+            tail = "模型恢复后我会用自然语言回复你。"
+        else:
+            head = "[mock 模式 — 未配置 LLM key，以下是真实状态而非生成文本]"
+            tail = "配置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY 后，我会用自然语言回复你。"
         lines = [
-            "[mock 模式 — 未配置 LLM key，以下是真实状态而非生成文本]",
+            head,
             f"收到你的消息：{message[:60]}",
             "",
             context,
             "",
-            "配置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY 后，我会用自然语言回复你。",
+            tail,
         ]
         return {"reply": "\n".join(lines), "provider": "state-summary", "mock": True}
 
@@ -982,7 +1358,12 @@ class ChatResponder:
             '   - "nonsense"：无明确语义\n'
             '   - "task"：全新任务请求（与最近对话和活跃目标无关才建新目标）\n'
             "2. 若为 task，把 description 改写为**自包含、具体、可直接执行**的版本：\n"
-            "   - 写明数据来源与方法（如'执行 uname -a 与 df -h，汇总系统版本和磁盘使用'）\n"
+            "   - 写明数据来源与方法。宿主机/系统环境类探查必须覆盖完整硬件\n"
+            "     画像：系统版本(uname -a)、磁盘(df -h)、内存与 Swap(free -h、\n"
+            "     swapon --show)、CPU 核数(nproc)、GPU(nvidia-smi --query-gpu=name,"
+            "memory.total --format=csv 或 lspci | grep -iE 'vga|3d')——\n"
+            "     涉及部署可行性/性能评估时 GPU 是必查项，缺 GPU 信息会导致\n"
+            "     方案显存估算失真（2026-09-08 WeClone 评估教训）\n"
             "   - 不依赖对话上下文即可执行\n"
             '   - domain 从 development/research/writing/analysis 中选一个\n'
             "只输出一行 JSON：{\"kind\":\"...\",\"description\":\"...\",\"domain\":\"...\"}"
@@ -1028,6 +1409,65 @@ class ChatResponder:
                       "session_id": session_id},
         )
         return goal_id
+
+    def _last_goal_for_session(self, session_id: str) -> dict | None:
+        """P0-2d: 查会话最近一条目标（任意状态，含 COMPLETED）。
+
+        grounding 落空时的重做请求回退路径 — load_active() 不含已完成
+        目标，current_goal_id 又已被清空，只能按 metadata.session_id
+        从 goals 表全量倒查。
+        """
+        try:
+            import sqlite3
+            conn = sqlite3.connect(self._db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM goals ORDER BY created_at DESC LIMIT 30"
+            ).fetchall()
+            conn.close()
+            for row in rows:
+                g = {"id": row["id"], "status": row["status"],
+                     "description": row["description"],
+                     "priority": row["priority"],
+                     "metadata": row["metadata"]}
+                if self._goal_session_id(g) == session_id:
+                    return g
+        except Exception as e:
+            logger.debug("last goal for session lookup failed: %s", e)
+        return None
+
+    def _requeue_completed_goal(self, g: dict,
+                                session_id: str = "web") -> str | None:
+        """P0-2d: 已完成目标的实质重做请求 → 以原描述建新 PENDING 目标。
+
+        原样保留 domain（metadata）/ origin 语义，metadata 记录
+        requeued_from 溯源。失败返回 None（调用方回落原 note）。
+        """
+        try:
+            from ocos.goal.store import GoalStore
+            meta = g.get("metadata") or {}
+            if isinstance(meta, str):
+                import json as _j
+                try:
+                    meta = _j.loads(meta)
+                except Exception:
+                    meta = {}
+            new_id = f"GOAL-{uuid.uuid4().hex[:12]}"
+            GoalStore(db_path=self._db_path).save(
+                goal_id=new_id, level="USER", status="PENDING",
+                description=str(g.get("description", ""))[:200],
+                priority=float(g.get("priority") or 3.0),
+                source="chat", origin_level="HUMAN", authority="FRAMEWORK",
+                metadata={"domain": (meta or {}).get("domain", "development"),
+                          "requeued_from": str(g.get("id", "")),
+                          "session_id": session_id},
+            )
+            logger.info("goal requeued from completed: %s -> %s",
+                        g.get("id"), new_id)
+            return new_id
+        except Exception as e:
+            logger.error("requeue completed goal failed", exception=e)
+            return None
 
     @staticmethod
     def _goal_session_id(g: dict) -> str:
@@ -1188,7 +1628,8 @@ class ChatResponder:
             return None
         return None
 
-    def respond_auto(self, message: str, session_id: str = "web") -> dict:
+    def respond_auto(self, message: str, session_id: str = "web",
+                     _emit: Callable[[str], None] | None = None) -> dict:
         """UX-H: 对话即路由 — 任务类消息自动受理为目标，其余正常对话。
 
         - compile_goal 分类：task → 自动建目标（无需点→目标），
@@ -1198,6 +1639,19 @@ class ChatResponder:
         - 危险子任务仍走待批二次审批（不变）
         """
         compiled = self.compile_goal(message)
+        # P0-2e (2026-09-08 E2E 复测): 编译器把显式任务措辞误判为
+        # question/continue（实测"新建任务：访问 GitHub 学习…"连续两次
+        # 误判 → 不建目标，回复 LLM 却口头承诺"转目标后台执行"）。
+        # 确定性关键词覆盖 — 显式任务开头词不受 LLM 分类抖动影响。
+        if (compiled.get("kind") in ("question", "continue", "nonsense")
+                and _EXPLICIT_TASK_RE.match(message)):
+            _dom = ("research"
+                    if re.search(r"调研|学习|访问|抓取|总结", message)
+                    else "development")
+            compiled = {"kind": "task", "description": message,
+                        "domain": _dom, "_compiler_overridden": True}
+            logger.info("compile_goal overridden to task by explicit "
+                        "keyword: %s", message[:60])
         goal_note, goal_id = "", None
         if compiled["kind"] == "task":
             compiled["_original"] = message
@@ -1226,6 +1680,7 @@ class ChatResponder:
                     pass
         elif compiled["kind"] in ("question", "continue"):
             # FIX-05/FIX-21: 结构化 goal grounding — 状态机精确恢复优先
+            g = None
             try:
                 from ocos.interaction.conversation_state import ConversationStateStore
                 from ocos.goal.store import GoalStore
@@ -1248,19 +1703,55 @@ class ChatResponder:
                                   if self._goal_session_id(x) == session_id]
                     if by_session:
                         goal_id = str(by_session[0].get("id", ""))
+                        g = by_session[0]
                         goal_note = self._goal_note_from_goal(by_session[0])
                     elif goals:
                         goal_id = str(goals[0].get("id", ""))
+                        g = goals[0]
                         goal_note = (f"【当前任务上下文】goal_id={goal_id}  "
                                      f"status={goals[0].get('status', '?')}")
             except Exception:
                 pass
+            # P0-2d (2026-09-08「GitHub 调研」重发事件): 已完成目标 + 实质
+            # 重做请求 → 真实重新入队。事件: 用户原样重发"授权你去 github
+            # 学习…"，编译器判 continue（与最近对话重复），grounding 命中
+            # 已 COMPLETED 的旧目标，回复 LLM 口头承诺"重新转目标补齐调研"
+            # 但代码只清状态不入队 — 又一处说做没做。规则: continue 且
+            # 命中目标已完成、消息不是纯推进词（继续/好/结果呢）→ 以原描述
+            # 建新 PENDING 目标（daemon 自动认领），回复话术如实对齐。
+            # grounding 落空（current 已清、load_active 不含 COMPLETED）时
+            # 回退查会话最近目标（E2E 二次复测发现的漏网路径）。
+            if (compiled["kind"] == "continue"
+                    and not _BARE_CONTINUE_RE.match(message)
+                    and not _CONTINUE_QUERY_RE.search(message)):
+                if g is None:
+                    g = self._last_goal_for_session(session_id)
+                if str((g or {}).get("status", "")) == "COMPLETED":
+                    _new_gid = self._requeue_completed_goal(
+                        g, session_id=session_id)
+                    if _new_gid:
+                        goal_id = _new_gid
+                        goal_note = (
+                            f"用户实质重做已完成的目标 {g.get('id')}。"
+                            f"已重新入队为新目标 {_new_gid}（描述："
+                            f"{str(g.get('description', ''))[:100]}），"
+                            "daemon 将自动认领执行。如实确认已重新受理即可，"
+                            "不要声称任何未发生的其他动作。")
+                        try:
+                            from ocos.interaction.conversation_state import ConversationStateStore
+                            ConversationStateStore(self._db_path).update(
+                                session_id, current_goal_id=_new_gid,
+                                last_intent="task",
+                                active_topic=str(g.get("description", ""))[:60])
+                        except Exception:
+                            pass
             # FIX-T4: 实时查询交给 USE| 动作协议 — 不再单向引导"依据记忆作答"
             if not goal_note:
                 goal_note = ("用户的这条消息是询问/推进，不是新任务。"
                              "历史话题依据【最近对话】作答；"
                              "涉及机器当前实时数据时先输出 USE| 动作行取数。")
-        out = self.respond(message, goal_note=goal_note, session_id=session_id)
+        out = self.respond(message, goal_note=goal_note, session_id=session_id,
+                       _emit=_emit)
         out["goal_id"] = goal_id
         out["kind"] = compiled["kind"]
         return out

@@ -229,6 +229,7 @@ class TestOpenaiProviderHttpClient:
 
     @pytest.mark.asyncio
     async def test_generate_constructs_valid_http_client(self):
+        pytest.importorskip("openai", reason="openai 包未安装，无法 patch AsyncOpenAI")
         import httpx
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, patch

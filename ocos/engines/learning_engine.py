@@ -56,17 +56,27 @@ class RuntimeResult:
 
 
 class LearningEngine:
-    """学习引擎——领域无关的经验学习。"""
+    """学习引擎——领域无关的经验学习。
+
+    L1 真实化: 快路径学习下沉 — 引擎自身可从 EpisodeStore 重放
+    Episode → LearningExample → RuleBasedLearner（与 master_agent
+    _fast_path_learning 同源语义），不再依赖编排层注入样本。
+    治理纪律: 只写 LearningModel（内存模型），不产生 Action；
+    Decision 唯一 Mutation Authority 未触碰。
+    """
 
     def __init__(
         self,
         event_bus: EventBus,
         working_memory: WorkingMemory,
+        memory_store: Any | None = None,
     ):
         self._event_bus = event_bus
         self._working_memory = working_memory
         self._models: dict[str, LearningModel] = {}
         self._traces: dict[str, LearningTrace] = {}
+        # L1: 可选注入 — 快路径学习数据源
+        self._memory_store = memory_store
         logger.debug("__init__ completed", component="learning_engine")
 
     # ── 核心学习 ──────────────────────────────────────────────────────
@@ -74,14 +84,20 @@ class LearningEngine:
     def learn(
         self,
         examples: list[LearningExample],
-        learn_fn: LearnFn,
+        learn_fn: LearnFn | None = None,
         strategy: LearningStrategy = LearningStrategy.SUPERVISED,
         base_model: LearningModel | None = None,
     ) -> tuple[LearningModel, LearningTrace]:
-        """执行学习，返回 (更新后模型, 学习轨迹)。"""
+        """执行学习，返回 (更新后模型, 学习轨迹)。
+
+        learn_fn 为 None 时使用内置 RuleBasedLearner（与快路径同源）。
+        """
         logger.info("learn", extra=dict(
             strategy=strategy.value, example_count=len(examples),
         ))
+        if learn_fn is None:
+            from ocos.learning.experience_learning import RuleBasedLearner
+            learn_fn = RuleBasedLearner.learn_fn
         model = learn_fn(base_model, examples, strategy)
         self._models[model.model_id] = model
 
@@ -96,13 +112,89 @@ class LearningEngine:
         self._traces[trace.trace_id] = trace
         return model, trace
 
+    # ── L1 真实化: 快路径学习（Episode 重放）──────────────────────────
+
+    def learn_from_episodes(
+        self,
+        batch_limit: int = 200,
+        today_only: bool = True,
+        base_model: LearningModel | None = None,
+    ) -> dict[str, Any]:
+        """快路径学习 — 重放 EpisodeStore 的 Episode 并训练规则模型。
+
+        与 master_agent._fast_path_learning 同源语义（幂等由慢通路
+        CONSOLIDATED 标记保证；本方法默认只重放 ACTIVE  episode）。
+
+        Args:
+            batch_limit: 重放窗口大小
+            today_only: 仅重放今日 Episode（与快路径一致）
+            base_model: 增量学习基础模型
+        Returns:
+            统计 dict（replayed/examples/lessons/rules/trace_id/accuracy），
+            失败时含 error 键（诚实标注，不抛异常）。
+        """
+        stats: dict[str, Any] = {
+            "fast_path": "learning_engine",
+            "examples": 0,
+            "lessons": 0,
+            "rules": 0,
+            "learning_engine": False,
+        }
+        if self._memory_store is None:
+            stats["error"] = "memory_store unavailable"
+            return stats
+        try:
+            from datetime import datetime, timezone
+            from ocos.learning.experience_learning import (
+                EpisodeExampleConverter,
+                RuleBasedLearner,
+            )
+
+            episodes = self._memory_store.query_by_time(limit=batch_limit)
+            if today_only:
+                today_start = datetime.now(timezone.utc).replace(
+                    hour=0, minute=0, second=0, microsecond=0)
+                episodes = [
+                    ep for ep in episodes
+                    if getattr(ep, "created_at", None) is not None
+                    and ep.created_at >= today_start
+                    and ep.status.name != "CONSOLIDATED"
+                ]
+            if not episodes:
+                stats["replayed"] = 0
+                return stats
+
+            examples, diagnoses, _ = EpisodeExampleConverter.convert_many(episodes)
+            stats["replayed"] = len(episodes)
+            stats["examples"] = len(examples)
+            stats["lessons"] = len(diagnoses)
+            if not examples:
+                return stats
+
+            model, trace = self.learn(
+                examples=examples,
+                learn_fn=RuleBasedLearner.learn_fn,
+                strategy=LearningStrategy.SUPERVISED,
+                base_model=base_model,
+            )
+            stats["models"] = 1
+            stats["rules"] = len(model.rules)
+            stats["trace_id"] = trace.trace_id
+            stats["learning_engine"] = True
+            stats["accuracy"] = model.accuracy
+            stats["model_id"] = model.model_id
+        except Exception as e:
+            logger.warning("fast-path learning degraded: %s", e)
+            stats["error"] = str(e)
+        return stats
+
     # ── 增量更新 ──────────────────────────────────────────────────────
 
     def update(
         self,
         model_id: str,
         new_examples: list[LearningExample],
-        learn_fn: LearnFn,
+        learn_fn: LearnFn | None = None,
     ) -> tuple[LearningModel, LearningTrace] | None:
         """在已有模型上增量学习。"""
         base_model = self._models.get(model_id)
@@ -131,6 +223,36 @@ class LearningEngine:
 
         examples: list[LearningExample] | None = (context or {}).get("examples")
         learn_fn: LearnFn | None = (context or {}).get("learn_fn")
+
+        # L1: 快路径 — 未注入样本时从 episode 历史重放学习
+        if not examples and learn_fn is None:
+            if self._memory_store is None:
+                return RuntimeResult(
+                    success=False,
+                    process_id=process.process_id,
+                    trace_id="",
+                    message="No examples provided and no memory_store injected",
+                )
+            fast_stats = self.learn_from_episodes(
+                batch_limit=(context or {}).get("batch_limit", 200),
+                today_only=(context or {}).get("today_only", True),
+            )
+            if not fast_stats.get("learning_engine"):
+                return RuntimeResult(
+                    success=False,
+                    process_id=process.process_id,
+                    trace_id="",
+                    message=f"Fast-path learning failed: {fast_stats.get('error') or 'no episodes'}",
+                )
+            return RuntimeResult(
+                success=True,
+                process_id=process.process_id,
+                trace_id=fast_stats.get("trace_id", ""),
+                message=f"Fast-path learning: replayed={fast_stats.get('replayed')}, "
+                        f"examples={fast_stats.get('examples')}, "
+                        f"rules={fast_stats.get('rules')}, "
+                        f"model_id={str(fast_stats.get('model_id', ''))[:8]}",
+            )
 
         if not examples:
             return RuntimeResult(

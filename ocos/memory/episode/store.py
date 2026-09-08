@@ -198,6 +198,22 @@ class EpisodeStore:
         ).fetchall()
         return [self._row_to_episode(r) for r in rows if r]
 
+    def query_by_session(
+        self,
+        session_id: str,
+        limit: int = 30,
+    ) -> list[Episode]:
+        """按会话查询对话记忆（source='conversation'），按时间升序。
+
+        供前端交互客户端载入某会话的历史对话（TUI 只渲染，不执行业务）。
+        """
+        rows = self.connection.execute(
+            "SELECT * FROM episodes WHERE source='conversation' AND session_id = ? "
+            "ORDER BY created_at ASC LIMIT ?",
+            (session_id, limit),
+        ).fetchall()
+        return [self._row_to_episode(r) for r in rows if r]
+
     def query_by_tag(
         self,
         tag: str,

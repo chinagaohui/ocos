@@ -1,0 +1,16 @@
+[Unit]
+Description=OCOS Interactive API Server (TUI chat entrypoint, port 8900)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_DIR@
+Restart=on-failure
+RestartSec=5
+Environment=OCOS_DB_PATH=%h/.ocos/ocos.db
+ExecStart=@VENV_PY@ -m ocos.interaction.api.server
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

@@ -144,10 +144,10 @@ class TestPolicyEvaluation:
         assert len(failed) >= 1
 
     def test_default_rules_used_when_empty(self, engine):
-        """引擎默认提供 3 条规则。"""
+        """引擎默认提供 3 条规则 + L1 autonomy_gate = 4 条。"""
         p = _make_process("p-dr")
         result = engine.execute(p, context={"quality": 8, "cost": 5, "risk": 2})
-        assert result.evaluated_count == 3
+        assert result.evaluated_count == 4
 
     def test_custom_rules_override_defaults(self, engine):
         engine.add_rule(PolicyRule(
@@ -156,7 +156,8 @@ class TestPolicyEvaluation:
         ))
         p = _make_process("p-cr")
         result = engine.execute(p, context={"score": 3})
-        assert result.evaluated_count == 1  # 只有自定义规则
+        # L1: 自定义规则 1 条 + autonomy_gate 默认规则 = 2 条
+        assert result.evaluated_count == 2
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

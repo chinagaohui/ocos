@@ -169,7 +169,10 @@ class TestMonteCarlo:
             parameters={"increment": 5},
             steps=2,
         )
-        traces = engine.run_monte_carlo(scenario, _linear_step, num_runs=3)
+        # L1: run_monte_carlo 默认对数值参数施加 ±10% 真实扰动；
+        # 本测试验证"同参数多轮结果一致"语义 → 显式零扰动
+        traces = engine.run_monte_carlo(scenario, _linear_step, num_runs=3,
+                                        perturbation={"increment": 0.0})
         assert len(traces) == 3
         for trace in traces:
             assert trace.final_state["total"] == 10

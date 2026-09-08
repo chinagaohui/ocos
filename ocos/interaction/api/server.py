@@ -57,6 +57,9 @@ from ocos.interaction.api.routes.trace import router as trace_router
 from ocos.interaction.api.routes.chat import router as chat_router  # S6: WebChat
 from ocos.interaction.api.routes.quality import router as quality_router  # 2026-08-23: 质量分析/趋势
 from ocos.interaction.api.routes.converse import router as converse_router  # UX-P2: 对话/状态/审批
+from ocos.interaction.api.routes.openai_compat import router as openai_router  # OpenAI 兼容前端接入
+from ocos.interaction.api.routes.ws import router as ws_router  # Gateway 事件网关(纯前端 TUI)
+from ocos.interaction.api.routes.metrics import router as metrics_router  # §3.1: 生命体征仪表盘
 
 app.include_router(goal_router)
 app.include_router(plan_router)
@@ -66,6 +69,9 @@ app.include_router(trace_router)
 app.include_router(chat_router)
 app.include_router(quality_router)
 app.include_router(converse_router)
+app.include_router(openai_router)
+app.include_router(metrics_router)  # §3.1: 生命体征仪表盘（只读）
+app.include_router(ws_router)  # 注意：WebSocket 路由不影响 HTTP 路由
 
 
 @app.get("/", include_in_schema=False)

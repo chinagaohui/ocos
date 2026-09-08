@@ -250,11 +250,16 @@ class TestBridgeAgentWiring:
         assert "Python" in result.get("stdout", ""), result
 
     def test_undiscovered_command_still_blocked(self):
-        """未发现的命令 → 仍被白名单拦截（不放宽既有边界）。"""
+        """未发现的命令 → 仍被白名单拦截（不放宽既有边界）。
+
+        D-UI (2026-09-07) 边界更新: 只读 curl GET 探针经 _is_readonly_curl
+        有意放行（原样例 curl http://… 已入白名单），wget 及 curl 写操作
+        （-X POST/-d/-o 等）仍被拦（见 tests/test_webui_fixes.py）。
+        """
         from types import SimpleNamespace
         bridge = self._bridge([self._agent()])
         result = bridge._handler_run_command(
-            SimpleNamespace(payload={"command": "curl http://evil.example"}))
+            SimpleNamespace(payload={"command": "wget http://evil.example"}))
         assert result.get("blocked") is True, result
 
     def test_no_agent_source_no_injection(self):
@@ -264,11 +269,17 @@ class TestBridgeAgentWiring:
         assert bridge._prior_agents("随便什么任务") == ""
 
     def test_agent_hint_forces_direct_call(self):
-        """描述命中已发现智能体 → 输出强制直接调用指令（抑制漂移）。"""
+        """描述命中已发现智能体 → 输出强制直接调用指令（抑制漂移）。
+
+        L1+ 诚实语义: fixture 制造 name↔cli_path 错位（codex 名 +
+        python3 路径），hint 必须引用真实可执行路径而非编造命令名。
+        """
+        import shutil
         bridge = self._bridge([self._agent(name="codex")])
         hint = bridge._agent_hint("运行 codex --version 获取版本号")
         assert "【智能体调用强制指令】" in hint
-        assert "RUN|codex --version" in hint
+        assert "RUN|" in hint
+        assert (shutil.which("python3") or "/usr/bin/python3") in hint
         assert "不要改用 uname/df" in hint
 
     def test_agent_hint_empty_without_match(self):
@@ -282,9 +293,14 @@ class TestBridgeAgentWiring:
         assert bridge._agent_hint("运行 python3 脚本") == ""
 
     def test_agent_forced_call_returns_name(self):
-        """描述命中已发现可用 CLI 智能体 → 返回其名（保真闸门用）。"""
+        """描述命中已发现可用 CLI 智能体 → 返回可执行调用（保真闸门用）。
+
+        name↔命令错位时诚实返回 cli_path 绝对路径（与 _agent_invoke 一致）。
+        """
+        import shutil
         bridge = self._bridge([self._agent(name="codex")])
-        assert bridge._agent_forced_call("运行 codex --version") == "codex"
+        assert bridge._agent_forced_call("运行 codex --version") == (
+            shutil.which("python3") or "/usr/bin/python3")
 
     def test_agent_forced_call_empty_without_match(self):
         """未命中 / python3 / 不可用 → 不干预。"""

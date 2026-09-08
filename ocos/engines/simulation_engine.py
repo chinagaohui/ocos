@@ -110,7 +110,7 @@ class SimulationEngine:
         self._traces[trace.trace_id] = trace
         return trace
 
-    # ── 多轮蒙特卡洛 ──────────────────────────────────────────────────
+    # ── 多轮蒙特卡洛（L1 真实化: 真参数扰动）───────────────────────────
 
     def run_monte_carlo(
         self,
@@ -118,20 +118,72 @@ class SimulationEngine:
         step_fn: StepFn,
         num_runs: int = 5,
         context: dict[str, Any] | None = None,
+        perturbation: dict[str, float] | None = None,
+        seed: int | None = None,
     ) -> list[SimulationTrace]:
-        """多次运行模拟（蒙特卡洛风格），每次微调参数。"""
-        import copy
+        """多次运行模拟（蒙特卡洛），每轮对数值参数做真实随机扰动。
+
+        Args:
+            perturbation: 参数名 → 相对扰动幅度（如 0.1 = ±10%）；
+                          缺省对所有数值型参数施加 ±10% 扰动。
+            seed: 随机种子（第 i 轮使用 seed+i），保证可复现。
+        Returns:
+            num_runs 条轨迹，每条 trace.parameters 为该轮扰动后的真实参数。
+        """
+        import random
 
         traces: list[SimulationTrace] = []
+        default_jitter = 0.1
         for run_idx in range(num_runs):
-            scenario = copy.deepcopy(base_scenario)
+            rng = random.Random(seed + run_idx if seed is not None else None)
+            params = dict(base_scenario.parameters)
+            for key, value in params.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    jitter = (perturbation or {}).get(key, default_jitter)
+                    params[key] = type(value)(
+                        value * (1.0 + rng.uniform(-jitter, jitter)))
             scenario = dataclasses_replace(
-                scenario,
+                base_scenario,
                 scenario_id=str(uuid.uuid4()),
+                parameters=params,
             )
             trace = self.run(scenario, step_fn, context)
             traces.append(trace)
         return traces
+
+    @staticmethod
+    def aggregate_final_states(
+        traces: list[SimulationTrace],
+    ) -> dict[str, dict[str, float]]:
+        """聚合多次运行的终态数值字段（mean/std/min/max）。
+
+        仅聚合所有轮次均出现且均为数值的键。
+        """
+        import math
+
+        stats: dict[str, dict[str, float]] = {}
+        if not traces:
+            return stats
+        common_keys = set(traces[0].final_state)
+        for t in traces[1:]:
+            common_keys &= set(t.final_state)
+        for key in sorted(common_keys):
+            values = [
+                t.final_state[key] for t in traces
+                if isinstance(t.final_state[key], (int, float))
+                and not isinstance(t.final_state[key], bool)
+            ]
+            if len(values) != len(traces):
+                continue  # 存在非数值终态，不聚合该键
+            mean = sum(values) / len(values)
+            variance = sum((v - mean) ** 2 for v in values) / len(values)
+            stats[key] = {
+                "mean": round(mean, 6),
+                "std": round(math.sqrt(variance), 6),
+                "min": min(values),
+                "max": max(values),
+            }
+        return stats
 
     # ── 执行接口 ──────────────────────────────────────────────────────
 

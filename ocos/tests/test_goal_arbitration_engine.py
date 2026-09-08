@@ -138,7 +138,9 @@ class TestCustomArbitrator:
         engine._arbitrators[ArbitrationStrategy.PRIORITY] = my_arb
         best, trace = engine.arbitrate(SAMPLE_CANDIDATES, ArbitrationStrategy.PRIORITY)
         assert called == [True]
-        assert best.reason == "Custom arbitrator"
+        # L1: 自定义仲裁结果之后会附加 autonomy_gate 语义说明
+        # （[autonomy:L1] 提案需审批后执行），原 reason 保留在前缀
+        assert best.reason.startswith("Custom arbitrator")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

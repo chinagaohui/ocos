@@ -23,10 +23,11 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from types import SimpleNamespace
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from ocos.autonomous_runtime.action_dispatcher import (
@@ -39,6 +40,21 @@ from ocos.interaction.base import PermissionGuard, ALLOWED_ACTIONS
 from ocos.execution.pending import approval_disabled
 
 logger = logging.getLogger(__name__)
+
+# ── P0-1/P1-1 (2026-09-08 事件复盘): 创作/分析类任务判定 ─────────────────
+# 事件链: 「制定升级计划」目标 → 规划 LLM 输出 ANSWER|<计划正文> → 旧闸门
+# 裸词「验证」命中描述末尾的"验证标准" → 误判执行意图 → 强制重试 → LLM 被
+# 迫交出 cat --version 式噪声探针（受注入的「只读示例: <cli> --version」
+# 话术引导）→ exit 0 → ✓ 成功，计划正文整体丢弃。
+# 创作类任务的天然交付物是 ANSWER 正文（或 LLM 自主 FILE_WRITE），
+# 不应被强制 RUN，也不应注入智能体清单样例话术（跑偏磁铁）。
+_AUTHORING_ANALYSIS_RE = re.compile(
+    r"总结|复盘|分析|自省|反思|回顾|归纳|自检报告|"
+    r"制定|编制|起草|撰写|编写|规划|设计|计划|方案|蓝图|路线图")
+# 创作交付类（要求正文交付物）— 瘦 ANSWER 门槛只对这类生效；
+# 纯分析/复盘类（总结/反思/回顾）短结论合法，不设门槛（UX-J+ 不回归）
+_AUTHORING_DELIVERABLE_RE = re.compile(
+    r"制定|编制|起草|撰写|编写|计划|方案|蓝图|路线图")
 
 # ── 风险分级表 (设计冻结: 低危 AUTO / 中危 ASK / 禁区 DENY) ──────────────
 AUTO_ACTIONS: frozenset[ActionType] = frozenset({
@@ -130,6 +146,8 @@ class DecisionBridge:
         world_source: Optional[Any] = None,  # P2.1: 世界状态检索源（None→无注入）
         agent_source: Optional[Any] = None,  # AGI: 智能体软件检索源（None→无注入）
         installer: Optional[Any] = None,  # AGI: 智能体安装执行器 fn(name)->result（None→禁安装）
+        autonomous_goal_sink: Optional[Any] = None,  # L3: 自主目标落地 fn(payload)（None→待批提案无法执行）
+        constitution_sink: Optional[Any] = None,  # L4-1: 宪法版本落库 fn(payload)（None→修改提案无法应用）
     ) -> None:
         self._dispatcher = dispatcher or ActionDispatcher()
         self._guard = guard or PermissionGuard()
@@ -138,6 +156,8 @@ class DecisionBridge:
         self._registry: Any = None
         self._pending_store = pending_store     # AUD-F12: 有 store 则跨进程存活
         self._db_path = db_path
+        self._autonomous_goal_sink = autonomous_goal_sink  # L3: 自主目标落地通道
+        self._constitution_sink = constitution_sink        # L4-1: 宪法版本落库通道
         self._permission_gateway = permission_gateway  # S3.2（None→惰性默认实例）
         self._lifecycle_store: Any = None       # PW-1.4: event_memory EventStore（惰性）
         # P1.2 (AGI 计划): 学习产物检索源 — fn(description) -> artifacts 列表
@@ -207,6 +227,14 @@ class DecisionBridge:
         # AGI 自我增强: 智能体下载/安装执行器（需审批, 经 execute_approved 触达）
         self._dispatcher.register_custom_handler(
             "agent_install", self._handler_agent_install)
+        # L3 (升级方案 v1.0): 自主目标提案的人工批准执行器 — 批准即写
+        # goals 表 PENDING（source='autonomous'），daemon 自动认领执行
+        self._dispatcher.register_custom_handler(
+            "autonomous_goal", self._handler_autonomous_goal)
+        # L4-1: 价值观宪法修改的人工批准执行器 — 批准即落新版本
+        # （人格演变可追溯；MODIFY_CONSTITUTION 永须人工审批）
+        self._dispatcher.register_custom_handler(
+            "constitution_update", self._handler_constitution_update)
         # UX-F1: DAG 任务 LLM 执行器 — 任务描述→具体动作→真实执行
         for dag_action in ("dag_create", "dag_modify", "dag_execute", "dag_verify"):
             self._dispatcher.register_custom_handler(
@@ -290,6 +318,14 @@ class DecisionBridge:
         # S3.2: 网关前检 — 反向控制/注入模式直接 DENY（带审计）
         deny_reason = self._gateway_scan(text)
         if deny_reason is not None:
+            # 个人使用模式：回环/localhost 类 SSRF 文本信号放行（同
+            # execute_dag_task 的豁免逻辑），反向控制/注入类仍拦。
+            from ocos.operations.sandbox_ops import sandbox_disabled
+            if sandbox_disabled() and "ssrf" in deny_reason.lower():
+                logger.info("SSRF text signal in decision text allowed "
+                            "under personal mode: %s", deny_reason[:80])
+                deny_reason = None
+        if deny_reason is not None:
             v = ActionVerdict(
                 action_type="DECISION_TEXT", verdict="deny",
                 reason=deny_reason, status="denied",
@@ -348,6 +384,16 @@ class DecisionBridge:
 
         # S3.2: 网关前检 — 反向控制/注入模式的任务描述直接拒绝
         deny_reason = self._gateway_scan(description)
+        if deny_reason is not None:
+            # 个人使用模式（OCOS_SANDBOX_DISABLED=true）：owner 已声明信任
+            # 本机目标，任务描述中出现回环地址/localhost URL（如"探测
+            # http://127.0.0.1:8900/health"）不再按 SSRF 文本拦截 —
+            # 反向控制/命令注入类规则仍然生效。
+            from ocos.operations.sandbox_ops import sandbox_disabled
+            if sandbox_disabled() and "ssrf" in deny_reason.lower():
+                logger.info("SSRF text signal in task description allowed "
+                            "under personal mode: %s", deny_reason[:80])
+                deny_reason = None
         if deny_reason is not None:
             self._audit_record(
                 contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
@@ -602,6 +648,8 @@ class DecisionBridge:
 
         四重防护: 命令黑名单（永久拦截）→ 白名单（最小集）→ 路径沙盒
         → 审计。仅经 ASK 人工批准后触达。
+        2026-09-07: OCOS_SANDBOX_DISABLED=true（个人使用模式）→ 白名单与
+        敏感路径检查整体关闭，仅保留灾难黑名单。
         """
         command = (action.payload or {}).get("command", "")
         if not command:
@@ -623,21 +671,30 @@ class DecisionBridge:
             "/proc/cpuinfo", "/proc/meminfo", "/proc/loadavg",
             "/proc/uptime", "/proc/version",
         })
+        # UX-J+ (2026-09-06): 无害设备文件放行 — "> /dev/null 2>&1" 是
+        # 脚本静默输出的惯用法，/dev 前缀一刀切误拦（智能体发现目标实测
+        # 被拦一次并触发无谓重试）。同族无凭据/无危害设备一并精确放行。
+        HARMLESS_DEV_DEVICES = frozenset({
+            "/dev/null", "/dev/zero", "/dev/full",
+            "/dev/random", "/dev/urandom",
+        })
         try:
-            from ocos.operations.sandbox_ops import SandboxOps
-            for seg in segments:
-                # AGI 能力补全: extra_allow 放行已发现智能体 CLI（沙盒动态白名单）
-                if not SandboxOps._is_allowed(seg, self._agent_clis):
-                    return {"ok": False, "blocked": True,
-                            "block_reason": f"白名单外命令段: {seg[:60]}"}
-                # 敏感路径拦截: 命令参数指向系统敏感目录即拒绝
-                for token in _re.findall(r"[~/][\w./-]*", seg):
-                    resolved = os.path.abspath(os.path.expanduser(token))
-                    if resolved in PUBLIC_READONLY_PATHS:
-                        continue  # 公开只读文件（如 /etc/os-release）放行
-                    if any(resolved.startswith(p) for p in SENSITIVE_PREFIXES):
+            from ocos.operations.sandbox_ops import SandboxOps, sandbox_disabled
+            if not sandbox_disabled():
+                for seg in segments:
+                    # AGI 能力补全: extra_allow 放行已发现智能体 CLI（沙盒动态白名单）
+                    if not SandboxOps._is_allowed(seg, self._agent_clis):
                         return {"ok": False, "blocked": True,
-                                "block_reason": f"敏感路径: {token[:50]}"}
+                                "block_reason": f"白名单外命令段: {seg[:60]}"}
+                    # 敏感路径拦截: 命令参数指向系统敏感目录即拒绝
+                    for token in _re.findall(r"[~/][\w./-]*", seg):
+                        resolved = os.path.abspath(os.path.expanduser(token))
+                        if (resolved in PUBLIC_READONLY_PATHS
+                                or resolved in HARMLESS_DEV_DEVICES):
+                            continue  # 公开只读文件 / 无害设备文件放行
+                        if any(resolved.startswith(p) for p in SENSITIVE_PREFIXES):
+                            return {"ok": False, "blocked": True,
+                                    "block_reason": f"敏感路径: {token[:50]}"}
         except Exception:
             pass
         try:
@@ -675,16 +732,46 @@ class DecisionBridge:
                         errs.append(rr[5])
                     if rr[4]:
                         outs.append(rr[4])
-                return {"ok": all_ok, "blocked": r0[1],
+                resp = {"ok": all_ok, "blocked": r0[1],
                         "block_reason": r0[2],
                         "exit_code": 0 if rc == 0 and not errs else rc,
                         "stdout": "\n".join(outs)[:1200],
                         "stderr": "; ".join(errs)[:300]}
-            return {"ok": r0[0], "blocked": r0[1], "block_reason": r0[2],
-                    "exit_code": r0[3], "stdout": r0[4][:1200],
-                    "stderr": r0[5][:300]}
+            else:
+                resp = {"ok": r0[0], "blocked": r0[1], "block_reason": r0[2],
+                        "exit_code": r0[3], "stdout": r0[4][:1200],
+                        "stderr": r0[5][:300]}
+            self._mark_external_agent_call(command, resp)
+            return resp
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def _mark_external_agent_call(self, command: str, resp: dict) -> None:
+        """V6: 外部智能体 CLI 真实调用打点（执行时信号，非文本猜测）。
+
+        命令段二进制命中动态白名单 _agent_clis（AgentDiscovery 发现层
+        注入）即记 external_agent_call → learning.jsonl，ok 取沙盒执行
+        真值。vitals _social_metrics 消费产出 social_call_success_rate。
+        """
+        try:
+            import os as _os
+            names: set[str] = set()
+            for c in self._agent_clis:
+                names.add(c)
+                names.add(_os.path.basename(c))
+            hit = ""
+            for seg in command.replace(";", "&&").split("&&"):
+                tok = seg.strip().split()
+                if tok and (tok[0] in names
+                            or _os.path.basename(tok[0]) in names):
+                    hit = tok[0]
+                    break
+            if hit:
+                self._audit_learning_mark(
+                    "external_agent_call", agent=_os.path.basename(hit),
+                    ok=bool(resp.get("ok")))
+        except Exception:
+            logger.debug("external agent call mark failed", exc_info=True)
 
     def _handler_http_fetch(self, action: DispatchedAction) -> dict:
         """PW-4.1: 白名单 URL 抓取 — operations/SearchOps。"""
@@ -755,6 +842,51 @@ class DecisionBridge:
         return {"ok": out["ok"], "applied": out.get("applied", ""),
                 "error": out.get("error", ""),
                 "rollback_snapshot": out.get("rollback_snapshot", "")}
+
+    def _handler_autonomous_goal(self, action: DispatchedAction) -> dict:
+        """L3: 应用已批准的自主目标提案 — 经注入的 sink 写 goals 表。
+
+        人工批准 = authority（LEVEL1 提案未经批准永不执行）。写库职责
+        由装配层注入（autonomous_goal_sink）— ocos.execution 不直接
+        import ocos.goal.store（import 规则硬约束）。失败原因透明返回。
+        """
+        payload = action.payload or {}
+        goal_id = payload.get("goal_id", "")
+        description = payload.get("description", "")
+        if not goal_id or not description:
+            return {"ok": False, "error": "missing goal_id/description payload"}
+        if self._autonomous_goal_sink is None:
+            return {"ok": False,
+                    "error": "no autonomous_goal_sink attached (装配层未注入落地通道)"}
+        try:
+            self._autonomous_goal_sink(payload)
+            return {"ok": True, "goal_id": goal_id,
+                    "detail": "已写入 goals 表 PENDING，daemon 将自动认领执行"}
+        except Exception as e:
+            return {"ok": False, "error": f"autonomous goal save failed: {e}"}
+
+    def _handler_constitution_update(self, action: DispatchedAction) -> dict:
+        """L4-1: 应用已批准的宪法修改 — 经注入的 sink 落新版本。
+
+        人工批准 = authority（MODIFY_CONSTITUTION 属人工审批动作，
+        未经批准永不生效）。落库职责由装配层注入（constitution_sink）
+        — ocos.execution 不直接依赖 constitution 模块。全量快照语义。
+        """
+        payload = action.payload or {}
+        principles = payload.get("principles")
+        reason = payload.get("reason", "")
+        if not isinstance(principles, list) or not principles:
+            return {"ok": False, "error": "missing/empty principles payload"}
+        if self._constitution_sink is None:
+            return {"ok": False,
+                    "error": "no constitution_sink attached (装配层未注入落库通道)"}
+        try:
+            out = self._constitution_sink(payload)
+            version = out.get("version", "?") if isinstance(out, dict) else "?"
+            return {"ok": True, "version": version,
+                    "detail": f"宪法新版本 v{version} 已落库（{len(principles)} 条原则）"}
+        except Exception as e:
+            return {"ok": False, "error": f"constitution save failed: {e}"}
 
     # ── capability_reality 调用 ───────────────────────────────────────────
 
@@ -974,19 +1106,53 @@ class DecisionBridge:
             if True:
                 _rules = (
                     "把上述任务转换为可直接执行的动作。每行一个动作、最多 4 行，格式严格为：\n"
-                    "RUN|<命令>（优先使用只读命令: uname/df/free/uptime/ls/cat/head/"
-                    "tail/grep/find/ps/whoami/date/env/hostname/id）\n"
+                    "RUN|<命令>（本地只读优先: uname/df/free/uptime/ls/cat/head/"
+                    "tail/grep/find/ps/whoami/date/env/hostname/id；任务要求联网"
+                    "访问/抓取/调研外部内容（GitHub/网页/API）时必须用 "
+                    "RUN|curl -s <url> 真实抓取，禁止省略联网部分只用本地命令"
+                    "应付。所有 curl 都加 --max-time 15（防止挂起耗尽执行"
+                    "超时）。GitHub 调研配方: 先"
+                    "RUN|curl -s --max-time 15 \"https://api.github.com/search/repositories?"
+                    "q=关键词&per_page=5&sort=stars\" | python3 -c \"import json,"
+                    "sys; [print(r['full_name'],'|',r['stargazers_count'],'|',"
+                    "(r.get('description') or '')[:150]) for r in "
+                    "json.load(sys.stdin)['items']]\" 提取精简字段（原始 JSON "
+                    "字段冗长会撑爆输出窗口致信息丢失），再对代表性项目用 "
+                    "RUN|curl -s --max-time 15 -H \"Accept: "
+                    "application/vnd.github.raw\" "
+                    "\"https://api.github.com/repos/<owner>/<repo>/readme\" "
+                    "抓取 README（注意: raw.githubusercontent.com 在部分网络"
+                    "不可达，一律走 api.github.com））\n"
+                    "宿主机环境探查标准命令集（任务含'检查/分析宿主机/系统环境/"
+                    "硬件/部署可行性'时必须覆盖，尤其 GPU——漏查 GPU 会使部署"
+                    "方案的显存估算失真）: RUN|uname -a  RUN|df -h  RUN|free -h"
+                    "  RUN|nproc  RUN|swapon --show  RUN|nvidia-smi --query-gpu="
+                    "name,memory.total --format=csv（无 NVIDIA 卡会失败，改用"
+                    " RUN|lspci | grep -iE 'vga|3d'）\n"
+                    "ANSWER|<结论文本>（纯分析/总结/复盘类任务且所需信息已在上下文中时"
+                    "使用——直接给出归纳结论，不执行任何命令）\n"
                     "AGENT_INSTALL|<智能体名>（任务要求下载/安装某智能体时用）\n"
                     "FILE_WRITE|<绝对路径>|<文件内容>\n"
                     "NONE|<一句话说明为什么无法执行>\n"
                     "单一操作只输出一行；复合任务（如同时查看系统版本/磁盘/内存）"
-                    "输出多条 RUN 行。不要输出任何解释。"
+                    "输出多条 RUN 行，且必须覆盖任务描述的全部关键部分"
+                    "（联网调研与本地检查都要有对应动作，不可只做其中一半）。"
+                    "不要输出任何解释。"
                 )
                 prompt = f"任务描述：{description}\n\n{_rules}"
                 # FIX-4: 注入同类历史任务结果 → 规划 LLM 可见历史成败经验
                 prior = self._prior_task_results(description)
                 if prior:
                     prompt = f"{prior}\n\n{prompt}"
+                # L7 学习闭环: 失败先验 — cause 级矫正程序（正向程序指引，
+                # 非失败叙事，规避 FIX-4 负反馈结构）
+                f_prior = self._failure_prior_hint(description)
+                if f_prior:
+                    prompt = f"{f_prior}\n\n{prompt}"
+                # V2 技能重放: 已验证技能图步骤复用（经验→技能→重放读侧）
+                skill_hint = self._skill_replay_hint(description)
+                if skill_hint:
+                    prompt = f"{skill_hint}\n\n{prompt}"
                 # 记忆直接参与决策 — 统一记忆决策上下文（量化 + 归因 + 类型分布）
                 memory_ctx = self._memory_decision_context(description)
                 if memory_ctx:
@@ -1003,6 +1169,22 @@ class DecisionBridge:
                 agents = self._prior_agents(description)
                 if agents:
                     prompt = f"{agents}\n\n{prompt}"
+                # UX-J+: 复盘/总结/学习类任务注入真实 goal_result 结论 —
+                # 此前 LLM 拿不到执行结果，跑偏到文件系统扫描来"复盘"
+                # （实测学习总结目标以 ls/扫目录代替记忆查询，部分达成）
+                retro = self._retrospect_hint(description)
+                if retro:
+                    prompt = f"{retro}\n\n{prompt}"
+                # 自我认知事实块 — 自省/差距类任务防"缺失自身能力"幻觉
+                # （2026-09-07 对话审计：LLM 误称系统无自我模型/学习闭环）
+                sk = self._self_knowledge_hint(description)
+                if sk:
+                    prompt = f"{sk}\n\n{prompt}"
+                # 数字生命·启动自省先验 — 环境快照注入（适应力读侧），
+                # 让目标执行基于本boot实测环境而非过时记忆/幻觉
+                boot = self._boot_context_hint()
+                if boot:
+                    prompt = f"{boot}\n\n{prompt}"
                 # AGI 能力补全: 任务显式引用已发现智能体 → 强制规划为直接调用
                 # （抑制"调用 XX 智能体"漂移成通用系统分析的模板固化倾向）
                 agent_hint = self._agent_hint(description)
@@ -1017,6 +1199,11 @@ class DecisionBridge:
                     system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的动作行。",
                     temperature=0.1, max_tokens=2000))
                 raw = raw.strip()
+                # P3 (2026-09-08 事件复盘): 规划原始输出落日志 — 此前规划/
+                # 重试/丢弃路径零观测，"计划正文被闸门丢弃"类事故无法取证
+                _raw_lines = raw.splitlines() if raw else []
+                logger.info("PLANNER-OUT (%d lines): %s", len(_raw_lines),
+                            (_raw_lines[0] if _raw_lines else "")[:120])
         except Exception as e:
             return {"ok": False, "error": f"LLM 规划失败: {e}"}
 
@@ -1053,20 +1240,40 @@ class DecisionBridge:
             pass
 
         def _run_one(command: str, auto_readonly: bool) -> dict:
-            """UX-F1: 单命令执行（含只读校验 + 沙盒拦截带反馈重试一次）。"""
+            """UX-F1: 单命令执行（含只读校验 + 沙盒拦截带反馈重试一次）。
+
+            UX-J+ 实测修复: 拦截重试后结果必须携带实际执行的命令
+            （"_executed_command"）— 此前聚合标签仍用原命令，把转换后
+            命令的输出挂在原命令名下（curl 被拦→转成 openclaw --version
+            → episode 记成 "$ curl … OpenClaw 版本"，两轮生产测试的
+            "输出失真"均由此而来），LLM 汇总与记忆随之被误导。
+
+            CHAT-ROUTE FIX (2026-09-07): auto_readonly 写符号拒绝此前
+            提示"需转待批"却从不入队（诚实性缺口）；且个人使用模式
+            （OCOS_SANDBOX_DISABLED=true）下 owner 已声明信任写命令——
+            灾难黑名单（rm -rf / 等）仍在 SandboxOps._is_allowed 下游
+            生效，此处直接放行。非个人模式维持拒绝语义（文案不再撒谎）。
+            """
             if auto_readonly and any(
                     k in command.lower() for k in
                     ("write", "echo >", ">", "tee ", "rm", "mv", "mkdir")):
-                return {"ok": False,
-                        "error": "自主路径仅允许只读命令——写操作需转待批"}
+                from ocos.operations.sandbox_ops import sandbox_disabled
+                if not sandbox_disabled():
+                    return {"ok": False,
+                            "error": ("自主路径仅允许只读命令——写操作被拒"
+                                      "（未入待批队列；写文件请用 FILE_WRITE"
+                                      "| 动作以进入强制审批）")}
             run_result = self._handler_run_command(
                 SimpleNamespace(payload={"command": command}))
             if not run_result.get("ok") and run_result.get("blocked"):
                 # UX-K: 沙盒拦截（白名单外/敏感路径）→ 带反馈重试一次
                 raw2 = _first_line(_convert(run_result.get("block_reason", "")))
                 if raw2.startswith("RUN|"):
+                    _retried_cmd = raw2[4:].strip()
                     run_result = self._handler_run_command(
-                        SimpleNamespace(payload={"command": raw2[4:].strip()}))
+                        SimpleNamespace(payload={"command": _retried_cmd}))
+                    if run_result.get("ok"):
+                        run_result["_executed_command"] = _retried_cmd
             return run_result
 
         # UX-I+: 多动作任务（"uname/df/free/uptime 汇总"类）— LLM 可输出
@@ -1075,6 +1282,152 @@ class DecisionBridge:
         # FIX-5b: planning NONE| 只允许重试一次（防无限重规划烧 token）
         _retried_none = False
         _lines = [ln.strip().strip("`") for ln in raw.splitlines() if ln.strip()]
+        # UX-J+ 实测新增: ANSWER| — 认知型任务（复盘/总结/分析）所需信息
+        # 已在注入上下文（如复盘素材）时，LLM 直接给出文字结论。此前只能
+        # 用 NONE|（被判"无法执行→failed"）或违心跑系统采集命令（跑偏），
+        # 两轮生产测试的复盘目标先后以这两种方式失败。
+        _answer_idx = next((i for i, ln in enumerate(_lines)
+                            if ln.startswith("ANSWER|")), None)
+        # CHAT-ROUTE FIX (2026-09-07): ANSWER| 防幻觉闸门 —
+        # 实测（T3 写文件/T5 探针）LLM 对执行类任务直接输出
+        # "ANSWER|文件已创建…验证成功"即落 success=true，无任何真实
+        # 执行证据（幻觉叙述蒙混过关）。规则：
+        #   a) ANSWER 与 RUN/FILE_WRITE/AGENT_INSTALL 共存 → 剔除
+        #      ANSWER 行，以真实动作分支为准；
+        #   b) 纯 ANSWER 且描述含执行意图（动词/命令词）→ 带反馈重试
+        #      一次要求真实动作，仍 ANSWER → 诚实失败；
+        #   c) 纯 ANSWER 且确为分析/总结/复盘/创作类 → 维持放行
+        #      （UX-J+ 本意 + P0-1 修复：制定计划/方案/设计的交付物
+        #      就是正文，强制 RUN 会丢弃交付物并诱发噪声探针）。
+        _EXEC_INTENT_RE = re.compile(
+            r"执行|运行|写入|创建|新建|删除|探测|安装|下载|清空|"
+            r"curl|wget|pip|apt|\bcat\b|\bls\b|\bdf\b|\bfree\b|"
+            # P0-1: 「验证」收紧为目标词邻接模式（裸词曾误命中"验证标准"）
+            r"验证.{0,8}(文件|目录|安装|执行|结果|成功|可用|生效|连通|修复)|"
+            r"读取.{0,10}(文件|目录)|报告.{0,10}(状态|数据|结果|使用)")
+        _has_real_action = any(
+            ln.startswith(("RUN|", "FILE_WRITE|", "AGENT_INSTALL|"))
+            for ln in _lines)
+        if _answer_idx is not None and _has_real_action:
+            logger.info("ANSWER-GUARD: dropped ANSWER| line — real action "
+                        "present in plan (%s)", description[:60])
+            _lines = [ln for ln in _lines if not ln.startswith("ANSWER|")]
+            _answer_idx = None
+        if _answer_idx is not None and not _has_real_action:
+            _desc_is_exec = bool(_EXEC_INTENT_RE.search(description))
+            # P0-1: 创作/分析类豁免（模块级共享正则，与 _prior_agents 一致）
+            _desc_is_authoring = bool(
+                _AUTHORING_ANALYSIS_RE.search(description))
+            if _desc_is_authoring:
+                logger.info("ANSWER-GUARD: authoring/analysis task — "
+                            "ANSWER allowed as deliverable (%s)",
+                            description[:60])
+            if _desc_is_exec and not _desc_is_authoring:
+                if not _retried_none:
+                    _retried_none = True
+                    # P3 (2026-09-08 事件复盘): 重试路径此前零观测，
+                    # 事后取证只能靠 LLM 调用时序反推
+                    logger.info("ANSWER-GUARD: pure ANSWER with exec "
+                                "intent — retry for real action (%s)",
+                                description[:60])
+                    raw2 = _first_line(_convert(
+                        "该任务需要真实执行证据，禁止直接给文字结论（你的"
+                        " ANSWER 会被判为幻觉）。请输出 RUN|<命令> 或 "
+                        "FILE_WRITE|<绝对路径>|<内容>；确实无法执行才输出"
+                        " NONE|原因。"))
+                    logger.info("ANSWER-GUARD: retry produced: %s",
+                                raw2[:120])
+                    if raw2.startswith("RUN|"):
+                        _rr2 = _run_one(raw2[4:].strip(), _auto_ro)
+                        if _rr2.get("ok"):
+                            return {"ok": True, "blocked": False,
+                                    "exit_code": 0,
+                                    # P2: 自我模型能力实测归因（shell 实测）
+                                    "capability": "shell",
+                                    "stdout": f"$ {raw2[4:].strip()}\n"
+                                              f"{_rr2.get('stdout', '')}"[:4000]}
+                        return _rr2
+                    if raw2.startswith("FILE_WRITE|"):
+                        # 落入下方 FILE_WRITE 分支：同步 _lines/_raw 状态，
+                        # 且必须清 _answer_idx（旧索引指向已丢弃的 ANSWER 行）
+                        _lines = [raw2]
+                        raw = raw2
+                        _answer_idx = None
+                    elif not raw2.startswith(("ANSWER|", "NONE|")):
+                        _lines = [raw2]
+                        raw = raw2
+                        _answer_idx = None
+                    else:
+                        return {"ok": False,
+                                "error": (f"执行类任务被 LLM 幻觉应答，"
+                                          f"重试仍拒绝真实执行: "
+                                          f"{raw2[:120]}"),
+                                "honest_blocked": True}
+                else:
+                    return {"ok": False,
+                            "error": ("执行类任务被 LLM 幻觉应答（ANSWER "
+                                      "无真实执行证据）"),
+                            "honest_blocked": True}
+            elif (_desc_is_authoring
+                  and _AUTHORING_DELIVERABLE_RE.search(description)
+                  and not _retried_none):
+                # P0-2 扩展 (2026-09-08 E2E 复测发现): 瘦 ANSWER 防空洞 —
+                # 元描述（"我将直接给出计划结论"）不是交付物，落 ✓ 同样是
+                # 假完成（cat --version 事件的文本变体）。创作交付类任务
+                # ANSWER 过瘦 → 带反馈重试一次索要正文，仍瘦 → 诚实失败。
+                _ans_first = _lines[_answer_idx][7:].strip()
+                _ans_rest = "\n".join(_lines[_answer_idx + 1:]).strip()
+                _ans_body = (f"{_ans_first}\n{_ans_rest}".strip()
+                             if _ans_rest else _ans_first)
+                if len(_ans_body) < 60:
+                    _retried_none = True
+                    logger.info("ANSWER-GUARD: thin ANSWER (%d chars) for "
+                                "authoring task — retry for real content "
+                                "(%s)", len(_ans_body), description[:60])
+                    # 注: 不走 _convert（其"改用只读命令"话术会把 LLM 推向
+                    # RUN 噪声探针），直接带反馈重新生成交付物正文
+                    _cand = asyncio.run(tg._provider.generate(
+                        f"{prompt}\n\n【上次输出被判空洞】你的 ANSWER 只是元"
+                        "描述（说明你将做什么），不是交付物。请直接输出完整"
+                        "的计划/方案正文本身（分阶段、分条目、含具体安排/内"
+                        "容），格式仍为 ANSWER|<正文>，不要输出任何解释或元"
+                        "描述。",
+                        system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的动作行。",
+                        temperature=0.1, max_tokens=2000)).strip()
+                    if _cand.startswith("```"):
+                        _cand = _cand.strip("`").lstrip()
+                    if _cand.startswith("FILE_WRITE|"):
+                        _lines = [_cand.splitlines()[0]]
+                        raw = _lines[0]
+                        _answer_idx = None
+                    elif _cand.startswith("ANSWER|"):
+                        _lines = _cand.splitlines()
+                        _answer_idx = 0
+                        _new_first = _lines[0][7:].strip()
+                        _new_rest = "\n".join(_lines[1:]).strip()
+                        _new_body = (f"{_new_first}\n{_new_rest}".strip()
+                                     if _new_rest else _new_first)
+                        if len(_new_body) < 60:
+                            return {"ok": False,
+                                    "error": (f"创作类任务交付物空洞：ANSWER "
+                                              f"仅 {len(_new_body)} 字且为元"
+                                              "描述，重试后仍未产出实质正文"),
+                                    "honest_blocked": True}
+                        # 正文达标 → 落入下方通用 ANSWER 收集分支返回全文
+                    else:
+                        return {"ok": False,
+                                "error": ("创作类任务交付物空洞：重试未产出 "
+                                          f"ANSWER|正文（got: {_cand[:80]}）"),
+                                "honest_blocked": True}
+        if _answer_idx is not None:
+            # UX-J+ fix: ANSWER| 的结论常是多行文本（首行 "ANSWER|标题"，
+            # 正文跟在后续行）——只取 ln[7:] 会丢正文（实测复盘结论只剩
+            # 标题 9 字符）。收集该行起的全部内容。
+            _first = _lines[_answer_idx][7:].strip()
+            _rest = "\n".join(_lines[_answer_idx + 1:]).strip()
+            _answer = f"{_first}\n{_rest}".strip() if _rest else _first
+            return {"ok": True, "blocked": False, "exit_code": 0,
+                    "stdout": _answer[:4000]}
         _run_cmds = [ln[4:].strip() for ln in _lines if ln.startswith("RUN|")]
         if _run_cmds:
             outs: list[str] = []
@@ -1082,7 +1435,9 @@ class DecisionBridge:
                 _rr = _run_one(_cmd, _auto_ro)
                 if not _rr.get("ok"):
                     return _rr
-                outs.append(f"$ {_cmd}\n{_rr.get('stdout', '')}")
+                # UX-J+: 标签用实际执行的命令（拦截重试转换后 ≠ 原命令）
+                _label = _rr.pop("_executed_command", _cmd)
+                outs.append(f"$ {_label}\n{_rr.get('stdout', '')}")
             raw_out = "\n\n".join(outs)
             # FIX-5: 多命令 → 一次 LLM 结论摘要（Observation→Reasoning）。
             # 保留原始 stdout 端到端（[实验]约束 deny 丢弃真实输出），
@@ -1094,6 +1449,8 @@ class DecisionBridge:
                 if summary:
                     final = f"【结论摘要】{summary}\n\n【原始输出】\n{raw_out[:3500]}"
             return {"ok": True, "blocked": False, "exit_code": 0,
+                    # P2: 自我模型能力实测归因（shell 实测）
+                    "capability": "shell",
                     "stdout": final[:4000]}
         raw = _lines[0] if _lines else raw
         # FIX-5b: planning LLM 偶发输出 "NONE|"（判定无法执行）→ 带反馈重规划一次。
@@ -1107,6 +1464,8 @@ class DecisionBridge:
                 _rr2 = _run_one(raw2[4:].strip(), _auto_ro)
                 if _rr2.get("ok"):
                     return {"ok": True, "blocked": False, "exit_code": 0,
+                            # P2: 自我模型能力实测归因（shell 实测）
+                            "capability": "shell",
                             "stdout": f"$ {raw2[4:].strip()}\n{_rr2.get('stdout','')}"[:4000]}
                 return _rr2
             if not raw2.startswith("NONE|"):
@@ -1133,10 +1492,14 @@ class DecisionBridge:
                     return {"ok": False, "pending": True,
                             "error": ("file_write requires approval — "
                                       "已入待批队列，等待人工批准")}
-                return self._handler_file_op(SimpleNamespace(payload={
+                _fw = self._handler_file_op(SimpleNamespace(payload={
                     "op_type": "file_write", "target": parts[1].strip(),
                     "params": {"content": parts[2]},
                     "approval_id": approval_id}))
+                if _fw.get("ok"):
+                    # P2: 自我模型能力实测归因（filesystem 实测）
+                    _fw["capability"] = "filesystem"
+                return _fw
             return {"ok": False, "error": f"FILE_WRITE 格式错误: {raw[:80]}"}
         if raw.startswith("NONE|"):
             return {"ok": False, "error": f"任务无法执行: {raw[5:].strip()}"}
@@ -1339,6 +1702,15 @@ class DecisionBridge:
             return ""
         if not agents:
             return ""
+        # P1-1 (2026-09-08 事件复盘): 创作/分析类任务不注入智能体清单 —
+        # 「制定升级计划」被强制 RUN 后，LLM 抓住注入的「只读示例:
+        # <cli> --version」话术，输出 cat 版本号噪声。创作类任务的交付物
+        # 是正文，清单只会成为跑偏磁铁；描述显式引用智能体名的照常注入。
+        _explicit_ref = any(
+            str(a.get("name", "")) and str(a.get("name", "")) in description
+            for a in agents)
+        if not _explicit_ref and _AUTHORING_ANALYSIS_RE.search(description or ""):
+            return ""
         lines = ["【可用智能体软件】"]
         for a in agents[:limit]:
             name = str(a.get("name", "?"))
@@ -1351,10 +1723,12 @@ class DecisionBridge:
                     if a.get("version") else ""
                 lines.append(f"- {name}: CLI {a.get('cli_path', '')}{ver}")
                 # 关键引导: 明确该 CLI 已获白名单放行、可在 RUN| 行直接执行
-                # （否则规划 LLM 常把"调用智能体"漂移成通用系统分析）
+                # （否则规划 LLM 常把"调用智能体"漂移成通用系统分析）。
+                # 调用名用 _agent_invoke — name↔命令名错位时给绝对路径
+                _inv = self._agent_invoke(a)
                 lines.append(
-                    f"  → 可直接执行: {name} <参数>"
-                    f"（只读示例: {name} --version）")
+                    f"  → 可直接执行: {_inv} <参数>"
+                    f"（只读示例: {_inv} --version）")
             elif kind == "http":
                 lines.append(f"- {name}: HTTP {a.get('api_endpoint', '')}")
         try:
@@ -1385,9 +1759,10 @@ class DecisionBridge:
                 continue
             if name in description:
                 if a.get("kind", "cli") == "cli":
+                    _inv = self._agent_invoke(a)
                     hints.append(
-                        f"任务明确引用智能体「{name}」：请直接输出 RUN|{name} <参数>"
-                        f"（已获白名单放行，只读示例: RUN|{name} --version），"
+                        f"任务明确引用智能体「{name}」：请直接输出 RUN|{_inv} <参数>"
+                        f"（已获白名单放行，只读示例: RUN|{_inv} --version），"
                         "不要改用 uname/df 等其他系统命令，也不要拆分分析子任务。")
                 else:
                     hints.append(
@@ -1401,8 +1776,9 @@ class DecisionBridge:
     def _agent_forced_call(self, description: str) -> str:
         """AGI 能力补全: 任务显式引用的已发现可用智能体名（保真闸门用）。
 
-        描述命中已发现可用 CLI 智能体（codex 等）→ 返回该名，调用方据此
-        在规划输出未调用它时强制纠正；未命中/不可用 → ""（不干预）。
+        描述命中已发现可用 CLI 智能体（codex 等）→ 返回可执行调用名
+        （_agent_invoke: name↔命令名错位时为 cli_path 绝对路径），调用方
+        据此在规划输出未调用它时强制纠正；未命中/不可用 → ""（不干预）。
         """
         if self._agent_source is None or not description:
             return ""
@@ -1417,8 +1793,154 @@ class DecisionBridge:
             if a.get("kind", "cli") != "cli":
                 continue  # 保真闸门仅针对 CLI（HTTP 走提示引导）
             if name in description:
-                return name
+                return self._agent_invoke(a)
         return ""
+
+    @staticmethod
+    def _agent_invoke(a: dict) -> str:
+        """智能体可执行调用名 — name 与 cli_path 命令名一致用短名，
+        错位时退回 cli_path 绝对路径（防 RUN|<名> 落地 127，如 opentale
+        误配 ln 候选的时代命令名与实际 CLI 不一致）。"""
+        name = str(a.get("name", ""))
+        path = str(a.get("cli_path", "") or "")
+        if path and os.path.basename(path) != name:
+            return path
+        return name or path
+
+    def _boot_context_hint(self) -> str:
+        """启动自省先验 — 本 boot 环境实测快照注入（适应力读侧）。
+
+        数据源: ~/.ocos/boot_context.json（daemon 每次启动时由
+        boot_awareness 写入，全部为实测真值）。让目标执行基于当前
+        boot 的真实环境（GPU/网络/磁盘/重启状态）规划，而非过时记忆
+        或幻觉。文件缺失/解析失败 → ""（诚实沉默，零开销）。
+        """
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            p = _Path.home() / ".ocos" / "boot_context.json"
+            d = _json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        net_txt = {"full": "内外网畅通", "domestic_only": "仅国内可达"
+                   "（国际外联任务预计失败，勿承诺外部调研）",
+                   "offline": "完全离线（外联任务不可行，仅本地能力）"
+                   }.get(d.get("network_state"), "未知")
+        reboot = ""
+        if d.get("reboot_detected"):
+            dt = d.get("downtime_h")
+            reboot = f"（宿主机经历重启" + (
+                f"，停机约 {dt:.1f}h）" if dt else "）")
+        gpu = d.get("gpu") or "未检出"
+        return ("【宿主环境快照（本 boot 启动自省实测）】"
+                f"GPU={gpu}；网络={net_txt}；"
+                f"磁盘可用={d.get('disk_avail_g')}G；"
+                f"内存可用={d.get('mem_avail_g')}G；"
+                f"CPU={d.get('cpu_cores')}核{reboot}")
+
+    def _self_knowledge_hint(self, description: str) -> str:
+        """自我认知事实块 — 自省/差距/总结类任务注入真实能力事实。
+
+        缺陷史（2026-09-07 对话审计）: 执行器 LLM 只见复盘素材，不知道
+        系统已具备的能力（自我模型/学习闭环/持久记忆/自主目标生成），
+        在"AI 与数字生命差距"类任务中产出"无自我模型、无经验沉淀、
+        完全被动"等关于自身的幻觉结论。本块全部为实测真值，无 LLM
+        参与生成；非自省类任务 → ""（零开销）。
+        """
+        if not self._db_path or self._db_path == ":memory:":
+            return ""
+        text = description or ""
+        if not any(k in text for k in
+                   ("复盘", "总结", "差距", "自我", "自身", "能力",
+                    "数字生命", "成长", "反思", "学习")):
+            return ""
+        facts: list[str] = ["【自我能力事实（实测真值，分析自身必须引用）】"]
+        try:
+            from ocos.self.agent_self_model import AgentSelfModel
+            facts.append(AgentSelfModel(self._db_path).render())
+        except Exception:
+            logger.debug("self knowledge hint: self model unavailable",
+                         exc_info=True)
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect(self._db_path)
+            ep = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+            lessons = conn.execute(
+                "SELECT COUNT(*) FROM episodes WHERE source='lesson'"
+            ).fetchone()[0]
+            goals7d = conn.execute(
+                "SELECT COUNT(*) FROM goals WHERE status='COMPLETED' "
+                "AND updated_at >= ?",
+                ((datetime.now(timezone.utc)
+                  - timedelta(days=7)).isoformat(),)).fetchone()[0]
+            skills = 0
+            try:
+                skills = conn.execute(
+                    "SELECT COUNT(*) FROM skill_graph").fetchone()[0]
+            except _sq.OperationalError:
+                pass
+            conn.close()
+            injections = sum(
+                1 for m in self._read_learning_marks()
+                if m.get("type") == "lesson_prior_injected")
+            facts.append(
+                f"  持久记忆: episodes={ep}, lessons={lessons}, "
+                f"技能图={skills}")
+            facts.append(
+                f"  学习闭环: lesson 先验注入（累计）={injections}；"
+                f"近7天完成目标={goals7d}（自主提案经认领执行——"
+                f"系统具备自主目标生成能力）")
+        except Exception:
+            logger.debug("self knowledge hint: db stats unavailable",
+                         exc_info=True)
+        facts.append(
+            "【事实约束】上述为系统已具备能力的实测证据。分析自身/差距时"
+            "必须以此为据，不得声称系统缺失自我模型、经验沉淀、持久记忆、"
+            "自主目标生成或学习闭环；真实差距应指向证据中的具体短板"
+            "（如证据不完整、模板固化），并区分'我作为执行器看到的上下文'"
+            "与'系统整体能力'。")
+        out = "\n".join(facts)[:1400]
+        logger.info("self knowledge hint injected: %d chars (desc=%s)",
+                    len(out), text[:40])
+        return out
+
+    def _retrospect_hint(self, description: str) -> str:
+        """UX-J+: 复盘/总结/学习类任务 → 注入最近 goal_result 结论摘要。
+
+        实测学习总结目标因拿不到真实执行记录，跑偏到 ls/扫目录"复盘"
+        （部分达成）。此处把最近 goal_result episode 的【结论摘要】直接
+        作为复盘素材注入，并显式禁止文件系统取材。非复盘类任务 → ""。
+        """
+        if not self._db_path or self._db_path == ":memory:":
+            return ""
+        text = description or ""
+        if not any(k in text for k in
+                   ("复盘", "总结", "学习", "回顾", "经验沉淀")):
+            return ""
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect(self._db_path)
+            rows = conn.execute(
+                "SELECT substr(decision,1,800), created_at FROM episodes "
+                "WHERE tags LIKE '%goal_result%' "
+                "ORDER BY rowid DESC LIMIT 4").fetchall()
+            conn.close()
+        except Exception as e:
+            logger.debug("retrospect hint query failed: %s", e)
+            return ""
+        if not rows:
+            return ""
+        lines = ["【近期目标执行结果（复盘素材，真实记录）】"]
+        for d, t in rows:
+            head = str(d).split("【原始输出】")[0].strip()
+            lines.append(f"[{str(t)[:16]}]\n{head[:500]}")
+        lines.append(
+            "以上为真实执行记录——复盘/总结必须**只基于这些内容**作答，"
+            "禁止重新执行 uname/df/free/ls 等系统采集命令，禁止扫描文件"
+            "系统获取信息。")
+        logger.info("retrospect hint injected: %d chars (desc=%s)",
+                    sum(len(x) for x in lines), text[:40])
+        return "\n\n".join(lines)
 
     def _world_hint(self, description: str) -> str:
         """P2.2 (AGI 计划): 世界模型前置校验注记。
@@ -1505,6 +2027,220 @@ class DecisionBridge:
             return ""
         return "同类历史任务结果:\n" + "\n".join(hits)
 
+    # ── L7/L8 学习闭环: 失败先验消费（2026-09-07 立项）─────────────────
+
+    #: cause → 矫正性程序（正向"先做什么"，非失败叙事——规避 FIX-4
+    #: 负反馈循环：其成因为失败结果史诱导规划器跟随 ✗/NONE 先例，程序式
+    #: 指引不含该诱导结构，且不提供 NONE 逃逸框）
+    _CAUSE_PROCEDURES: dict = {
+        "ambiguous_task": "先澄清目标边界与成功标准（拆解为明确子步骤），再逐步执行",
+        "execution_error": "先校验输入与工具可用性，分小步执行并在每步后核对结果再继续",
+        "permission_denied": "先核验所需权限/审批是否具备，缺失则先走审批提案，不要直接执行",
+        "timeout": "拆分为短步骤并设中间检查点，单步超时前先输出部分结果",
+        "tool_unavailable": "先探测所需工具/命令是否可用，不可用时改用替代方案或诚实说明",
+        "llm_conversion_failed": "输出严格遵循要求的动作行格式（每行一条，不附加解释）",
+    }
+
+    def _failure_prior_hint(self, description: str) -> str:
+        """L7: 失败先验 — 按 cause 注入矫正性程序指引（学习闭环消费侧）。
+
+        此前 lesson 只进统计管道不消费（同型失败持续复发，failure_
+        recurrence=100%）。与 _prior_task_results 的分工：后者注入同类
+        **成功**历史；本方法注入 cause 级**矫正程序**。匹配两级：
+          a. 定向——任务描述与 lesson.goal_pattern bi-gram 重叠 ≥0.20；
+          b. cause 级兜底——无定向命中时取 30 天内复发（≥2 条）最近的
+             cause（复发本身即模式匹配失效的信号）。
+        上限 1 块防提示膨胀；命中即 learning.jsonl 留痕 + 打点（L8 观测）。
+        """
+        if not self._db_path or not description:
+            return ""
+        desc = description.strip()
+        if not desc:
+            return ""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(self._db_path)
+            conn.row_factory = sqlite3.Row
+            cutoff = (datetime.now(timezone.utc)
+                      - timedelta(days=30)).isoformat()
+            rows = conn.execute(
+                "SELECT tags, context, created_at FROM episodes "
+                "WHERE source='lesson' AND created_at >= ? "
+                "ORDER BY created_at DESC LIMIT 60", (cutoff,)).fetchall()
+            conn.close()
+        except Exception as e:
+            logger.debug("failure prior query failed: %s", e)
+            return ""
+        dg = {desc[i:i + 2] for i in range(len(desc) - 1)}
+        if not dg:
+            return ""
+        registry: dict = {}
+        for r in rows:
+            try:
+                tags = json.loads(r["tags"] or "[]")
+            except (ValueError, TypeError):
+                tags = []
+            cause = next((t for t in (tags if isinstance(tags, list) else [])
+                          if t and t != "failure_lesson"), None)
+            if not cause or cause not in self._CAUSE_PROCEDURES:
+                continue
+            info = registry.setdefault(
+                cause, {"count": 0, "goal_pattern": "", "seen": ""})
+            info["count"] += 1
+            if not info["seen"]:
+                info["seen"] = str(r["created_at"] or "")
+            if not info["goal_pattern"]:
+                try:
+                    ctx = json.loads(r["context"] or "{}")
+                except (ValueError, TypeError):
+                    ctx = {}
+                info["goal_pattern"] = str(ctx.get("goal_pattern", "") or "")
+        if not registry:
+            return ""
+        chosen: list = []                       # [(cause, mode)]
+        for cause, info in registry.items():    # a) 定向匹配
+            gp = info["goal_pattern"].strip()
+            if not gp:
+                continue
+            sg = {gp[i:i + 2] for i in range(len(gp) - 1)}
+            if sg and len(dg & sg) / max(len(dg | sg), 1) >= 0.20:
+                chosen.append((cause, "pattern"))
+        if not chosen:                          # b) 复发 cause 兜底
+            recurred = [(i["seen"], c) for c, i in registry.items()
+                        if i["count"] >= 2]
+            if recurred:
+                recurred.sort(reverse=True)
+                chosen.append((recurred[0][1], "recurrence"))
+        if not chosen:
+            return ""
+        cause, mode = chosen[0]
+        self._audit_learning_mark("lesson_prior_injected", cause=cause,
+                                  mode=mode)
+        return (f"【执行程序提示】针对{cause}类任务，请按以下程序执行：\n"
+                f"{self._CAUSE_PROCEDURES[cause]}")
+
+    def _skill_registry(self):
+        """技能注册表（主库同目录 capability.db；无库返回 None）。"""
+        if not self._db_path:
+            return None
+        try:
+            from pathlib import Path as _P
+            from ocos.capability.skill_registry import SkillRegistry
+            reg = SkillRegistry(
+                db_path=str(_P(self._db_path).parent / "capability.db"))
+            reg.init_db()
+            return reg
+        except Exception as e:
+            logger.debug("skill registry unavailable: %s", e)
+            return None
+
+    def _skill_replay_hint(self, description: str) -> str:
+        """V2 技能重放（提示级）: 已验证技能图 → 按其步骤执行。
+
+        经验→技能闭环的读侧：dream 巩固合成的 SkillGraph（同型成功经验
+        ≥2 次）经 bi-gram 匹配任务描述（≥0.30），命中即把技能图步骤注入
+        规划 prompt（"按已验证步骤执行"），并 learning.jsonl 留痕——
+        vitals skill_replay_hit_rate = 命中/触发。图执行级重放（引擎路由）
+        由 supervisor capability_hints.skill_graph_id 路径承载，不在此层。
+        """
+        if not self._db_path or not description:
+            return ""
+        reg = self._skill_registry()
+        if reg is None:
+            return ""
+        try:
+            graphs = reg.list_graphs()
+        except Exception as e:
+            logger.debug("skill graphs load failed: %s", e)
+            return ""
+        if not graphs:
+            return ""                       # 无技能库 → 不打点（无重放通道）
+        desc = description.strip()
+        dg = {desc[i:i + 2] for i in range(len(desc) - 1)}
+        if not dg:
+            return ""
+        best = None
+        for g in graphs:
+            name = (g.name or "").strip()
+            text = f"{g.name} {g.description}".strip()
+            sg = {text[i:i + 2] for i in range(len(text) - 1)}
+            if not sg:
+                continue
+            ov = len(dg & sg) / max(len(dg | sg), 1)
+            # 名字级强信号：合成技能的 name 即任务模式，完整出现于
+            # 任务描述时整体 Jaccard 常被描述噪声稀释到阈值下 —
+            # 直接视为命中（名字 ≥4 字防短名误配）
+            if len(name) >= 4 and name in desc:
+                ov = 1.0
+            if ov >= 0.30 and (best is None or ov > best[1]):
+                best = (g, ov)
+        if best is None:
+            self._audit_learning_mark("skill_replay", matched=False)
+            return ""
+        g = best[0]
+        try:
+            full = reg.load_graph(g.id) or g   # list_graphs 不含完整 skill
+        except Exception:
+            full = g
+        steps = [f"{i+1}. {s.description or s.name}"
+                 for i, s in enumerate(full.skills[:5])]
+        self._audit_learning_mark("skill_replay", matched=True,
+                                  graph_id=g.id)
+        return ("【技能重放】同类任务已有已验证技能图《%s》，"
+                "优先按以下已验证步骤执行：\n%s" % (g.name, "\n".join(steps)))
+
+    def _read_learning_marks(self) -> list[dict]:
+        """learning.jsonl 全量解析（坏行跳过）— 与 vitals 同数据源。"""
+        try:
+            from pathlib import Path as _P
+            base = os.environ.get("OCOS_AUDIT_DIR", "").strip()
+            audit_dir = (_P(base).expanduser() if base
+                         else _P.home() / ".ocos" / "audit")
+            path = audit_dir / "learning.jsonl"
+            if not path.exists():
+                return []
+            out: list[dict] = []
+            with path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        out.append(json.loads(line))
+                    except ValueError:
+                        continue
+            return out
+        except Exception:
+            logger.debug("learning marks read failed", exc_info=True)
+            return []
+
+    def _audit_learning_mark(self, mark_type: str, **fields: Any) -> None:
+        """L8: 学习闭环观测 — learning.jsonl 留痕 + 进程级打点。
+
+        OCOS_AUDIT_DIR 可覆写（测试/多实例隔离，与 autonomy.jsonl 同
+        约定）。vitals 的 _learning_metrics 消费该文件产出消费观测指标。
+        """
+        try:
+            from pathlib import Path as _P
+            base = os.environ.get("OCOS_AUDIT_DIR", "").strip()
+            audit_dir = (_P(base).expanduser() if base
+                         else _P.home() / ".ocos" / "audit")
+            path = audit_dir / "learning.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            entry = {"ts": datetime.now(timezone.utc).isoformat(),
+                     "type": mark_type, **fields}
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            logger.debug("learning audit mark failed", exc_info=True)
+        try:
+            from ocos.monitoring.manager import record_global
+            record_global(mark_type, 1.0,
+                          labels={k: str(v) for k, v in fields.items()
+                                  if k in ("cause", "matched")})
+        except Exception:
+            pass
+
     def _summarize_execution(self, task_description: str,
                              execution_text: str) -> str:
         """FIX-5: 多命令执行结果的结论性摘要（Observation→Reasoning 闭环）。
@@ -1527,7 +2263,9 @@ class DecisionBridge:
                     f"任务：{task_description[:200]}\n\n"
                     f"以下是该任务多条命令的执行输出：\n{execution_text[:3000]}\n\n"
                     "请用中文给出结论性摘要：提取关键数据/结果，判断是否达成任务。"
-                    "不要复述命令输出全文，控制在 200 字以内，只输出摘要。"
+                    "若任务要求总结/方案/计划类交付物，基于执行输出直接产出该"
+                    "交付物正文（可到 500 字）；否则控制在 200 字以内。"
+                    "不要复述命令输出全文，只输出摘要。"
                 )
                 raw = asyncio.run(tg._provider.generate(
                     prompt,

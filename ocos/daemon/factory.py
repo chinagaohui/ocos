@@ -124,7 +124,7 @@ def build_master_agent(agent_id: str, db_path: Optional[str] = None):
             inbox = UserInbox(db_path=db_path)
             def _send(message: str) -> None:
                 try:
-                    inbox.post_outbound(message)
+                    inbox.post_outbound(message, kind="proposal")
                     logger.info("Proactive output posted to inbox")
                 except Exception as e:
                     logger.warning("Failed to post proactive output: %s", e)
@@ -315,13 +315,55 @@ def build_execution_bridge(agent: Any = None, agent_id: str = "decision_bridge",
     """
     from ocos.execution.bridge import DecisionBridge
 
+    def _make_autonomous_goal_sink(db: str | None):
+        """L3: 自主目标落地通道 — 批准后写 goals 表 PENDING（daemon 认领）。
+
+        写库职责留在 daemon 装配层（ocos.execution 不 import goal.store）。
+        """
+        if not db:
+            return None
+
+        def _sink(payload: dict) -> None:
+            from ocos.goal.store import GoalStore
+            GoalStore(db_path=db).save(
+                goal_id=payload.get("goal_id", ""),
+                level="TASK", status="PENDING",
+                description=payload.get("description", ""),
+                source="autonomous",
+                metadata={"autonomous": True, "kind": payload.get("kind", ""),
+                          "score": payload.get("score", 0),
+                          "evidence": payload.get("evidence", ""),
+                          "approved": True},
+                origin_level="SELF", authority="AUTONOMOUS")
+        return _sink
+
+    def _make_constitution_sink(db: str | None):
+        """L4-1: 宪法版本落库通道 — 批准后 save_version 落新版本（只增不改）。
+
+        落库职责留在 daemon 装配层（ocos.execution 不依赖 constitution 模块）。
+        """
+        if not db:
+            return None
+
+        def _sink(payload: dict) -> dict:
+            from ocos.constitution.versioned import VersionedConstitution
+            snap = VersionedConstitution(db_path=db).save_version(
+                principles=payload.get("principles", []),
+                reason=payload.get("reason", ""),
+                approved_by="human")
+            return {"version": snap.version}
+        return _sink
+
     pending_store = None
     if db_path:
         from ocos.execution.pending import PendingStore
         pending_store = PendingStore(db_path=db_path)
 
-    bridge = DecisionBridge(agent_id=agent_id, pending_store=pending_store,
-                            db_path=db_path)
+    bridge = DecisionBridge(
+        agent_id=agent_id, pending_store=pending_store,
+        db_path=db_path,
+        autonomous_goal_sink=_make_autonomous_goal_sink(db_path),
+        constitution_sink=_make_constitution_sink(db_path))
     try:
         bridge.attach_default_handlers()
     except Exception as e:  # noqa: BLE001 — 能力发现失败不阻断装配

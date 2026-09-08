@@ -36,13 +36,47 @@ FORBIDDEN_MARKERS: tuple[str, ...] = (
 )
 
 
+def _knowledge_already_applied(change: str) -> bool:
+    """同文变更已在 self_knowledge 中（剥日期戳归一化比对）→ True。
+
+    去重闸（2026-09-07）: 提案侧 _already_proposed 只比对 pending_actions，
+    对话/引擎直调 apply 的路径无防线 — "测试变更" 曾被重复追加 128 次。
+    """
+    needle = (change or "").strip()
+    if not needle:
+        return False
+    try:
+        with open(_SELF_KNOWLEDGE, "r", encoding="utf-8") as f:
+            for line in f:
+                body = line.strip()
+                if body.startswith("- "):
+                    body = body[2:].strip()
+                # 剥 "[YYYY-MM-DD] " 前缀（方括号日期共 12 字符）
+                if len(body) >= 12 and body.startswith("[") and body[11] == "]":
+                    body = body[12:].strip()
+                if body == needle:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def apply_self_upgrade(change: str) -> str:
-    """应用已批准的自我升级 — 追加到 ~/.ocos/self_knowledge.md。"""
+    """应用已批准的自我升级 — 追加到 ~/.ocos/self_knowledge.md。
+
+    去重闸: 同文变更（剥日期戳归一化比对）已存在则跳过 — 提案侧
+    _already_proposed 只覆盖 pending_actions 比对，对话/引擎直调
+    apply 的路径由本闸兜底（重复应用只会污染自我知识）。
+    """
+    text = (change or "").strip()
+    if _knowledge_already_applied(text):
+        logger.info("self upgrade dedup: change already applied, skip")
+        return f"self knowledge unchanged (already applied): {text[:60]}"
     _SELF_KNOWLEDGE.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     with open(_SELF_KNOWLEDGE, "a", encoding="utf-8") as f:
-        f.write(f"\n- [{stamp}] {change.strip()}")
-    return f"self knowledge updated: {change.strip()[:60]}"
+        f.write(f"\n- [{stamp}] {text}")
+    return f"self knowledge updated: {text[:60]}"
 
 
 def read_self_knowledge() -> str:

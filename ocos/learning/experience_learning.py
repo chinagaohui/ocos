@@ -45,14 +45,25 @@ class FailureCause(str, Enum):
 
 
 # 从文本信号分类失败原因（确定性，无 LLM）
+# D-UI 修复（2026-09-07）: 信号优先级 = 真模糊 → 权限 → 超时 → 工具 →
+# 规划转换 → 执行。此前 "无法执行/cannot execute/no action" 误挂在
+# _AMBIGUOUS_SIGNALS 下，导致沙盒白名单缺口（NONE 诚实失败文案
+# "任务无法执行: …"）被误判 ambiguous_task → AMBIGUOUS_BLOCK 终态，
+# 掩盖真实根因（工具不可用）并阻断重试。
 _AMBIGUOUS_SIGNALS = [
-    "过于模糊", "未指定", "无法执行", "ambiguous", "not specific",
-    "no data source", "missing input", "无法转为", "无法转换",
-    "cannot execute", "no action", "不清楚",
+    "过于模糊", "未指定", "ambiguous", "not specific",
+    "no data source", "missing input", "不清楚",
 ]
-_PERMISSION_SIGNALS = ["permission", "denied", "approval", "待批", "pending_approval", "被拒绝", "blocked"]
+_PERMISSION_SIGNALS = ["permission", "denied", "approval", "待批",
+                       "pending_approval", "被拒绝", "blocked",
+                       "白名单外", "沙盒拦截", "not in allowed"]
 _TIMEOUT_SIGNALS = ["timeout", "超时", "timed out"]
-_TOOL_SIGNALS = ["not available", "unavailable", "not registered", "no capability", "no tool", "找不到"]
+_TOOL_SIGNALS = ["not available", "unavailable", "not registered",
+                 "no capability", "no tool", "找不到", "白名单内没有",
+                 "白名单内无"]
+_CONVERSION_SIGNALS = ["任务无法执行", "llm 无法执行此任务",
+                       "无法转为", "无法转换", "cannot execute",
+                       "no action"]
 _EXECUTION_SIGNALS = ["exit=", "traceback", "exception", "error", "失败", "failed", "returncode"]
 
 
@@ -114,6 +125,12 @@ class FailureDiagnoser:
             for sig in _TOOL_SIGNALS:
                 if sig.lower() in evidence.lower():
                     cause = FailureCause.TOOL_UNAVAILABLE
+                    signals_hit.append(sig)
+                    break
+        if cause == FailureCause.UNKNOWN:
+            for sig in _CONVERSION_SIGNALS:
+                if sig.lower() in evidence.lower():
+                    cause = FailureCause.LLM_CONVERSION_FAILED
                     signals_hit.append(sig)
                     break
         if cause == FailureCause.UNKNOWN:

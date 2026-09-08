@@ -102,6 +102,89 @@ SANDBOX_PATHS: frozenset[str] = frozenset({
 })
 
 
+def sandbox_disabled() -> bool:
+    """沙盒白名单总开关（2026-09-07，个人使用模式）。
+
+    OCOS_SANDBOX_DISABLED=true/1/yes/on（env 或 ~/.ocos/config.json）→
+    跳过白名单/只读校验/路径沙盒，命令直接放行。
+    仍保留 BLOCKED_COMMANDS 灾难黑名单（rm -rf /、shutdown、fork bomb
+    等）— 这是防 LLM 自毁的最后防线，与白名单功能无关。
+    配置走 OCOSConfig（env > config.json > 默认），默认关闭 = 沙盒全开。
+    """
+    from ocos.config import get_str
+    return get_str("OCOS_SANDBOX_DISABLED", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+# ── 只读 curl 校验（D-UI 修复 2026-09-07）────────────────────────────────────
+# 背景: 白名单此前无任何 HTTP 探测工具，"检查页面响应状态"类自检任务
+# 规划出 curl 即被拦 → 重试 NONE → 归因误判终态。curl 不做前缀放行
+# （`curl -s` 仍可携带 -X POST/-d 写请求），改为令牌级只读校验:
+# 仅放行 GET/HEAD 探针语义，任何写/上传/输出重定向/代理/自定义头均拒绝。
+
+# curl 写操作 / 高危 flag（拒绝）— 数据发送、上传、落盘、配置注入、代理
+_CURL_REJECT_FLAGS: frozenset[str] = frozenset({
+    "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
+    "-f", "-F", "--form", "--form-string",
+    "-t", "-T", "--upload-file",
+    "-O", "--remote-name", "--remote-header-name", "-J",
+    "-c", "--cookie-jar", "-D", "--dump-header",
+    "-K", "--config",
+    "-H", "--header",          # 可注入伪造鉴权头 → 拒绝
+    "-x", "--proxy",           # 经代理外发/暴露 → 拒绝
+    "--trace", "--trace-ascii",  # 落盘 trace 文件
+})
+
+# curl 允许的请求方法（-X/--request 后跟 GET/HEAD 才放行）
+_CURL_SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD"})
+
+# shell 控制操作符（经 punctuation_chars 解析后单独成 token；quoted 内容不受影响）
+_SHELL_OPERATORS: frozenset[str] = frozenset({
+    "|", "||", ";", ";;", "&", "&&", "<", ">", ">>", "|&", "<<", ">>>",
+})
+
+
+def _is_readonly_curl(command: str) -> bool:
+    """curl 只读探针校验 — 仅放行 GET/HEAD，写操作一律拒绝。
+
+    语法错误（引号不闭合等）→ False（诚实拒绝，不做宽松猜测）。
+    """
+    import shlex
+    try:
+        lex = shlex.shlex(command, posix=True,
+                          punctuation_chars="()<>|&;")
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError:
+        return False
+    if not tokens or tokens[0] != "curl":
+        return False
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if tok in _SHELL_OPERATORS:
+            return False
+        if tok in _CURL_REJECT_FLAGS:
+            return False
+        if tok in ("-o", "--output"):
+            # 唯一放行目标: /dev/null（状态码探针惯用法）
+            nxt = tokens[i + 1] if i + 1 < n else ""
+            if nxt != "/dev/null":
+                return False
+            i += 2
+            continue
+        if tok in ("-X", "--request"):
+            method = (tokens[i + 1].upper() if i + 1 < n else "")
+            if method not in _CURL_SAFE_METHODS:
+                return False
+            i += 2
+            continue
+        i += 1
+    return True
+
+
 # ── 沙盒操作 ──────────────────────────────────────────────────────────────────
 
 
@@ -184,7 +267,15 @@ class SandboxOps:
                 )
 
         # ── 白名单检查 ──────────────────────────────────────────
-        if not self._is_allowed(cmd.command, self._extra_allow):
+        if sandbox_disabled():
+            # 个人使用模式: 白名单/路径沙盒整体关闭，命令直接放行
+            # （灾难黑名单已在上方检查完毕，仍然生效）。
+            self._audit_log.append(SandboxAuditRecord(
+                command=cmd.command,
+                allowed=True,
+                reason="sandbox disabled (OCOS_SANDBOX_DISABLED)",
+            ))
+        elif not self._is_allowed(cmd.command, self._extra_allow):
             self._audit_log.append(SandboxAuditRecord(
                 command=cmd.command,
                 allowed=False,
@@ -200,7 +291,7 @@ class SandboxOps:
                 )
 
         # ── 路径检查 ────────────────────────────────────────────
-        if not self._is_path_allowed(cmd.workdir):
+        if not sandbox_disabled() and not self._is_path_allowed(cmd.workdir):
             return SandboxResult(
                 command=cmd.command,
                 success=False,
@@ -227,7 +318,9 @@ class SandboxOps:
                 _os.path.join(_os.path.expanduser("~"), "bin"),
             ]
             base_env = {
-                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:"
+                # UX-J+ 实测修复: 补 /usr/local/bin — ollama 等装于此，
+                # 缺失导致沙盒内 which ollama 落空而宿主直跑正常
+                "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:"
                         + ":".join(_user_bins),
                 "LANG": "C.UTF-8",
                 "HOME": _os.path.expanduser("~"),
@@ -280,7 +373,14 @@ class SandboxOps:
 
         AGI 能力补全: extra_allow 为实例级动态放行前缀（已发现智能体 CLI），
         默认 None → 行为与固定 ALLOWED_COMMANDS 完全一致。
+        D-UI (2026-09-07): curl 走专用只读校验（不走前缀匹配）——仅放行
+        GET/HEAD 探针，写操作/代理/自定义头/落盘一律拒绝。
+        2026-09-07: OCOS_SANDBOX_DISABLED=true → 白名单整体关闭，直接放行。
         """
+        if sandbox_disabled():
+            return True
+        if command.strip().startswith("curl"):
+            return _is_readonly_curl(command)
         for allowed in ALLOWED_COMMANDS:
             if command.strip().startswith(allowed):
                 return True

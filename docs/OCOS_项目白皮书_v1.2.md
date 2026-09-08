@@ -1,4 +1,8 @@
-# OCOS 项目白皮书 v1.2
+# OCOS 项目白皮书 v1.3.1
+
+> **v1.3.1 变更记录（2026-09-08）**：收录"数字生命·启动自省 + 三层自愈加固"迭代——① **启动自省（Boot Awareness）**：每次断电/关机重启后 daemon 自动审视自身与所处环境（内核/uptime/disk/内存/GPU/国内外网络/自身记忆计数/boot_id 对比推断重启与停机时长），全只读探查 + 失败降级不阻断启动（`ocos/daemon/boot_awareness.py`）；适应三通道 = 环境先验落盘 `~/.ocos/boot_context.json`（bridge `_boot_context_hint` 注入目标执行，基于当前实测而非过时记忆规划）+ 异常条件转刺激走 MotivationHub 三道闸 + 报告推对话流（kind=report）；全正常时诚实沉默零刺激提案；② **三层自愈模型闭环**：L1 进程崩溃 = systemd Restart=on-failure（既有）；L2 线程僵死 = 心跳看门狗（新增 `ocos/daemon/watchdog.py` + `ocos-watchdog.timer` 每 2 分钟：心跳 >90s 过期自动重启 daemon、JSONL 记账 ops/restart.log、心跳文件不存在 = 人为停止诚实跳过不误杀）；L3 认知/数据损伤 = HealthLoop 四层自检 + repair_link 白名单修复（既有）；③ **tick 线程自愈兜底**：`_tick_loop` 主循环最外层 try/except（残余异常不再杀死 tick 线程致 daemon 僵死）+ `_drain_user_inbox` fallback 路径补保护；④ **每日 DB 在线备份**：看门狗顺带执行（SQLite backup API 不锁库 → `~/.ocos/backups/ocos-YYYYMMDD.db` 保留 7 份），消除"自动备份：无"缺口；⑤ E2E 演练验证：心跳回拨 300s → 看门狗实测重启 + 记账 + Boot awareness 自动重跑。测试基线：本轮新增 test_boot_awareness_20260908.py（15 项）+ test_watchdog_20260908.py（7 项）全绿。
+
+> **v1.3 变更记录（2026-09-06）**：在 v1.2 审计版基础上收录 UX-J 迭代——① TUI 重构为纯前端（WebSocket 网关通信，业务逻辑全部后置）；② AGI 智能体软件接入（AgentDiscovery 自动发现/安装/真实执行）；③ 生产执行链闭环优化 8 项（完成即推、ANSWER| 认知任务出口、拦截重试标签修正、核心工具黑名单、沙盒 PATH/敏感设备放行、复盘素材注入、按行截断、告警去重、域推断）；④ 交互升级（Markdown 渲染、流式输出、会话持久化回放、双行状态栏）。两轮四项生产测试实弹验证闭环（§0.2 第四代）。
 
 > **文档性质**：OCOS（Organic Cognitive Operating System，有机认知操作系统 / 数字生命认知操作系统）内核权威全集参考文档。
 > **生成方式**：2026-09-05 对项目全部 1270 个文件（排除 .venv/缓存后）执行全源码扫描审计，13 个审计分组逐文件深读约 9.1 万行内核源码后汇编而成。全部结论落到具体文件与函数，未经证实的部分标注【信息缺失】。
@@ -23,6 +27,8 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
   1. **Phase A–Z 时代**（docs/ARCHITECTURE.md、docs/PROJECT_STATUS.md，2026-09-02）：25 个 Phase 全部完成，测试 260+。
   2. **Era II / Phase 21–30 时代**（docs/ROADMAP.md v2.0、scripts/phase21–30_gate.py）：P21 骨架 → P22 认知循环真实化 → P23 Capability ABI → P24 主权与基础设施 → P25 能力知识/经验 → P26 结果理解 → P27 架构冻结签发 → P28 编排 → P29 Personal OS v1.0 → P30 注意力模型。
   3. **Phase 39–62 + GAP/PW 上电时代**（docs/OCOS_MODULE_AUDIT_20260830.md、docs/OCOS_POWER_ON_PLAN.md、docs/PRODUCTION_VALIDATION_REPORT_20260905.md）：Phase 39 运行时心跳/检查点 → 43 决策智能 → 44 扩展治理 → 45 能力神经系统 → 46 认知循环集成 → 47 进化治理 → 48 Agent 代理 → 49 记忆/世界/技能/元认知 → 50 Personal OS/成长 → 51 持久化/审计 → 52 感知 → 53 主动交互 → 54 事件记忆 → 55 真实能力层 → 56 免疫系统 → 57/58 活体验证 → 59 OpenTale 桥 → 60 自主运行时 → 61 自主编排 → 62 耦合；沉睡器官 24 个中 14 个已上电（PW-1~5 波次）；最新基线 5287+ tests passed（docs/PRODUCTION_VALIDATION_REPORT_20260905.md 报告 34/34 生产验证通过，但本白皮书审计发现该报告未覆盖的确定性缺陷，见第 10 章）。
+  4. **UX-J 交互与生产闭环时代**（2026-09-06，本版新增）：P5 AGI 计划收尾（P5.1 失败归因 lesson 管道、P5.2 主动交互管线上产）→ TUI 纯前端化重构（`ocos/tui/` 包，WebSocket 网关通信，业务逻辑全部后置 daemon/API）→ 会话 ID 下发与历史回放 → AGI 智能体软件接入（`ocos/capability/agent_discovery.py` 自动发现 + `agent_installer.py` 白名单安装 + AdapterManager 真实执行 + 保真闸门）→ 生产执行链优化 8 项（完成即推 0 秒、`ANSWER|` 认知任务出口、拦截重试标签修正、核心工具黑名单、`/dev/null` 放行、沙盒 PATH 补 `/usr/local/bin`、复盘素材注入、输出按行截断、tick 告警去重、goal 域推断）→ **两轮"四项生产测试"实弹闭环验证**（探索宿主机/发现智能体/调用反馈/学习总结：第二轮 5 分钟全绿、零自愈、即时推送 2ms；测试基线 2370 passed / 0 failed）。
+  5. **数字生命与自愈时代**（2026-09-08，本版新增）：自我连续性修复（`AgentRuntime.save_weekly_identity_snapshot()` 周度身份快照，周键幂等，全局保留 26 周；修复 systemd 下优雅关闭从不发生 → identity_snapshots 表恒空的历史缺口）→ 好奇心去噪与第二源（`_from_belief_boundary` 过滤 pattern 模板回声；`_from_self_exploration` pkgutil 实扫从未触及的 ocos 子包生成自我探查 PROBE）→ **启动自省 Boot Awareness**（daemon 启动即审视环境：采集→分析→适应→汇报，全只读+失败降级；boot_context.json 先验注入目标执行；异常条件转自主目标刺激；全正常诚实沉默）→ **三层自愈闭环**（L1 systemd Restart=on-failure / L2 心跳看门狗 ocos-watchdog.timer 每 2 分钟自动重启假死 daemon / L3 四层自检+白名单修复）+ tick 线程自愈兜底 + 每日 DB 在线备份（7 份轮转）。测试基线：全量 2787+4424 tests passed（含本轮新增 boot_awareness 15 项 + watchdog 7 项）；重启顺序 server → daemon → gateway。
 - **Scope Freeze 机制**：定义出处为 docs/runtime/P2A~P2D 四份"Scope 冻结"文档、根目录《OCOS_Cognitive_Sovereignty_Freeze_v0.1.md》（最高级冻结：系统身份/宪法/架构边界/子系统职责/阶段顺序）与 docs/ARCHITECTURE_FREEZE_PROTOCOL.md（AFP 三层准入：Principles → AFP → Frozen Modules）。代码级对应 `ocos/os_v1/freeze.py` 的 `OSFreeze`：冻结**接口契约而非实现**（ABI_MODULES 12 模块、6 条宪法原则、3 个 SDK 协议），签名为字符串拼接 `f"{mod}:v1.0"`、**非密码学签名**，冻结后无实现变更强制校验钩子——属声明式冻结（P3 级限制）。
 - **注意**：任务书假设的 "DRAFT/FROZEN" 两态字样在仓库中**不存在**（全仓 markdown 零命中 "DRAFT-FROZEN"）；实际使用的冻结标记是 "FROZEN / ❄️ FROZEN / Freeze Certificate / Scope 冻结"。
 
@@ -30,15 +36,16 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
 
 **OCOS 可以做到（已实测/已接线）**：
 1. 常驻 daemon 心跳驱动 10 步认知 tick（事件摄入→注意力→记忆同步→目标维护→执行检查→规划→核心循环→结果反刍→学习巩固），目标 PENDING→ACTIVE→COMPLETED 全闭环（ocos/daemon/__init__.py、ocos/agent/agent_runtime.py、ocos/goal/store.py）。
-2. 对话即执行：CLI say / WebChat / API / TUI 四入口 → ChatResponder（USE| 工具协议 + LLM 多步循环）→ 自动建目标 → DecisionBridge 执行 → 结果回推（ocos/interaction/converse.py）。
-3. LLM 任务执行：白名单沙盒命令、敏感路径拦截、LLM 结论摘要、日预算 500 次/天（OCOS_LLM_DAILY_CAP，ocos/execution/bridge.py）。
-4. 长时序记忆：Episode/Pattern/Knowledge/Belief 四库 SQLite（WAL）+ 跨会话召回 + dream 巩固产智慧/信念/学习规则。
+2. 对话即执行：CLI say / WebChat / API / TUI 四入口 → ChatResponder（USE| 工具协议 + LLM 多步循环）→ 自动建目标 → DecisionBridge 执行 → 结果回推（ocos/interaction/converse.py）。TUI 为纯前端（WebSocket ↔ API 网关 ws.py），业务逻辑零前置。
+3. LLM 任务执行：白名单沙盒命令、敏感路径拦截、LLM 结论摘要、日预算 500 次/天（OCOS_LLM_DAILY_CAP，ocos/execution/bridge.py）；动作词表 RUN|/ANSWER|/FILE_WRITE|/AGENT_INSTALL|/NONE|——`ANSWER|` 支持认知型任务（复盘/总结）直接产出文字结论（UX-J 新增）；目标结果完成即推 outbox（秒级，daemon `_record_goal_result` 回调）。
+4. 长时序记忆：Episode/Pattern/Knowledge/Belief 四库 SQLite（WAL）+ 跨会话召回 + dream 巩固产智慧/信念/学习规则；复盘/总结类任务自动注入最近 goal_result 结论作素材（`_retrospect_hint`）。
 5. 持久化恢复：Agent 快照 + 四域多域快照 + 检查点 + 崩溃回收队列（requeue_stale_active）。
-6. 安全：宪法引擎（fail-closed）、权限网关、语句验证器、沙盒黑白名单、审批待批队列。
+6. 安全：宪法引擎（fail-closed）、权限网关、语句验证器、沙盒黑白名单、审批待批队列；智能体 CLI 候选名黑名单防御（防核心工具误配进沙盒，UX-J 新增）。
+7. 智能体软件接入（UX-J 新增）：AgentDiscovery 自动发现本机 CLI/HTTP 智能体（openclaw/codex/ollama 实测可用）、未安装项诚实标注并可经白名单安装命令闭环安装（agent_installer.py + AGENT_INSTALL| 审批流）；执行输出按行边界截断防 LLM 误读。
 
 **OCOS 不负责 / 未做到**：
-1. 不做真实多实例分布式（ocos/distributed 是单进程内存模拟）；不提供认证鉴权（API 裸奔 0.0.0.0，见第 10 章 P1）；不加载 .env 文件；无 Docker/systemd 仓库内资产。
-2. 大量"完整实现但未接线"的能力（约 20+ 沉睡器官/孤立支线）：Phase 53 主动交互管线、channel 多通道、orchestration、extension、engagement、living_test/health_examination/audit/living_verification 四层验证基础设施（其"通过"结论不可作健康依据）等。
+1. 不做真实多实例分布式（ocos/distributed 是单进程内存模拟）；不提供认证鉴权（API 裸奔 0.0.0.0，见第 10 章 P1）；不加载 .env 文件。systemd 单元文件已部署于用户机 ~/.config/systemd/user/（ocos-server/ocos-daemon/hermes-gateway，Restart=on-failure），但仍未纳入版本管理。
+2. 大量"完整实现但未接线"的能力（约 20+ 沉睡器官/孤立支线）：Phase 53 主动交互管线（P5.2 已部分上产：goal_stale 扫描）、channel 多通道、orchestration、extension、engagement、living_test/health_examination/audit/living_verification 四层验证基础设施（其"通过"结论不可作健康依据）等。
 3. 九大能力引擎中多数默认逻辑为结构化占位（诚实标注，无真实推理/LLM 调用）；evolution 迁移为模拟桩。
 4. 命名组件澄清：NFI/World Integrity/ChapterSituation/AGI Runtime 四个名称与代码的映射见第 1.3/1.4 节。
 
@@ -49,6 +56,7 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
 | DeepSeek（deepseek-v4-flash，经 OpenAI 兼容端点） | 语言核心/对话/LLM 任务规划 | ~/.ocos/config.json（llm 段）→ ocos/engines/text_generator.py OpenaiProvider |
 | OpenAI/Anthropic API（可选备用） | LLM 备选 Provider | ANTHROPIC_API_KEY/OPENAI_API_KEY 环境变量 |
 | OpenTale Organ API（http://127.0.0.1:8000/api/organ） | 外部 AI 写作引擎（写作器官） | ocos/opentale_bridge/organ_client.py，Bearer OCOS_OPENTALE_TOKEN |
+| 本机智能体软件（UX-J 新增，可选） | 外部智能体能力：openclaw/codex（CLI 实测可用）、ollama（HTTP 11434）；未装项可白名单安装 | ocos/capability/agent_discovery.py（which+version/HTTP 探测）→ AgentManager CLI 执行 → DecisionBridge 注入/保真闸门 |
 | SQLite（标准库 sqlite3，WAL） | 全部持久化 | ocos/storage/connection.py 连接池 |
 | psutil（可选） | 环境内感 | ocos/perception/environment_sensor.py |
 | FastAPI/uvicorn/httpx/textual/numpy/scipy/pydantic | API 网关/TUI/数值 | pyproject.toml dependencies |
@@ -71,6 +79,11 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
 | **dream 巩固** | daemon 每 dream_interval_ticks(默认200) 触发：修复相位→agent.sleep()→agent.dream()（快通路学习+Episode→Belief 巩固+智慧提炼+连续性检查点）→persist_latest_rules | ocos/daemon/__init__.py L513-545 |
 | **经验门控（Significance Gate）** | 四维加权评分（goal_impact .25/prediction_error .30/knowledge_change .20/future_relevance .25），阈值 0.5，决定经历是否获得"跨时间存在资格" | ocos/memory/significance/ |
 | **USE\| 协议** | LLM 回复内嵌动作行 `USE|<capability>|<params JSON>`，capability∈{shell,fs_read} 只读白名单，每回复 ≤2 轮工具、LLM 调用 ≤3 | ocos/interaction/converse.py |
+| **RUN\|/ANSWER\|/FILE_WRITE\|/AGENT_INSTALL\|/NONE\| 协议** | DAG 任务规划的 LLM 动作词表：RUN 执行只读命令（最多 4 行）、ANSWER 直接产出文字结论（认知型任务，UX-J 新增）、FILE_WRITE 写文件（强制待批）、AGENT_INSTALL 安装智能体（强制待批）、NONE 诚实说明无法执行 | ocos/execution/bridge.py `_handler_dag_task` |
+| **AgentDiscovery（智能体自动发现）** | 确定性探查本机智能体软件：CLI（shutil.which + version 探测）/HTTP 端点/config 注入三源；未安装项诚实标注 available=False（可附 install_command 走白名单安装闭环）；核心工具黑名单防候选误配 | ocos/capability/agent_discovery.py |
+| **完成即推（goal_result 即时推送）** | 目标完成 → episode 落库 → daemon `_on_goal_result` 回调直接推 outbox（实测 2ms 到达 TUI 面板）；原 5-tick 定时推送保留为兜底 | ocos/agent/agent_runtime.py `_record_goal_result`、ocos/daemon/__init__.py |
+| **复盘素材注入（_retrospect_hint）** | 复盘/总结/学习类任务自动注入最近 4 条 goal_result 结论摘要，禁止重新执行系统采集命令——认知型复盘从"跑偏文件系统"转为"基于记忆作答" | ocos/execution/bridge.py |
+| **纯前端 TUI** | ocos/tui/ 包（tui_client+ws_client+widgets）：界面只做渲染与输入转发，业务逻辑全在 API 网关（ws.py）+ daemon；会话 ID 持久化 ~/.ocos/gateway_session，历史经 EpisodeStore 回放 | ocos/tui/、ocos/interaction/api/routes/ws.py |
 | **Master Agent** | 全系统唯一"意识主体"（Phase 22 冻结原则：永远只有一个）；集成 LifecycleManager+ControlLoop+20+ 可选管理器 | ocos/agent/master_agent.py |
 | **Decision≠Execution / Goal 源闭合** | 宪法边界：决策不等于执行（必须经 Capability→Permission→Execution）；Goal source 闭合枚举 HUMAN/DECOMPOSED，Agent 不能凭空创建 Goal | 冻结 v0.1 §2、ocos/decision/decision_types.py |
 | **CLS 快慢通路** | 快通路学习（即时 Episode→规则）与慢通路巩固（dream 期聚类/智慧提炼）双系统 | ocos/agent/master_agent.py dream() |
@@ -189,8 +202,16 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
 - **风险分级（设计冻结）**：AUTO_ACTIONS={CONSOLIDATE_MEMORY,HEALTH_CHECK,REFLECT,FEEDBACK_PROCESS,NOOP,QUERY_DB}；ASK_ACTIONS={WRITE_CHAPTER,SEARCH_WEB,RUN_COMMAND,HTTP_FETCH}；DENY_ACTIONS=空。
 - **正常工作流程**：见 1.5 第 7 步；LLM 日预算 `OCOS_LLM_DAILY_CAP` 默认 500 次/天，超限诚实拒绝转待批。
 - **异常处理逻辑**：全部 handler 异常归一化 {"ok":False,"error":...}；审批"诚实执行"模式（approved 但无 handler → blocked 可见）。
-- **已知限制**（含 P1）：① **FILE_WRITE 自造审批 ID**（bridge.py:905-910，payload.get("approval_id","task-approved")）绕过 file op 审批守门，OCOS_APPROVAL_MODE=auto（默认）下 LLM 规划的任意绝对路径写入可无人批准落地；② OCOS_APPROVAL_MODE 默认 auto 架空人工审批（pending.py:34-41，P2）；③ query_db 硬编码 ~/.ocos/ocos.db（P3）；④ proxy 环境变量 pop/restore 非线程安全（P3）。
-- **验证状态**：【功能实测可通】（test_execution_bridge 30 项 + test_pending_store + 生产 run.py 装配）。
+- **UX-J 新增（2026-09-06，实弹验证）**：
+  - **动作词表扩展**：`ANSWER|<结论文本>`——认知型任务（复盘/总结/分析）所需信息已在注入上下文时直接产出文字结论（多行正文完整保留），不再被迫跑采集命令或被 NONE| 误判 failed。
+  - **沙盒放行精化**：`HARMLESS_DEV_DEVICES`（/dev/null、/dev/zero、/dev/full、/dev/random、/dev/urandom）精确放行——重定向黑洞不再触发假性失败；其余 /dev 路径仍严格拦截。
+  - **智能体注入与保真**：`_prior_agents` 注入【可用智能体软件】清单（AgentDiscovery 实测结果，未安装项诚实标注"不可调用"）；`_agent_hint`/`_agent_forced_call` 保真闸门强制任务显式引用的智能体被真实调用；`_agent_invoke` name↔cli_path 错位时回退绝对路径执行。
+  - **核心工具黑名单**：`AgentDiscovery._CORE_TOOL_BLACKLIST`（23 个 coreutils）——曾因 opentale 误配 "ln" 候选导致核心工具进沙盒放行清单 + 127 死循环，已三层修复。
+  - **拦截重试标签修正**：UX-K 沙盒拦截→LLM 转换重试后，结果携带 `_executed_command`，聚合标签跟随实际命令（此前两轮生产测试的"输出失真"共同根因）。
+  - **复盘素材注入**：`_retrospect_hint`——描述含复盘/总结/学习/回顾时自动注入最近 4 条 goal_result 结论摘要并禁止重新采集（带注入日志）。
+  - **输出按行截断**：agent_runtime `_truncate_text`——超限回退最近行边界，防残行误导 LLM（nproc 输出丢失事件的根源）。
+- **已知限制**（含 P1）：① **FILE_WRITE 自造审批 ID**（bridge.py:905-910，payload.get("approval_id","task-approved")）绕过 file op 审批守门，OCOS_APPROVAL_MODE=auto（默认）下 LLM 规划的任意绝对路径写入可无人批准落地；② OCOS_APPROVAL_MODE 默认 auto 架空人工审批（pending.py:34-41，P2）；③ query_db 硬编码 ~/.ocos/ocos.db（P3）。
+- **验证状态**：【功能实测可通】（test_execution_bridge 30 项 + test_pending_store + 生产 run.py 装配；UX-J 新增 test_retried_label_and_path / test_agent_discovery_coretool_defense / test_uxj_remaining_optimizations 共 20+ 项 + 两轮四项生产测试实弹闭环）。
 
 ### 2.4 ChapterSituation 时序状态管理模块
 
@@ -917,13 +938,14 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
   4. /trace 占位 TBD。
 - **验证状态**：【静态推演验证】（全部命令类与 CLI 共用已实测的下层实现；REPL 本体未实测起会话）。
 
-##### 1.8 tui 终端界面（`tui.py`，1100 行 + `__main__.py`）
+##### 1.8 tui 终端界面（**v1.3 重构为纯前端**：`ocos/tui/` 包 3 文件 + 遗留 `tui.py`）
 
-- **职责**：Textual 实现的 Hermes Agent CLI 风格对话界面。前端纯 HTTP 客户端：`POST /ocos/converse`（携 session_id）、轮询 `/ocos/outbox`（目标结果面板回推）、`/ocos/approvals`、`/ocos/introspect`、`/ocos/summary`、`/ocos/self-improve`、`/ocos/goals-from-chat`、`/ocos/approvals/{pid}/approve|deny`。含 SessionStore（SQLite ~/.ocos/tui_sessions.db，sessions/messages 两表）、斜杠命令 20 个、busy 模式（interrupt/queue/steer）、多行粘贴预览槽位、思考动画、上下文 token 估算状态条、`_redirect_console_logs`（控制台日志摘除落 ~/.ocos/tui.log 防污染界面）。
-- **依赖**：httpx、textual、rich（第三方）+ API 服务。不直接 import 任何 OCOS 生产模块（仅 `ocos.logging.formatter.JSONFormatter` 可选）。
-- **被调用**：`cli/commands/chat.py`（ocos chat）、`interaction/__main__.py`（python -m ocos.interaction → 实为 tui 入口）。
-- **已知限制**：token 用量纯字符长度//4 估算；`/background` 不带 session_id（落 "web" 会话）；退出摘要 `app.session_stats()` 在 app.run() 返回后访问 textual App 属性（依赖 App 未销毁，Textual 版本敏感）；`InputArea._on_paste` 依赖 textual 事件签名。
-- **验证状态**：【静态推演验证】（编译通过；TUI 需终端环境未实测；其消费的全部 API 端点已在路由层审计确认存在）。
+- **新架构（UX-J，2026-09-06）**：`ocos/tui/tui_client.py`（OcosTuiFrontend，纯前端 App）+ `ws_client.py`（OcosWsClient，线程安全 WebSocket）+ `widgets.py`（LogView/InputBox/StatusBar）。**业务逻辑零前置**：界面只做渲染与输入转发，认知/决策/记忆/LLM 全部在后台 API 网关（`interaction/api/routes/ws.py` WebSocket 端点）+ daemon；关闭 TUI 不影响内核运行。
+- **协议**：连接即收 `{"kind":"session","session_id","is_new"}`（会话 ID 持久化 ~/.ocos/gateway_session 跨重启续用）→ 非新会话自动发 `{"type":"history"}` 回放 EpisodeStore 历史；`chat/abort/ping/history` 四类请求；接收事件 `agent_delta`（流式）/`agent_done`（含 model+usage）/`user_message`/`goal_result`（完成即推面板）/`status`/`system`。
+- **交互能力（对齐 OpenClaw/Hermes）**：Enter 发送 / Shift+Enter 换行（InputBox 自定义 Submitted 消息）；rich Markdown 渲染（表格/列表/代码高亮/引用块）；用户消息暗色块；双行状态栏（`connected|running` + `agent|session|模型|tokens`——tokens 为真实 API usage，端点不回传则诚实显示 "-"）；滚轮/滚动条翻页（mouse=True，原生复制用 Shift+拖拽，程序内兜底 Ctrl+Y）；PgUp/PgDn/Home/End 聊天翻页；Esc 中止当前轮；Ctrl+P 过滤式会话选择器（SessionPicker）；Ctrl+L 清屏；多行粘贴预览 `[pasted: N lines]`。
+- **旧 `interaction/tui.py`（1100 行）**：HTTP 轮询版（POST /ocos/converse + 轮询 outbox），含 SessionStore（~/.ocos/tui_sessions.db）、斜杠命令 20 个、busy 模式。仍可用（`python -m ocos.interaction`），但新入口 `ocos chat` 已切至 `ocos/tui/tui_client.py`。
+- **已知限制**：tokens 显示依赖端点回传 usage（部分端点不回）；Shift+Enter 需终端支持（老终端当 Enter）。
+- **验证状态**：【功能实测可通】（11 个 TUI 测试 + Textual headless 截图验证 + 线上端到端：连接/历史回放/真实按键发送/流式回复全通过）。
 
 ---
 
@@ -1740,10 +1762,10 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
   - store.save() 用 INSERT OR REPLACE，progress 恒写 0.0（重复 save 同一 goal 会重置进度）。
 - **验证状态**：【静态推演验证】—— store 的认领/回收/完成闭环有 test_goal_claim 等覆盖且被 daemon 真实调用；但 GoalMonitor/GoalTree/GoalParser/GoalTracker/GoalValidator 属于"建好未上主线"的旁路子系统，仅测试触达。
 
-##### 2. ocos/daemon/（4 个文件）
+##### 2. ocos/daemon/（14 个文件）
 
-- **模块路径范围**：`ocos/daemon/`（__init__.py 即 ResidentRuntime 本体 + factory.py + health_loop.py + repair_link.py）
-- **模块职责**：常驻运行时守护进程。tick 循环驱动认知内核、目标队列、消息收件箱、dream 巩固、心跳落盘、健康体检、诊断循环上电；factory.py 为生产装配层。
+- **模块路径范围**：`ocos/daemon/`（14 文件：__init__.py 即 ResidentRuntime 本体 + factory.py + health_loop.py + repair_link.py + self_check.py + improve_link.py + motivation.py + boot_awareness.py【v1.3.1 新增】 + watchdog.py【v1.3.1 新增】 + growth_narrative.py + vitals_report.py + continuity.py + active_interaction.py + channel_link.py）。本节详录核心六个（__init__/factory/health_loop/repair_link/boot_awareness/watchdog），其余为已上电的支线上电链（自检/自改进/动机/成长叙事/生命体征/连续性/主动交互/通道联动），机制散见各审计分组对应章节。
+- **模块职责**：常驻运行时守护进程。tick 循环驱动认知内核、目标队列、消息收件箱、dream 巩固、心跳落盘、健康体检、诊断循环上电；启动即执行启动自省（审视自身与环境）；factory.py 为生产装配层。
 - **对外提供能力**：`ResidentRuntime`（start/stop/submit_goal/get_status/attach_decision_bridge/attach_health_loop/attach_perception_pipeline/state/cycle_count/memory_hub/session_manager）；factory 的 build_master_agent / build_cognitive_engines / build_health_loop / build_perception_pipeline / build_knowledge_registry / build_knowledge_abi / build_execution_bridge / _make_confidence_source；`HealthLoop`（bind/tick/run_check/last_finding/last_detail）；repair_link 的 run_diagnosis_cycle / execute_system_repair。
 - **tick 循环（重点）**：`_tick_loop()`（__init__.py L335-429）单线程 `ocos-daemon` 循环，每轮依次：
   1. `_hb_ticks % 5 == 0` → `_write_heartbeat()` 写 `~/.ocos/daemon_heartbeat.json`（pid/cycle/ts，Web 侧栏判活）；
@@ -1758,6 +1780,8 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
   10. `health_loop.tick()`（内部按 interval_ticks=100 节流）；
   11. `perception_pipeline.tick()`（无传感器零开销）；
   12. 分段睡眠（0.1s 粒度）响应 stop；idle 降速（max_idle_cycles>0 时 idle 达标后 sleep×3）。
+  13. **自愈兜底（v1.3.1）**：循环体最外层 try/except——子项精细保护之外的残余异常记日志（"Tick loop residual failure"）并继续下一 tick。此前任一裸调用异常（如 `_drain_user_inbox` fallback 的 `inject_user_message`）会杀死 tick 线程 → 心跳停更 + 全部自主循环停摆 + 进程仍存活（systemd Restart=on-failure 不触发）→ daemon 永久僵死；现线程级兜底封死该单点。
+- **启动自省（v1.3.1 重点）**：start() 流程在 V5 连续性校验后、tick 线程启动前调用 `boot_awareness.run_boot_awareness(db_path, post_fn, stimulus_fn, level)`——详见本节 boot_awareness 详录。
 - **dream 机制（重点）**：`_run_dream_cycle()`（L513-545）：修复生命周期相位（BOOTING → transition_to_phase(ACTIVE)，注释说明此前直接 dream() 会因 "Cannot transition BOOTING to DREAMING" 抛错导致巩固管线从未运转）→ `agent.sleep()`（ACTIVE→SLEEPING，WM 巩固+持久化）→ `agent.dream()`（SLEEPING→DREAMING→巩固→wake）→ `persist_latest_rules(agent, db_path)` 持久化 learning rules（FIX-08/20：原实现读不存在的 `agent_obj.learning` 属性致持久化从未生效）。
 - **心跳**：见上第 1 步；每 5 tick 一次降低写盘影响。
 - **预算/背压管理（重点）**：目标队列 `max_queue_size=50` 背压——队列满时 submit_goal 诚实拒绝返回 -1；runtime_scheduler.PriorityQueue 同步 push（best-effort）；LLM 日预算在 execution/bridge（见下）。
@@ -1769,7 +1793,9 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
 - **依赖**：`ocos.agent.agent_runtime`、`ocos.agent.life_cycle_orchestrator`、`ocos.self.{monitor,builder,governor,identity_boundary}`、`ocos.runtime.runtime_kernel`、`ocos.runtime_scheduler.{priority_queue,scheduler_types}`、`ocos.goal.store`、`ocos.interaction.{session_state,inbox,converse}`、`ocos.perception.pipeline`、`ocos.world_model.world_store`、`ocos.learning.persistence`、`ocos.learning.metacognition`、`ocos.alerts.{manager,channels,models}`、`ocos.capability.homeostasis`、`ocos.health_examination.cognitive_examiner`、`ocos.diagnosis.*`、`ocos.execution.{bridge,pending}`、`ocos.capability_reality.adapter_discovery`、`ocos.knowledge.*`、`ocos.storage.connection`。
 - **被调用**：`ocos.interaction.cli.commands.run.py`（L51-59 全套 build_* + ResidentRuntime，主生产入口）、`ocos.interaction.cli.commands`（factory 下沉 import 规则合规）、测试 test_goal_claim/test_single_main_loop/test_phase_fix17_proactive/test_immune_system/test_execution_bridge。
 - **已知限制**：daemon 状态机 STOPPED/STARTING/RUNNING/STOPPING 无持久化；`_push_goal_results` 直接 `self._user_inbox._db_path` 私有属性 + 裸 sqlite3 连接；kernel restart 语义依赖 state.name 字符串比较；HealthLoop 决策漂移检测恒不触发（空 chosen_option）。
-- **验证状态**：【功能实测可通】（tick 循环/认领/dream/心跳均有测试与生产 run.py 装配路径）+ 部分【静态推演验证】（repair_link 的自动修复路径依赖 OCOS_APPROVAL_MODE 配置与白名单命中，主流程经 test_immune_system 覆盖）。
+- **boot_awareness 启动自省（v1.3.1 重点，boot_awareness.py）**：数字生命"每次断电/关机启动后像人一样先审视自身情况"的能力。主入口 `run_boot_awareness(db_path, post_fn, stimulus_fn, level)`（daemon start 后调用一次），四环节：① **采集** `_collect`（全只读探查 + 每项失败降级不阻断）：内核 `uname -r`、uptime `/proc/uptime`、磁盘 `df -BG`、内存 **`/proc/meminfo` MemAvailable**（关键坑：`free -g` 受中文 locale 影响列头为「内存：」致 awk 匹配失败返回 -1，已改读 /proc/meminfo 无 locale 依赖）、CPU `nproc`、GPU `nvidia-smi`（失败退 lspci）、网络（本机 IP + 国内外连通探测，最坏 ~6s）、自身状态（episodes/goals 计数、成长叙事章节数）、boot_id 与上轮对比 → 推断是否经历重启与停机时长（关机/断电不可区分则诚实注明）；② **分析** `_analyze`：产出 ok/warn/bad 三级 findings（GPU 缺失/离线/仅国内可达/磁盘低水位/内存压力/重启事件）；③ **适应**：环境快照写 `~/.ocos/boot_context.json`（boot_id/网络状态/GPU/磁盘/内存/CPU/重启推断，供 bridge `_boot_context_hint` 注入目标执行——目标规划基于本 boot 实测环境而非过时记忆，文件缺失/解析失败静默返回 "" 零开销）+ 异常条件（key_bad 非空）转刺激 `propose_stimulus` 走 MotivationHub 三道闸（升级阶梯/预算/饱和）；**全正常时诚实沉默零刺激提案（不编造动机）**；④ **汇报**：报告 `post_outbound(kind="report")` 推对话流（绿色面板）+ episode 落盘（source='boot_awareness'）。执行失败整体降级，不阻断 daemon 启动。验证状态：【功能实测可通】（tests/test_boot_awareness_20260908.py 15 项 + 生产 E2E：boot_context.json 落盘、journalctl "Boot awareness done"、episodes+user_messages 各 2 条、环境正常 0 刺激）。
+- **watchdog 心跳看门狗（v1.3.1 重点，watchdog.py + systemd timer）**：三层自愈模型的 L2 层——修复"进程活着但认知循环停摆"的假死缺口（systemd Type=simple 只监控进程退出，不覆盖线程僵死）。`run_watchdog(stale_s=90)`：读 `~/.ocos/daemon_heartbeat.json`（daemon 每 5 tick≈25s 写一次）→ **文件不存在 = daemon 被人为 stop/从未启动，诚实跳过不误杀**；age ≤90s（UI 30s 判活阈值的 3 倍容错）= 健康零动作；age >90s = tick 循环推定死亡 → `systemctl --user restart ocos-daemon` → 结果 JSONL 记账 `~/.ocos/ops/restart.log`（user=watchdog，与 cli restart.py 同格式）。由 `ocos-watchdog.timer` 每 2 分钟调度（OnBootSec=2min，oneshot 无守护进程）。顺带职责：每日首次运行 SQLite 在线备份（`backup` API 不锁库）→ `~/.ocos/backups/ocos-YYYYMMDD.db` 保留 7 份（`.last_backup_day` 节流）——消除白皮书此前"自动备份：无"的 P3 缺口。验证状态：【功能实测可通】（tests/test_watchdog_20260908.py 7 项 + 生产 E2E 演练：心跳回拨 300s → action=restarted + 记账 + daemon 恢复且 Boot awareness 自动重跑；注意演练须回拨后立即运行——daemon 下个 tick 会覆写心跳）。
+- **验证状态**：【静态推演验证】+【功能实测可通】（tick 循环/认领/dream/心跳均有测试与生产 run.py 装配路径；v1.3.1 新增自愈兜底 + 启动自省 + 看门狗均经生产 E2E 实弹验证）+ 部分【静态推演验证】（repair_link 的自动修复路径依赖 OCOS_APPROVAL_MODE 配置与白名单命中，主流程经 test_immune_system 覆盖）。
 
 ##### 3. ocos/execution/（4 个文件，含 DecisionBridge）
 
@@ -3739,7 +3765,7 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
 
 #### 二、文件全量索引
 
-共 72 个文件。状态标注：完整实现 / 半成品 / 占位代码。
+共 82 个文件（v1.3.1：daemon 组 4→14 收录 Boot Awareness 与自愈链上电文件）。状态标注：完整实现 / 半成品 / 占位代码。
 
 **ocos/goal/（12）**
 - `ocos/goal/__init__.py`
@@ -3767,21 +3793,41 @@ OCOS 是一个**数字生命体内核 / 个人智脑内核**——"非 Agent 框
 - `ocos/goal/tracker.py`
   - 文件类型：内存追踪器 / 核心功能：goal 进度/备注/起止时间内存追踪 / 关键类：GoalTracker（start/update/complete/get_progress/is_complete/get_notes/get_elapsed）/ 依赖：ocos.goal.models / 被调用：仅 tests / 状态：完整实现（未接线）
 
-**ocos/daemon/（4）**
+**ocos/daemon/（14）**
 - `ocos/daemon/__init__.py`
-  - 文件类型：核心实现（641 行）/ 核心功能：ResidentRuntime 常驻 daemon——tick 循环（kernel.tick_loop 单宿主）、目标队列+背压(50)、持久化目标认领、用户消息收件箱消费、goal_result 回推、dream 巩固、心跳落盘、健康体检、感知管线、SelfMonitor、SIGUSR1 全线程栈转储 / 关键类：ResidentRuntime、QueuedGoal、DaemonState / 依赖：agent_runtime、life_cycle_orchestrator、self.monitor、runtime_kernel、goal.store、interaction.{session_state,inbox,converse}、runtime_scheduler、learning.persistence、perception / 被调用：interaction/cli/commands/run.py（主入口）、tests / 状态：完整实现
+  - 文件类型：核心实现 / 核心功能：ResidentRuntime 常驻 daemon——tick 循环（kernel.tick_loop 单宿主）、目标队列+背压(50)、持久化目标认领、用户消息收件箱消费、goal_result 回推、dream 巩固、心跳落盘、健康体检、感知管线、SelfMonitor、SIGUSR1 全线程栈转储；v1.3.1：start 流程插入启动自省调用（V5 连续性校验后、tick 线程前）+ tick 循环体最外层自愈兜底 try/except（残余异常不再杀死 tick 线程）+ `_drain_user_inbox` fallback 保护 / 关键类：ResidentRuntime、QueuedGoal、DaemonState / 依赖：agent_runtime、life_cycle_orchestrator、self.monitor、runtime_kernel、goal.store、interaction.{session_state,inbox,converse}、runtime_scheduler、learning.persistence、perception、daemon.boot_awareness / 被调用：interaction/cli/commands/run.py（主入口）、tests / 状态：完整实现
+- `ocos/daemon/boot_awareness.py`【v1.3.1 新增】
+  - 文件类型：启动自省（数字生命环境审视）/ 核心功能：`run_boot_awareness(db_path, post_fn, stimulus_fn, level)` 四环节——采集（uname/uptime/df/proc-meminfo/nproc/nvidia-smi→lspci/网络连通/自身计数/boot_id 对比重启与停机推断，全只读+逐项失败降级，网络探测最坏 ~6s）→ 分析（ok/warn/bad findings）→ 适应（boot_context.json 环境先验供 bridge `_boot_context_hint` 注入目标执行 + key_bad 异常转 MotivationHub 刺激走三道闸，全正常诚实沉默零提案）→ 汇报（outbound kind='report' + episode source='boot_awareness'）/ 关键：run_boot_awareness/_collect_system/_collect_network/_collect_self/_analyze/_adapt_write_context/_read_boot_id / 依赖：pathlib/sqlite3/uuid/日志 / 被调用：daemon/__init__.py start 流程、execution/bridge.py（_boot_context_hint 读 boot_context.json）、tests/test_boot_awareness_20260908.py / 状态：完整实现【功能实测可通】
+- `ocos/daemon/watchdog.py`【v1.3.1 新增】
+  - 文件类型：L2 自愈看门狗 + 每日备份 / 核心功能：`run_watchdog(stale_s=90)`——读 daemon_heartbeat.json：文件不存在=人为 stop 诚实跳过不误杀；age>90s=tick 循环推定死亡 → systemctl --user restart ocos-daemon + JSONL 记账 ops/restart.log（user=watchdog）；`run_daily_backup()` 每日首次运行 SQLite backup API 在线备份 → ~/.ocos/backups/ocos-YYYYMMDD.db 保留 7 份（.last_backup_day 节流）/ 关键：run_watchdog/restart_daemon/run_daily_backup/_heartbeat_age_s/_log_restart / 依赖：subprocess（systemctl）、sqlite3 / 被调用：ocos-watchdog.timer（systemd 每 2 分钟 oneshot，`python -m ocos.daemon.watchdog`）、tests/test_watchdog_20260908.py / 状态：完整实现【功能实测可通】
 - `ocos/daemon/factory.py`
   - 文件类型：生产装配层 / 核心功能：MasterAgent+五引擎装配、HealthLoop 装配（Alert+File 通道）、感知管线、知识平面 ABI、DecisionBridge 装配（PendingStore+capability 发现+L8 置信度源）/ 关键：build_master_agent/build_cognitive_engines/build_health_loop/build_perception_pipeline/build_knowledge_registry/build_knowledge_abi/build_execution_bridge/_make_confidence_source / 依赖：agent.*、capability.*、constitution、engines.*、events、runtime、self、alerts、health_examination、homeostasis、perception、world_model、knowledge.*、execution.*、learning.metacognition / 被调用：interaction/cli/commands/run.py、tests / 状态：完整实现
 - `ocos/daemon/health_loop.py`
   - 文件类型：稳态监控 / 核心功能：每 interval_ticks(100) 体检——采集 4 项指标（fail-closed 降级）→ CognitiveExaminer → HomeostasisManager → AlertManager；tick 末尾触发诊断循环 / 关键类：HealthLoop（bind/tick/run_check/_decision_failure_rate/_safe）/ 依赖：alerts.*、capability.homeostasis、health_examination.cognitive_examiner、daemon.repair_link（延迟 import）/ 被调用：daemon/__init__.py tick 循环、daemon/factory.build_health_loop / 状态：完整实现
 - `ocos/daemon/repair_link.py`
   - 文件类型：诊断-修复链接 / 核心功能：诊断循环（探针→检测→提案→白名单过滤→待批/自动执行带冷却）+ 记忆膨胀确定性归档提案 + system_repair 执行体（checkpoint/rollback/白名单步骤执行器）/ 关键：run_diagnosis_cycle/execute_system_repair/_step_whitelisted/_make_checkpoint/_rollback_checkpoint/_execute_step、_AUTO_REPAIR_COOLDOWN=3600 / 依赖：diagnosis.{diagnosis_types,fault_detector,repair_proposer,system_probe,repair_executor,repair_types}、execution.pending、capability_reality.adapter_discovery、logging / 被调用：daemon/health_loop.py、execution/bridge.py（_handler_system_repair）、tests/test_immune_system / 状态：完整实现（数据级回滚 _rollback_checkpoint 为半成品，循环体 pass）
+- `ocos/daemon/self_check.py`
+  - 文件类型：四层断言式自检（L2-1）/ 核心功能：红线回归（审批无伪造兜底/API 鉴权/自主闸/审计可写/沙盒白名单）+ 认知体检（记忆响应性/待批积压）+ 因果链审计（episodes→TraceStep 链完整性≥90%）+ 活体验证（身份锚基线比对防漂移）；自检项异常=该项失败诚实上报 / 关键：SelfCheckRunner.run/_check_redline/_check_cognitive/_check_trace_audit/_check_living、record_self_check / 依赖：living_verification.*、execution.{bridge,autonomy} / 被调用：daemon/health_loop.py `_run_self_check`（每 N 次体检）/ 状态：完整实现
+- `ocos/daemon/improve_link.py`
+  - 文件类型：自改进提案链接（L2-4）/ 核心功能：lesson/reflection episodes → 确定性提炼改进点 → self_evolution_link.propose_upgrade（主权冻结域守门）→ pending_actions（action_type='self_upgrade'）待批；去重+限速，绝不自动执行 / 关键：propose_from_reflections/_recent_improvement_episodes/_already_proposed / 依赖：agent.self_evolution_link、execution.pending / 被调用：daemon/health_loop.py / 状态：完整实现
+- `ocos/daemon/motivation.py`
+  - 文件类型：L3 MotivationHub 自主性涌现 / 核心功能：信号→评分→提案→autonomy 闸（失败 lesson/belief 边界/goal_result 低成功率/self-exploration 四源，三维评分+去重+每日 cap=5）；LEVEL>=2 低风险 PROBE/LEARN 直写 goals 表，其余 PendingStore；同 key 刺激 PROBE→LEARN→REPAIR 升级阶梯，3 次未解决饱和静默；连续 3 次自主失败自动降级 LEVEL；verify_repairs REPAIR 复发核对 / 关键：MotivationHub.scan/propose_stimulus/record_result/verify_repairs、_from_belief_boundary（过滤 pattern 模板回声）、_from_self_exploration（pkgutil 实扫从未触及子包生成自我探查 PROBE）/ 依赖：goal.store、execution.pending、memory.episode、storage.* / 被调用：daemon/__init__.py（scan/propose_stimulus/verify_repairs）、boot_awareness（stimulus_fn）、bridge / 状态：完整实现
+- `ocos/daemon/growth_narrative.py`
+  - 文件类型：成长叙事周报 / 核心功能：ISO 周切换检测 → 上周 episodes/goals 统计 → 章节化叙事（W35/W36 已存档）→ outbound kind='report' / 关键：check_week_rollover / 被调用：daemon/__init__.py %100 周期块 / 状态：完整实现
+- `ocos/daemon/vitals_report.py`
+  - 文件类型：生命体征日报 / 核心功能：日切换检测 → 当日行为统计摘要 → outbound kind='report' / 关键：check_day_rollover/summary / 被调用：daemon/__init__.py / 状态：完整实现
+- `ocos/daemon/continuity.py`
+  - 文件类型：V5 连续性校验 / 核心功能：启动时身份/记忆连续性核验 / 被调用：daemon/__init__.py start 流程 / 状态：完整实现
+- `ocos/daemon/active_interaction.py`
+  - 文件类型：P5.2 主动交互管线 daemon 侧 / 核心功能：空闲期基于目标状态（停滞/依赖数据过期）产出交互提议走 outbox / 关键：scan_and_interact、stale_threshold_days / 被调用：daemon/__init__.py 周期块（LEVEL>=1） / 状态：完整实现
+- `ocos/daemon/channel_link.py`
+  - 文件类型：外部通道联动 / 核心功能：外部交互通道状态联动 / 被调用：daemon 装配 / 状态：完整实现
 
 **ocos/execution/（4）**
 - `ocos/execution/__init__.py`
   - 文件类型：包入口 / 核心功能：导出 DecisionBridge/BridgeReport/ActionVerdict / 依赖：bridge / 被调用：各消费方 import ocos.execution.bridge 直连为主 / 状态：完整实现
 - `ocos/execution/bridge.py`
-  - 文件类型：核心执行铰链（1154 行）/ 核心功能：详见"一、3" DecisionBridge 闭环描述——process()/execute_dag_task() 双入口、AUTO/ASK/DENY 分级、PermissionGuard 语义双检、PendingStore 待批、ExecutionAudit+event_memory 双留痕、LLM 任务转换+预算、沙盒执行+崩溃兜底+拦截反馈重试、结论摘要 / 关键：DecisionBridge、ActionVerdict、BridgeReport、AUTO_ACTIONS/ASK_ACTIONS/DENY_ACTIONS/ACTION_SEMANTICS、_DAG_AUTO_TYPES/_DAG_ASK_TYPES / 依赖：autonomous_runtime.action_dispatcher、agent_orchestration.audit、interaction.base、execution.pending、capability_reality.*、operations.*、digital_world.*、event_memory.*、engines.text_generator、agent.self_evolution_link、daemon.repair_link / 被调用：agent/agent_runtime.py、interaction/{converse,api.routes.converse,cli.approvals,repl.approvals}、cognitive_loop/action_controller、capability/execution_bridge、daemon/factory、cli/commands/goal、tests / 状态：完整实现
+  - 文件类型：核心执行铰链（1154 行）/ 核心功能：详见"一、3" DecisionBridge 闭环描述——process()/execute_dag_task() 双入口、AUTO/ASK/DENY 分级、PermissionGuard 语义双检、PendingStore 待批、ExecutionAudit+event_memory 双留痕、LLM 任务转换+预算、沙盒执行+崩溃兜底+拦截反馈重试、结论摘要；v1.3.1：`_boot_context_hint()` 读 ~/.ocos/boot_context.json 将本 boot 启动自省实测环境（GPU/网络/磁盘/内存/CPU/重启推断）注入目标执行先验——基于当前实测而非过时记忆规划，文件缺失静默返回 "" 零开销 / 关键：DecisionBridge、ActionVerdict、BridgeReport、AUTO_ACTIONS/ASK_ACTIONS/DENY_ACTIONS/ACTION_SEMANTICS、_DAG_AUTO_TYPES/_DAG_ASK_TYPES、_boot_context_hint / 依赖：autonomous_runtime.action_dispatcher、agent_orchestration.audit、interaction.base、execution.pending、capability_reality.*、operations.*、digital_world.*、event_memory.*、engines.text_generator、agent.self_evolution_link、daemon.repair_link / 被调用：agent/agent_runtime.py、interaction/{converse,api.routes.converse,cli.approvals,repl.approvals}、cognitive_loop/action_controller、capability/execution_bridge、daemon/factory、cli/commands/goal、tests / 状态：完整实现
 - `ocos/execution/pending.py`
   - 文件类型：持久化存储 / 核心功能：pending_actions 表（schema v4）待批队列 CRUD + approval_disabled() 审批开关（OCOS_APPROVAL_MODE 默认 auto）/ 关键类：PendingStore（enqueue/get/list_by_status/decide/mark_executed）；函数 approval_disabled / 依赖：ocos.storage.connection / 被调用：execution/bridge、daemon/repair_link、interaction/{converse,repl.approvals,cli.approvals}、tests / 状态：完整实现
 - `ocos/execution/goal_executor.py`
@@ -5814,24 +5860,27 @@ PHASE14_1_EVIDENCE_SCHEMA（证据 Schema v1.0 冻结）；PHASE14_2_B1_B_GATE_R
 | 方式 | 命令 | 现状 |
 |---|---|---|
 | daemon（主） | `ocos run [--ticks --interval --db --watch-dir --agent-id]` | 生产主入口；SIGINT/SIGTERM 优雅停机 |
-| API server | `python -m ocos.interaction.api.server`（uvicorn）或 external/server_manager 托管 | server.py main() |
-| TUI | `ocos chat` / `python -m ocos.interaction` | 纯 HTTP 客户端，需 API 先起 |
+| API server | `python -m ocos.interaction.api.server`（uvicorn）或 external/server_manager 托管 | server.py main()；8900 端口 |
+| TUI（v1.3 纯前端） | `ocos chat [--host --port]` | WebSocket 客户端（`ocos/tui/tui_client.py`），连 `ws://host:port/ws`；关闭不影响后台 |
+| TUI（旧版） | `python -m ocos.interaction` | HTTP 轮询版 tui.py，仍可用 |
 | REPL | `python -m ocos.interaction.repl` | 独立入口 |
+| 网关运维 | `ocos gateway status` / `ocos gateway restart` | status 只读展示；restart 按固定顺序 server→daemon 重启 + 健康检查（is-active 15s + 端口就绪 15s）+ JSONL 操作日志 ~/.ocos/ops/restart.log |
 | runtime 演示 | `python -m ocos.runtime` | boot→60 tick→checkpoint→shutdown（演示级） |
-| systemd | ocos-server/ocos-daemon/hermes-gateway 三服务 | **unit 文件在部署机上，未纳入版本管理（部署资产缺口）** |
+| systemd | `systemctl --user {start|stop|restart|status} ocos-server/ocos-daemon/hermes-gateway` | **单元文件已部署于部署机 ~/.config/systemd/user/（Restart=on-failure, RestartSec=5），仍未纳入版本管理**；代码变更后须重启 server+daemon（顺序 server→daemon），旧进程缓存代码是"修了没生效"惯犯 |
 | Docker | 无 Dockerfile/compose | 仓库内不存在 |
 
 ### 8.3 内核启动流程、优雅关闭流程
 
-**启动**：`ocos run` → ensure_schema（迁移到 v5）→ build_master_agent（MasterAgent+五真实引擎+宪法+proactive 回调）→ build_execution_bridge（DecisionBridge+PendingStore+L8 置信度源）→ build_health_loop（AlertManager+CognitiveExaminer+HomeostasisManager）→ build_perception_pipeline → ResidentRuntime.start()：daemon 锁（db_path）→ requeue_stale_active（孤儿 ACTIVE 回收 PENDING）→ AgentRuntime.boot（Identity 恢复→Goal 恢复→MemoryHub→WM）→ RecoveryEngine.attempt_recovery → tick_loop 启动。
+**启动**：`ocos run` → ensure_schema（迁移到 v5）→ build_master_agent（MasterAgent+五真实引擎+宪法+proactive 回调）→ build_execution_bridge（DecisionBridge+PendingStore+L8 置信度源）→ build_health_loop（AlertManager+CognitiveExaminer+HomeostasisManager）→ build_perception_pipeline → ResidentRuntime.start()：daemon 锁（db_path）→ requeue_stale_active（孤儿 ACTIVE 回收 PENDING）→ AgentRuntime.boot（Identity 恢复→Goal 恢复→MemoryHub→WM）→ RecoveryEngine.attempt_recovery → **启动自省**（v1.3.1：`run_boot_awareness` 采集系统/GPU/网络/自身状态 + 重启推断，写 boot_context.json 环境先验、异常转刺激、报告推对话流；全只读+失败降级不阻断启动）→ tick_loop 启动。
 **优雅关闭**：stop 信号 → threading.Event → 30s join → AgentRuntime.shutdown（identity snapshot 保存）→ kernel.shutdown(checkpoint=True)（双写 CheckpointRecord+RuntimeSnapshot）→ daemon shutdown（PENDING 目标保留，下次认领）。
+**自愈守护（v1.3.1）**：三层自愈模型——L1 进程崩溃 systemd Restart=on-failure（ocos-server/ocos-daemon 均 RestartSec=5）；L2 线程僵死 `ocos-watchdog.timer` 每 2 分钟运行看门狗（心跳 >90s 过期自动重启 daemon + JSONL 记账 ops/restart.log）；L3 认知/数据损伤 HealthLoop 体检 + repair_link 白名单修复。重启顺序：server → daemon → gateway。
 
 ### 8.4 存档备份操作
 
 - 主库：~/.ocos/ocos.db（WAL 模式——备份需 sqlite3 `.backup` 或停机拷贝三件套 .db/.db-wal/.db-shm）。
 - 快照：~/.ocos/snapshots/（StateSerializer）、ocos_data/persistence/（PersistenceManager）、/tmp/ocos_checkpoints/（**易失，需迁移到持久目录**）。
 - 其他：~/.ocos/{continuity.json, self_knowledge.md, decision_history.jsonl, activation.jsonl, feedback/}。
-- 自动备份：无（P3 缺口；docs/OCOS_COMPREHENSIVE_AUDIT.md 亦建议补备份）。
+- 自动备份（v1.3.1 已补）：`ocos-watchdog.timer` 每 2 分钟触发看门狗，每日首次健康运行时经 SQLite `backup` API 在线备份主库 → `~/.ocos/backups/ocos-YYYYMMDD.db`（不锁库，.last_backup_day 节流），保留最近 7 份轮转；此前"自动备份：无"的 P3 缺口已消除（docs/OCOS_COMPREHENSIVE_AUDIT.md 建议）。恢复操作：停 daemon → 用备份覆盖 ocos.db → 删除 -wal/-shm → 重启（server → daemon）。
 
 ### 8.5 OCOS 内核升级操作说明、现存升级风险
 
@@ -5844,6 +5893,7 @@ PHASE14_1_EVIDENCE_SCHEMA（证据 Schema v1.0 冻结）；PHASE14_2_B1_B_GATE_R
 ### 9.1 OCOS 内核现有可测试路径
 
 - **规模**：ocos/tests/ 下 175 个 .py（含 conftest），**4297 个测试函数**，覆盖 64 个顶层源码包中的 53 个；唯一 skip 为 test_phase52.py 的 2 处 psutil 条件跳过；全件无失效测试。近期基线：5287+ passed（docs/OCOS_MODULE_AUDIT_20260830.md）、渐进寄生测试报告 v4（docs/testing/TEST_REPORT_2026_09_05.md）。
+- **v1.3 基线（2026-09-06 实测）**：**2370 passed / 0 failed / 8 skipped**（约 4 分钟全量；未计入环境耦合的 test_text_generator，其失败为用户机 config.json 泄漏所致非代码缺陷）。历史 4297/5287+ 计数含多套 phase 基建测试；UX-J 迭代净增测试 60+（TUI 11、智能体接入 12、核心工具黑名单 9、标签修正/PATH/ANSWER 5、复盘素材/截断/域推断 11、goal_result 即时推送 6、记忆冲突回落 5 等）。**曾长期存在的 3 个预存失败（test_behavior_chain 引用已重构的 `_prior_knowledge`）已修复清零**。
 - **分层**：单元（约 90 文件）→ 架构/宪法约束（约 12 个 AST 静态扫描测试：test_import_rules 依赖方向、test_constitution 24 条规则、test_information_axioms_enforced 公理 1-7、test_no_direct_store_access 等，是本仓库测试体系最大特色——把宪法规则固化为 CI 可拒绝项）→ 集成（约 15：test_integration 24 用例、test_runtime_integration、12 个 test_master_agent_*）→ 阶段验收（约 60 个 test_phaseN*.py，Phase 21-62 逐阶段 gate）→ 活体协议（test_phase57/58 系列）。
 - **解耦**：conftest 强制无 LLM；test_organ_client 用本地 mock HTTP；test_webchat_api 用 FastAPI TestClient——全套件不依赖真实外部服务。
 - **审计中的实测记录**：各分组代理共实跑 pytest 数千用例（W3 81 通过、W5 404/405、W6 262 通过、W8 449/1（环境性失败）、W11 411 通过、W10 26 项功能实测 25 通过等）。
@@ -6430,7 +6480,9 @@ PHASE14_1_EVIDENCE_SCHEMA（证据 Schema v1.0 冻结）；PHASE14_2_B1_B_GATE_R
 |---|---|---|
 | daemon 起不来 / 立即退出 | ocos/daemon/__init__.py（daemon 锁）、cli/commands/run.py | 1) 看日志 "Daemon lock failed"（另一实例持有 db）；2) `ocos status` 探库；3) 检查 OCOS_DB_PATH 一致性 |
 | 目标卡 PENDING 不执行 | goal/store.py claim、daemon/_claim_persisted_goals | 1) daemon 是否存活（~/.ocos/daemon_heartbeat.json 的 ts）；2) goals 表 status/origin_level/caller（claim 只认 PENDING+HUMAN）；3) 是否队列背压拒绝（submit 返回 -1） |
-| 目标永久滞留 ACTIVE | goal/store.py + daemon 启动回收 | 孤儿回收只在 daemon start 时跑 requeue_stale_active——异常退出后需重启 daemon 或手动 UPDATE；已知 P2（生产验证报告同款） |
+| daemon 假死（进程活、心跳停更） | daemon/watchdog.py + daemon/__init__.py `_tick_loop` 自愈兜底 | 1) 心跳 age（converse 30s 判活）：`cat ~/.ocos/daemon_heartbeat.json` 的 ts；2) watchdog timer 是否在跑：`systemctl --user list-timers ocos-watchdog.timer`；3) 手动触发：`python -m ocos.daemon.watchdog`（age>90s 自动重启 + ops/restart.log 记账）；4) 查 journalctl "Tick loop residual failure" 定位残余异常源（v1.3.1 起兜底不应再发生线程死亡） |
+| 心跳文件不存在但不该重启 | daemon/watchdog.py `_heartbeat_age_s` | 心跳缺失 = 人为 stop / 从未启动 → 看门狗诚实跳过（action=skipped），不误杀；确认意图后 `systemctl --user start ocos-daemon` |
+| 目标永久滞留 ACTIVE | goal/store.py + daemon 启动回收 | 孤儿回收只在 daemon start 时跑 requeue_stale_active——异常退出后重启 daemon 即回收（watchdog 自动重启同样触发）；已知 P2（生产验证报告同款） |
 | 对话无回复 / mock 回复 | interaction/converse.py | 1) 日志 "LLM reply failed, falling back to state reply"；2) 检查 ~/.ocos/config.json llm 段与 key；3) TextGenerator 初始化行看 provider 与 failover；4) LLM 日预算是否耗尽（bridge "budget" 日志） |
 | 工具/命令被拒 | execution/bridge.py _handler_run_command、operations/sandbox_ops.py | 1) 白名单前缀（ALLOWED_COMMANDS 30 条）；2) 敏感路径拦截（PUBLIC_READONLY_PATHS 之外的 /etc 等）；3) 复合命令分段校验失败点；4) USE\| 协议每回复 ≤2 轮工具上限 |
 | 审批项不出现 / 不执行 | execution/pending.py + bridge.py | 1) OCOS_APPROVAL_MODE 是否 auto（默认关闭人工审批，ASK 自动执行）；2) pending_actions 表 status；3) approvals approve 后看 result_summary（诚实失败会记录 block_reason） |

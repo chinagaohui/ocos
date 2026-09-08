@@ -84,16 +84,28 @@ def register_inference_handler(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class ReasoningEngine:
-    """推理引擎 — 为 ProcessType.REASONING 提供推理能力。"""
+    """推理引擎 — 为 ProcessType.REASONING 提供推理能力。
+
+    L1 真实化（升级方案）:
+      - _real_reason:      episode 证据检索（记忆前提）+ LLM 推理，
+                           结论携带 evidence[]（episode id）可追溯
+      - _fallback_reason:  确定性结构化输出（LLM/记忆不可用时降级，
+                           诚实标注 degraded）
+    """
 
     def __init__(
         self,
         event_bus: EventBus,
         working_memory: WorkingMemory,
+        memory_store: Any | None = None,
+        text_generator: Any | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._wm = working_memory
         self._traces: dict[str, ReasoningTrace] = {}
+        # L1: 可选注入 — 缺省时懒加载（生产路径 get_text_generator 缓存）
+        self._memory_store = memory_store
+        self._text_generator = text_generator
         logger.debug("__init__ completed", component="reasoning_engine")
 
     def __repr__(self) -> str:
@@ -265,9 +277,10 @@ class ReasoningEngine:
             except Exception as e:
                 return None, "", str(e)
 
-        # 默认内置推理
+        # 默认内置推理 — L1 真实化: 真分支优先，降级保留诚实标注
         output_addr = f"addr:reasoning:{uuid.uuid4().hex}"
-        conclusion = self._default_reason(operation, premises)
+        conclusion, evidence_ids, degraded = self._reason(
+            operation, premises)
         step = ReasoningStep(
             step_index=step_index,
             operation=operation.value,
@@ -275,19 +288,128 @@ class ReasoningEngine:
             output_address=output_addr,
             premises=tuple(premises.get("inputs", [])) if premises else (),
             conclusion=conclusion,
-            confidence=self._default_confidence(operation),
+            confidence=self._default_confidence(operation)
+            if not degraded else min(0.5, self._default_confidence(operation)),
+            metadata={"evidence": evidence_ids, "degraded": degraded},
         )
         return step, output_addr, ""
 
-    def _default_reason(
+    # ── L1 真实化: 统一入口 _reason → _real/_fallback ───────────────────
+
+    def _reason(
+        self,
+        operation: InferenceOperation,
+        premises: dict[str, Any] | None,
+    ) -> tuple[str, list[str], bool]:
+        """真分支优先；任何依赖缺失/异常 → 确定性降级。
+
+        Returns:
+            (conclusion, evidence_episode_ids, degraded)
+        """
+        try:
+            return self._real_reason(operation, premises)
+        except Exception as e:
+            logger.warning("real reasoning unavailable, degraded: %s", e)
+            conclusion = self._fallback_reason(operation, premises)
+            return (conclusion, [], True)
+
+    def _retrieve_evidence(
+        self,
+        operation: InferenceOperation,
+        premises: dict[str, Any] | None,
+        limit: int = 5,
+    ) -> list[tuple[str, str]]:
+        """episode 证据检索 — 推理前提来自真实记忆而非凭空。
+
+        Returns:
+            [(episode_id, 摘要文本), ...]
+        """
+        if self._memory_store is None:
+            return []
+        keywords = self._premise_keywords(operation, premises)
+        episodes = self._memory_store.query_by_time(limit=30)
+        scored: list[tuple[int, str, str]] = []
+        for ep in episodes:
+            text = " ".join(filter(None, (
+                getattr(ep, "goal", "") or "",
+                getattr(ep, "decision", "") or "",
+                getattr(ep, "action", "") or "",
+            )))
+            hits = sum(1 for kw in keywords if kw and kw in text)
+            if hits:
+                scored.append((hits, getattr(ep, "id", ""), text[:200]))
+        scored.sort(key=lambda x: -x[0])
+        return [(eid, text) for _, eid, text in scored[:limit]]
+
+    @staticmethod
+    def _premise_keywords(
+        operation: InferenceOperation,
+        premises: dict[str, Any] | None,
+    ) -> list[str]:
+        """从前提提取检索关键词（地址型前提剥离协议前缀）。"""
+        inputs = (premises or {}).get("inputs", []) or []
+        keywords: list[str] = []
+        for item in inputs:
+            if not isinstance(item, str):
+                keywords.append(str(item))
+                continue
+            # addr:goal:xxx / 自由文本 均取尾部语义段
+            tail = item.split(":")[-1].strip()
+            if tail and len(tail) >= 2:
+                keywords.append(tail)
+        return keywords[:8]
+
+    def _real_reason(
+        self,
+        operation: InferenceOperation,
+        premises: dict[str, Any] | None,
+    ) -> tuple[str, list[str], bool]:
+        """真推理 — episode 证据作为前提 + LLM 推理。
+
+        Raises:
+            Exception: LLM 不可用/调用失败（调用方 _reason 统一降级）
+        """
+        import asyncio
+
+        if self._text_generator is None:
+            from ocos.engines.text_generator import get_text_generator
+            self._text_generator = get_text_generator()
+        provider = self._text_generator.provider
+        if not getattr(provider, "available", False):
+            raise RuntimeError("LLM provider unavailable")
+
+        evidence = self._retrieve_evidence(operation, premises)
+        evidence_block = "\n".join(
+            f"- [{eid}] {text}" for eid, text in evidence
+        ) or "（无相关记忆条目）"
+        inputs = (premises or {}).get("inputs", []) or []
+        prompt = (
+            f"推理操作: {operation.value}\n"
+            f"前提: {inputs}\n"
+            f"相关经验证据（来自记忆库）:\n{evidence_block}\n\n"
+            "基于以上前提与证据进行推理，输出结论。要求：结论必须引用"
+            "至少一条真实证据编号（格式 [EPI-...]），不得虚构。"
+        )
+        text = asyncio.run(provider.generate(
+            prompt,
+            system_prompt="你是 OCOS 的推理引擎。只输出结论本身，简洁、可追溯。",
+            temperature=0.2, max_tokens=800))
+        conclusion = (text or "").strip()
+        if not conclusion:
+            raise RuntimeError("empty LLM conclusion")
+        evidence_ids = [eid for eid, _ in evidence]
+        return conclusion, evidence_ids, False
+
+    def _fallback_reason(
         self,
         operation: InferenceOperation,
         premises: dict[str, Any] | None,
     ) -> str:
-        """默认推理逻辑（纯结构化输出，无实际 LLM 调用）。"""
+        """降级推理 — 确定性结构化输出（诚实标注降级）。"""
         inputs = premises.get("inputs", []) if premises else []
         input_desc = f"inputs: {inputs}" if inputs else "no explicit inputs"
-        return f"[{operation.value}] from {input_desc} → conclusion (trace generated)"
+        return (f"[degraded:{operation.value}] from {input_desc} → "
+                "conclusion (trace generated, LLM unavailable)")
 
     def _default_confidence(
         self,

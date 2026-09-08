@@ -68,7 +68,7 @@ body {
   position: relative; z-index: 1;
   display: grid;
   grid-template-columns: 260px 1fr 280px;
-  grid-template-rows: 50px 1fr 200px;
+  grid-template-rows: 50px 1fr auto;
   height: 100vh;
   gap: 1px;
   background: var(--panel-border);
@@ -206,49 +206,66 @@ body {
 .metric-row .value.ok { color: var(--green); }
 .metric-row .value.warn { color: var(--amber); }
 
-/* ── 中央 - 大脑可视化 ── */
+/* ── 中央 - OCOS 上下文窗口（2026-09-07 替代大脑动画） ── */
 .center-panel {
   position: relative;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: radial-gradient(ellipse at center, rgba(0,30,60,0.4) 0%, transparent 70%);
+  background: radial-gradient(ellipse at top, rgba(0,30,60,0.4) 0%, transparent 60%);
   overflow: hidden;
 }
-#brainCanvas {
-  position: absolute; inset: 0;
-  width: 100%; height: 100%;
+.ctx-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--panel-border);
+  background: rgba(0,10,20,0.5);
+  flex-shrink: 0;
 }
-.brain-hud {
-  position: absolute; inset: 0;
-  pointer-events: none;
+.ctx-state {
+  display: flex; align-items: baseline; gap: 10px;
+  min-width: 0; overflow: hidden;
 }
-.brain-state {
-  position: absolute; bottom: 80px;
-  text-align: center;
-}
-.brain-state .state-text {
-  font-size: 14px; letter-spacing: 0.5em;
+.ctx-state .state-text {
+  font-size: 12px; letter-spacing: 0.3em;
   color: var(--cyan);
-  text-shadow: 0 0 30px var(--cyan), 0 0 60px var(--cyan-dim);
-  animation: state-glow 3s ease-in-out infinite;
+  text-shadow: 0 0 20px var(--cyan-dim);
+  white-space: nowrap; flex-shrink: 0;
 }
-@keyframes state-glow {
-  0%,100% { text-shadow: 0 0 30px var(--cyan), 0 0 60px var(--cyan-dim); }
-  50% { text-shadow: 0 0 50px var(--cyan), 0 0 100px var(--cyan-dim); }
+.ctx-state .state-sub {
+  font-size: 10px; color: var(--muted); letter-spacing: 0.1em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.brain-state .state-sub {
-  font-size: 10px; color: var(--muted); margin-top: 8px;
-  letter-spacing: 0.2em;
+@media (max-width: 1100px) {
+  .ctx-state .state-sub { display: none; }
 }
-.brain-coords {
-  position: absolute; top: 20px; left: 20px;
-  font-size: 9px; color: var(--muted);
+.ctx-meta {
+  display: flex; gap: 8px; align-items: center;
+  flex-shrink: 0;
 }
-.brain-coords span { color: var(--cyan); }
+.ctx-badge {
+  font-size: 9px; color: var(--cyan);
+  background: rgba(0,229,255,0.06);
+  border: 1px solid var(--panel-border);
+  border-radius: 2px;
+  padding: 3px 8px;
+  letter-spacing: 0.1em;
+  font-variant-numeric: tabular-nums;
+}
+/* 执行可见性徽章三态（2026-09-08）: 执行中呼吸 / 待命常显 / 离线红闪 */
+.ctx-badge.executing {
+  color: var(--cyan);
+  border-color: rgba(0,229,255,0.55);
+  background: rgba(0,229,255,0.14);
+  animation: activity-breathe 1.6s ease-in-out infinite;
+}
+.ctx-badge.offline {
+  color: #ff5470;
+  border-color: rgba(255,84,112,0.55);
+  background: rgba(255,84,112,0.10);
+  animation: activity-breathe 0.9s ease-in-out infinite;
+}
+@keyframes activity-breathe { 50% { opacity: 0.45; } }
 .brain-warning {
-  position: absolute; top: 20px; right: 20px;
   font-size: 9px; color: var(--amber);
   letter-spacing: 0.2em;
   animation: warning-blink 1s ease-in-out infinite;
@@ -256,6 +273,15 @@ body {
 @keyframes warning-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
+}
+.ctx-log {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px;
+  scroll-behavior: smooth;
 }
 
 /* ── 右侧面板 - 目标与记忆 ── */
@@ -334,17 +360,12 @@ body {
   border-radius: 2px;
 }
 
-/* ── 底部栏 - 对话 ── */
+/* ── 底部栏 - 输入区（消息流已移入中央上下文窗口） ── */
 .bottom-bar {
-  grid-column: 1 / -1;
+  grid-column: 2;
   background: linear-gradient(0deg, rgba(0,10,20,0.95) 0%, rgba(0,15,30,0.9) 100%);
   border-top: 1px solid var(--panel-border);
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.chat-section {
+  padding: 12px 20px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -354,27 +375,24 @@ body {
   letter-spacing: 0.3em;
   color: var(--cyan);
   text-transform: uppercase;
+  display: none;
 }
-.chat-log {
-  height: 140px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background: rgba(0,5,10,0.7);
-  border: 1px solid var(--panel-border);
-  border-radius: 4px;
-  padding: 12px;
-  box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
-}
+.chat-log { display: none; }   /* 旧容器保留兼容，消息流在 #ctxLog */
 .chat-msg {
-  padding: 8px 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  line-height: 1.5;
-  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 78%;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.chat-msg .msg-time {
+  display: block;
+  font-size: 9px;
+  color: var(--muted);
+  margin-bottom: 3px;
+  letter-spacing: 0.1em;
 }
 .chat-msg.user {
   align-self: flex-end;
@@ -382,6 +400,7 @@ body {
   border: 1px solid rgba(41,121,255,0.3);
   border-right: 3px solid var(--blue);
   color: var(--fg);
+  border-radius: 6px 6px 2px 6px;
 }
 .chat-msg.bot {
   align-self: flex-start;
@@ -389,6 +408,7 @@ body {
   border: 1px solid var(--panel-border);
   border-left: 3px solid var(--cyan);
   color: var(--fg);
+  border-radius: 6px 6px 6px 2px;
 }
 .chat-msg.bot.mock {
   border-style: dashed;
@@ -396,19 +416,23 @@ body {
   color: var(--amber);
 }
 .input-area {
-  display: flex; gap: 12px; align-items: center;
+  display: flex; gap: 12px; align-items: flex-end;
 }
 #chatInput {
   flex: 1;
   background: rgba(0,10,20,0.8);
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 12px 16px;
   color: var(--fg);
   font-size: 13px;
   font-family: inherit;
   outline: none;
   transition: all 0.2s;
+  resize: none;
+  min-height: 44px;
+  max-height: 160px;
+  line-height: 1.5;
 }
 #chatInput:focus {
   border-color: var(--cyan);
@@ -524,19 +548,23 @@ body {
     </div>
   </aside>
 
-  <!-- 中央大脑 -->
+  <!-- 中央 - OCOS 上下文窗口 -->
   <main class="center-panel">
-    <canvas id="brainCanvas"></canvas>
-    <div class="brain-hud">
-      <div class="brain-coords">
-        <span>COORD:</span> <span id="brainCoord">000.000 : 000.000</span><br>
-        <span>THETA:</span> <span id="brainTheta">--</span>
+    <div class="ctx-header">
+      <div class="ctx-state">
+        <span class="state-text" id="brainState">待命中</span>
+        <span class="state-sub" id="brainSub">等待神经输入...</span>
       </div>
-      <div class="brain-warning" id="brainWarning" style="display:none">⚠ PROXY ERROR</div>
-      <div class="brain-state">
-        <div class="state-text" id="brainState">待命中</div>
-        <div class="state-sub" id="brainSub">等待神经输入...</div>
+      <div class="ctx-meta">
+        <span class="ctx-badge" id="ctxActivity">…</span>
+        <span class="ctx-badge" id="ctxEpisodes">EPI 0</span>
+        <span class="ctx-badge" id="ctxBeliefs">BEL 0</span>
+        <span class="ctx-badge" id="ctxGoals">GOAL 0</span>
+        <span class="brain-warning" id="brainWarning" style="display:none">⚠ PROXY ERROR</span>
       </div>
+    </div>
+    <div class="ctx-log" id="ctxLog">
+      <div class="chat-msg bot">系统初始化完成。等待神经连接...</div>
     </div>
   </main>
 
@@ -568,151 +596,119 @@ body {
     </div>
   </aside>
 
-  <!-- 底部栏 -->
+  <!-- 底部栏 - 输入区 -->
   <footer class="bottom-bar">
-    <div class="chat-section">
-      <div class="section-label">神经对话</div>
-      <div class="chat-log" id="chatMessages">
-        <div class="chat-msg bot">系统初始化完成。等待神经连接...</div>
-      </div>
-    </div>
+    <div class="section-label">神经对话 · Enter 发送 / Shift+Enter 换行</div>
     <div class="input-area">
-      <input id="chatInput" type="text" placeholder="输入神经脉冲..." autocomplete="off">
+      <textarea id="chatInput" rows="1" placeholder="输入神经脉冲..." autocomplete="off"></textarea>
       <button class="send-btn" id="sendBtn" onclick="sendMessage()">发射</button>
     </div>
   </footer>
 </div>
 
+<!-- Token 连接面板（prompt() 替代 — 2026-09-07：headless/受控浏览器不支持
+     prompt 且连续弹窗会被拦截，导致页面整体不可用） -->
+<div id="tokenGate" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(1,3,8,0.85);backdrop-filter:blur(6px);align-items:center;justify-content:center">
+  <div style="width:360px;max-width:90vw;background:var(--panel);border:1px solid var(--panel-border);border-radius:12px;padding:28px;box-shadow:0 0 40px rgba(0,229,255,0.15)">
+    <div style="font-size:13px;color:var(--cyan);letter-spacing:2px;margin-bottom:14px">◈ NEURAL LINK REQUIRED</div>
+    <div id="tokenErr" style="display:none;color:#ff5470;font-size:11px;margin-bottom:10px"></div>
+    <div style="color:var(--muted);font-size:11px;line-height:1.7;margin-bottom:14px">
+      本界面需要 API Token 认证。<br>
+      Token 位于服务器 <span style="color:var(--cyan)">~/.ocos/config.json</span> → <span style="color:var(--cyan)">api.token</span>
+    </div>
+    <input id="tokenInput" type="password" placeholder="粘贴 API Token..." autocomplete="off"
+      onkeydown="if(event.key==='Enter')connectToken()"
+      style="width:100%;box-sizing:border-box;background:rgba(0,229,255,0.05);border:1px solid var(--panel-border);border-radius:6px;padding:10px 12px;color:var(--cyan);font-size:12px;outline:none;margin-bottom:12px">
+    <button class="send-btn" onclick="connectToken()" style="width:100%;justify-content:center">建 立 连 接</button>
+  </div>
+</div>
+
 <script>
 // ═══════════════════════════════════════════════════════
-// 大脑可视化
+// API 认证（S1.2 Bearer Token — D-UI 修复 2026-09-07）
+// 页面本身豁免鉴权，但 /ocos/* 数据接口需要 Bearer token。
+// token 来源优先级: URL ?token= → localStorage → 页面内 Token 面板
+// （不使用 prompt(): headless/受控浏览器不支持且连续弹窗被拦截）。
 // ═══════════════════════════════════════════════════════
-const canvas = document.getElementById('brainCanvas');
-const ctx = canvas.getContext('2d');
-let W, H, cx, cy;
+let authToken = localStorage.getItem('ocos_token') || '';
+let tokenGateVisible = false;
 
-function resize() {
-  const rect = canvas.parentElement.getBoundingClientRect();
-  W = canvas.width = rect.width * devicePixelRatio;
-  H = canvas.height = rect.height * devicePixelRatio;
-  cx = W / 2; cy = H / 2;
-  canvas.style.width = rect.width + 'px';
-  canvas.style.height = rect.height + 'px';
-}
-resize();
-window.addEventListener('resize', resize);
-
-// 大脑节点
-const brainNodes = Array.from({length: 40}, (_, i) => ({
-  x: (Math.random() - 0.5) * 0.6,
-  y: (Math.random() - 0.5) * 0.7,
-  z: Math.random(),
-  phase: Math.random() * Math.PI * 2,
-  size: 1.5 + Math.random() * 2,
-  connections: []
-}));
-
-// 建立连接
-for (let i = 0; i < brainNodes.length; i++) {
-  const dists = brainNodes.map((n, j) => ({
-    j, dist: Math.sqrt((n.x - brainNodes[j].x)**2 + (n.y - brainNodes[j].y)**2)
-  })).sort((a, b) => a.dist - b.dist).slice(1, 4);
-  brainNodes[i].connections = dists.map(d => d.j);
-}
-
-let time = 0;
-function drawBrain() {
-  ctx.clearRect(0, 0, W, H);
-  time += 0.016;
-  
-  // 更新坐标
-  for (const node of brainNodes) {
-    node.currentX = cx + node.x * cx * 0.8 + Math.sin(time * 0.5 + node.phase) * 10;
-    node.currentY = cy + node.y * cy * 0.7 + Math.cos(time * 0.3 + node.phase) * 8;
+// URL ?token= 直连（个人使用便利）：存入后清理地址栏，不留敏感参数
+(function () {
+  const m = location.search.match(/[?&]token=([^&]+)/);
+  if (m) {
+    authToken = decodeURIComponent(m[1]).trim();
+    localStorage.setItem('ocos_token', authToken);
+    history.replaceState(null, '', location.pathname);
   }
-  
-  // 绘制连接
-  for (let i = 0; i < brainNodes.length; i++) {
-    const node = brainNodes[i];
-    for (const j of node.connections) {
-      const other = brainNodes[j];
-      const pulse = Math.sin(time * 2 + node.phase + other.phase) * 0.5 + 0.5;
-      ctx.strokeStyle = `rgba(0, 229, 255, ${0.1 + pulse * 0.15})`;
-      ctx.lineWidth = 0.5 * devicePixelRatio;
-      ctx.beginPath();
-      ctx.moveTo(node.currentX, node.currentY);
-      ctx.lineTo(other.currentX, other.currentY);
-      ctx.stroke();
-      
-      // 脉冲沿连接线传播
-      if (pulse > 0.8) {
-        const px = node.currentX + (other.currentX - node.currentX) * ((time * 0.5) % 1);
-        const py = node.currentY + (other.currentY - node.currentY) * ((time * 0.5) % 1);
-        ctx.fillStyle = `rgba(0, 229, 255, ${pulse * 0.5})`;
-        ctx.beginPath();
-        ctx.arc(px, py, 2 * devicePixelRatio, 0, Math.PI * 2);
-        ctx.fill();
-      }
+})();
+
+function showTokenGate(msg) {
+  if (tokenGateVisible) return;
+  tokenGateVisible = true;
+  document.getElementById('tokenGate').style.display = 'flex';
+  const err = document.getElementById('tokenErr');
+  err.textContent = msg || '';
+  err.style.display = msg ? 'block' : 'none';
+  const input = document.getElementById('tokenInput');
+  input.value = '';
+  setTimeout(() => input.focus(), 50);
+}
+
+function hideTokenGate() {
+  tokenGateVisible = false;
+  document.getElementById('tokenGate').style.display = 'none';
+}
+
+// 面板「建立连接」: 先验证再落地，避免坏 token 污染 localStorage
+async function connectToken() {
+  const input = document.getElementById('tokenInput');
+  const t = input.value.trim();
+  if (!t) { input.focus(); return; }
+  try {
+    const resp = await fetch('/ocos/introspect',
+      { headers: { 'Authorization': 'Bearer ' + t } });
+    if (resp.ok) {
+      authToken = t;
+      localStorage.setItem('ocos_token', t);
+      hideTokenGate();
+      addMessage('神经连接已建立 ✓', false);
+      refreshAll();
+      return;
     }
+    showTokenGate('Token 无效（HTTP ' + resp.status + '），请核对 api.token');
+  } catch (e) {
+    showTokenGate('连接失败: ' + e.message);
   }
-  
-  // 绘制节点
-  for (const node of brainNodes) {
-    const pulse = Math.sin(time * 3 + node.phase) * 0.5 + 0.5;
-    const alpha = 0.4 + pulse * 0.4;
-    
-    // 光晕
-    const grad = ctx.createRadialGradient(node.currentX, node.currentY, 0, node.currentX, node.currentY, node.size * 3 * devicePixelRatio);
-    grad.addColorStop(0, `rgba(0, 229, 255, ${alpha * 0.3})`);
-    grad.addColorStop(1, 'transparent');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(node.currentX, node.currentY, node.size * 3 * devicePixelRatio, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // 核心
-    ctx.fillStyle = `rgba(0, 229, 255, ${alpha})`;
-    ctx.beginPath();
-    ctx.arc(node.currentX, node.currentY, node.size * devicePixelRatio, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  
-  // 中心核心
-  const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 60 * devicePixelRatio);
-  coreGrad.addColorStop(0, 'rgba(170, 0, 255, 0.3)');
-  coreGrad.addColorStop(0.5, 'rgba(0, 229, 255, 0.1)');
-  coreGrad.addColorStop(1, 'transparent');
-  ctx.fillStyle = coreGrad;
-  ctx.beginPath();
-  ctx.arc(cx, cy, 60 * devicePixelRatio, 0, Math.PI * 2);
-  ctx.fill();
-  
-  // 中心点
-  ctx.fillStyle = 'rgba(170, 0, 255, 0.8)';
-  ctx.beginPath();
-  ctx.arc(cx, cy, 4 * devicePixelRatio, 0, Math.PI * 2);
-  ctx.fill();
-  
-  // 绘制外层光晕环
-  for (let i = 0; i < 3; i++) {
-    const ringR = (80 + i * 40) * devicePixelRatio;
-    const ringAlpha = 0.05 - i * 0.015;
-    ctx.strokeStyle = `rgba(0, 229, 255, ${ringAlpha})`;
-    ctx.lineWidth = 1 * devicePixelRatio;
-    ctx.beginPath();
-    ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  
-  // 坐标更新
-  document.getElementById('brainCoord').textContent = 
-    `${cx.toFixed(3)} : ${cy.toFixed(3)}`;
-  document.getElementById('brainTheta').textContent = 
-    (time * 57.3 % 360).toFixed(1) + '°';
-  
-  requestAnimationFrame(drawBrain);
+  input.select();
 }
-drawBrain();
+
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+  return h;
+}
+
+// 统一 fetch 包装: 自动带 token；401/403 清 token 唤起连接面板并抛
+// unauthorized（调用方 catch 静默跳过本轮，避免解析 401 body 报错）
+async function authFetch(url, opts = {}) {
+  opts.headers = authHeaders(opts.headers);
+  const resp = await fetch(url, opts);
+  if (resp.status === 401 || resp.status === 403) {
+    if (!tokenGateVisible) {
+      localStorage.removeItem('ocos_token');
+      authToken = '';
+      showTokenGate('连接已失效，请重新输入 API Token');
+    }
+    throw new Error('unauthorized');
+  }
+  return resp;
+}
+
+// ═══════════════════════════════════════════════════════
+// （原大脑 canvas 动画已移除，2026-09-07 — 中央区域改为
+//  OCOS 上下文窗口：ctx-header 状态条 + ctxLog 对话流）
+// ═══════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════
 // 时钟
@@ -723,44 +719,56 @@ setInterval(() => {
 }, 1000);
 
 // ═══════════════════════════════════════════════════════
-// 对话系统
+// 对话系统（消息流渲染在中央上下文窗口 #ctxLog）
 // ═══════════════════════════════════════════════════════
-const chatMessages = document.getElementById('chatMessages');
+const chatMessages = document.getElementById('ctxLog');
 const chatInput = document.getElementById('chatInput');
 const sendBtn = document.getElementById('sendBtn');
+
+function _autosizeInput() {
+  chatInput.style.height = 'auto';
+  chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
+}
 
 function addMessage(text, isUser, isMock) {
   const div = document.createElement('div');
   div.className = 'chat-msg ' + (isUser ? 'user' : 'bot' + (isMock ? ' mock' : ''));
-  div.textContent = text;
+  const time = document.createElement('span');
+  time.className = 'msg-time';
+  time.textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  const body = document.createElement('span');
+  body.textContent = text;
+  div.appendChild(time);
+  div.appendChild(body);
   chatMessages.appendChild(div);
   chatMessages.scrollTop = chatMessages.scrollHeight;
-  // 保留更多历史消息
-  while (chatMessages.children.length > 20) chatMessages.firstChild.remove();
+  // 保留更多上下文历史
+  while (chatMessages.children.length > 50) chatMessages.firstChild.remove();
 }
 
 async function sendMessage() {
   const text = chatInput.value.trim();
   if (!text) return;
-  
+
   addMessage(text, true, false);
   chatInput.value = '';
+  _autosizeInput();
   sendBtn.disabled = true;
-  
+
   document.getElementById('brainState').textContent = '处理中';
   document.getElementById('brainSub').textContent = '神经脉冲分析中...';
-  
+
   try {
-    const resp = await fetch('/ocos/converse', {
+    const resp = await authFetch('/ocos/converse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text })
     });
     const j = await resp.json();
-    
+
     document.getElementById('brainState').textContent = '回应中';
     document.getElementById('brainSub').textContent = '生成神经响应...';
-    
+
     if (j.success) {
       addMessage(j.data.reply, false, j.data.mock);
       updateLLMStatus(j.data.provider, j.data.mock);
@@ -768,9 +776,11 @@ async function sendMessage() {
       addMessage('错误: ' + j.message, false, false);
     }
   } catch (e) {
-    addMessage('连接失败（ocos-server 在跑吗？）', false, false);
+    if (e.message !== 'unauthorized') {
+      addMessage('连接失败（ocos-server 在跑吗？）', false, false);
+    }
   }
-  
+
   sendBtn.disabled = false;
   chatInput.focus();
   document.getElementById('brainState').textContent = '待命中';
@@ -778,7 +788,14 @@ async function sendMessage() {
 }
 
 sendBtn.onclick = sendMessage;
-chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
+// Enter 发送 · Shift+Enter 换行（多行输入）
+chatInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+chatInput.addEventListener('input', _autosizeInput);
 
 function updateLLMStatus(provider, mock) {
   const pill = document.getElementById('llmPill');
@@ -797,7 +814,7 @@ function updateLLMStatus(provider, mock) {
 // ═══════════════════════════════════════════════════════
 async function refreshAll() {
   try {
-    const introResp = await fetch('/ocos/introspect');
+    const introResp = await authFetch('/ocos/introspect');
     const intro = await introResp.json();
     const d = intro.data;
     
@@ -806,6 +823,9 @@ async function refreshAll() {
     document.getElementById('beliefCount').textContent = mem.belief_count || 0;
     document.getElementById('patternCount').textContent = mem.pattern_count || 0;
     document.getElementById('episodeBar').style.width = Math.min(100, (mem.episode_count || 0) / 5) + '%';
+    // 上下文窗口头部徽章
+    document.getElementById('ctxEpisodes').textContent = 'EPI ' + (mem.episode_count || 0);
+    document.getElementById('ctxBeliefs').textContent = 'BEL ' + (mem.belief_count || 0);
     
     const sk = d.self_knowledge || '';
     const lines = sk.split('\n').filter(l => l.trim()).slice(0, 3);
@@ -829,13 +849,15 @@ async function refreshAll() {
     }
     
     const [goalsResp, pendingResp] = await Promise.all([
-      fetch('/ocos/summary'),
-      fetch('/ocos/approvals')
+      authFetch('/ocos/summary'),
+      authFetch('/ocos/approvals')
     ]);
     const goals = await goalsResp.json();
     const pending = await pendingResp.json();
     
     const goalList = goals.data?.goals || {};
+    document.getElementById('ctxGoals').textContent =
+      'GOAL ' + ((goalList.ACTIVE || 0) + (goalList.PENDING || 0));
     if (goalList.ACTIVE || goalList.PENDING) {
       document.getElementById('goalsContainer').innerHTML = `
         <div class="goal-card">
@@ -847,8 +869,20 @@ async function refreshAll() {
     }
     
     const pendList = pending.data?.pending || [];
+    const pendMode = pending.data?.mode || 'ask';
+    const pendTitle = document.querySelector('#pendingContainer').previousElementSibling;
+    // P2-UX: auto 模式徽章 — 让用户知道待批项会秒级自动通过，无需手动点
+    if (pendTitle && pendTitle.classList.contains('section-title')) {
+      pendTitle.innerHTML = '待批请求' + (pendMode === 'auto'
+        ? ' <span style="font-size:9px;color:var(--amber);border:1px solid rgba(255,171,0,.3);border-radius:3px;padding:1px 5px">自动审批中</span>'
+        : '');
+    }
     if (pendList.length > 0) {
-      document.getElementById('pendingContainer').innerHTML = pendList.map(p => `
+      document.getElementById('pendingContainer').innerHTML =
+        (pendMode === 'auto'
+          ? '<div style="font-size:9px;color:var(--muted);margin-bottom:6px">⚙ 全自动审批已开启：以下待批项数秒内将自动通过，无需手动操作</div>'
+          : '') +
+        pendList.map(p => `
         <div class="pending-card">
           <div class="pending-id">${p.id}</div>
           <div class="pending-text">${(p.text || '').slice(0, 50)}</div>
@@ -858,6 +892,12 @@ async function refreshAll() {
           </div>
         </div>
       `).join('');
+    } else if (pendMode === 'auto') {
+      document.getElementById('pendingContainer').innerHTML =
+        '<div style="color:var(--muted);font-size:10px;padding:8px 0;line-height:1.6">全自动审批（个人模式）运行中：待批项入队后数秒内自动通过。<br>如需人工审批，设 OCOS_APPROVAL_MODE=ask 并重启 daemon。</div>';
+    } else {
+      document.getElementById('pendingContainer').innerHTML =
+        '<div style="color:var(--muted);font-size:10px;text-align:center;padding:16px">无待批项</div>';
     }
     
     const daemon = goals.data?.daemon || {};
@@ -883,13 +923,100 @@ async function refreshAll() {
     }
     
   } catch (e) {
-    console.error('Refresh failed:', e);
+    if (e.message !== 'unauthorized') console.error('Refresh failed:', e);
   }
 }
 
+// ═══════════════════════════════════════════════════════
+// 目标执行结果回推（CHAT-ROUTE FIX 2026-09-07）—
+// 轮询 goal_result 增量流，新结果以 bot 消息追加对话流，
+// 兑现"结果自动出现在本对话"。
+// 2026-09-08 执行可见性: feed.activity 驱动常驻状态徽章 —
+// 区分"执行中 / 待命 / 后台离线"，空闲与断连不再混淆。
+// ═══════════════════════════════════════════════════════
+let _feedSince = null;      // null = 首刷只校准时间不回放历史
+let _feedPolling = false;
+let _lastActiveGoalId = null;
+
+function updateActivityBadge(act) {
+  const chip = document.getElementById('ctxActivity');
+  if (!chip) return;
+  const g = act.active_goal;
+  const d = act.daemon || {};
+  if (g) {
+    chip.textContent = `⟳ 执行中·${Math.round(g.elapsed_s || 0)}s`;
+    chip.title = `目标 ${g.id}（${g.origin || 'SELF'}）：${g.description}`;
+    chip.className = 'ctx-badge executing';
+    // 认领转换提示（执行窗口短于轮询时后端 progress 消息兜底）
+    if (_lastActiveGoalId !== g.id) {
+      _lastActiveGoalId = g.id;
+      addMessage(`⟳ 目标执行中（${g.origin || 'SELF'}）：${g.description}\n完成后结果自动回推本对话。`, false, false);
+    }
+  } else {
+    _lastActiveGoalId = null;
+    if (d.alive) {
+      const q = act.pending_goals ? `·${act.pending_goals} 排队` : '';
+      chip.textContent = `○ 待命${q}`;
+      chip.title = `daemon 心跳 ${d.age_s}s 前（cycle ${d.cycle}）— 后台运行正常`;
+      chip.className = 'ctx-badge';
+    } else {
+      const age = d.age_s != null ? `·心跳 ${d.age_s}s 前` : '';
+      chip.textContent = `⚠ 后台离线${age}`;
+      chip.title = 'daemon 心跳超时 — 服务可能已停止，执行将不可见';
+      chip.className = 'ctx-badge offline';
+    }
+  }
+}
+
+async function pollGoalFeed() {
+  if (_feedPolling) return;
+  _feedPolling = true;
+  try {
+    const q = _feedSince ? `?since=${encodeURIComponent(_feedSince)}` : '';
+    const r = await authFetch(`/ocos/converse/feed${q}`);
+    const d = await r.json();
+    const items = (d.data && d.data.items) || [];
+    if (_feedSince === null) {
+      _feedSince = (d.data && d.data.server_time) || new Date().toISOString();
+    } else if (items.length > 0) {
+      for (const it of items) {
+        const mark = it.success ? '⚙' : '✗';
+        addMessage(`${mark} 目标执行结果\n${it.decision}`, false, !it.success);
+      }
+      _feedSince = (d.data.server_time) || _feedSince;
+    } else {
+      _feedSince = (d.data && d.data.server_time) || _feedSince;
+    }
+    if (d.data && d.data.activity) updateActivityBadge(d.data.activity);
+  } catch (e) {
+    if (e.message !== 'unauthorized') console.debug('feed poll skip:', e.message);
+  } finally {
+    _feedPolling = false;
+  }
+}
+setInterval(pollGoalFeed, 6000);
+
 async function decide(pid, action) {
-  await fetch(`/ocos/approvals/${pid}/${action}`, { method: 'POST' });
-  refreshAll();
+  // P2-UX (2026-09-08「无法选中」): auto 审批模式下待批项秒级被 daemon
+  // 自动通过，点击时 404 属预期 — 必须给用户可见反馈，不能静默吞掉
+  try {
+    const resp = await authFetch(`/ocos/approvals/${pid}/${action}`, { method: 'POST' });
+    if (!resp.ok) {
+      // 404 = not found or already decided（auto 模式数秒内自动通过）
+      addMessage(`ℹ ${pid} 已被处理，无需手动决策（自动审批模式下待批项通常数秒内自动通过，属正常现象）`, false, false);
+      refreshAll();
+      return;
+    }
+    addMessage(`${action === 'approve' ? '✓ 已批准' : '✗ 已拒绝'} ${pid}`, false, false);
+    refreshAll();
+  } catch (e) {
+    if (String(e.message || e).includes('unauthorized')) {
+      addMessage('⚠ 审批失败：连接已失效，请重新输入 Token', false, false);
+    } else {
+      addMessage(`⚠ 审批请求失败: ${e}`, false, false);
+      refreshAll();
+    }
+  }
 }
 
 async function runSelfImprove() {
@@ -898,7 +1025,7 @@ async function runSelfImprove() {
   btn.textContent = '自省中...';
   
   try {
-    const j = await (await fetch('/ocos/self-improve', { method: 'POST' })).json();
+    const j = await (await authFetch('/ocos/self-improve', { method: 'POST' })).json();
     const d = j.data;
     if (d.proposals?.length) {
       addMessage(`自省完成，${d.proposals.length} 条提案进入待批队列`, false, d.mock);
@@ -914,21 +1041,26 @@ async function runSelfImprove() {
   btn.textContent = '⟳ 自省升级';
 }
 
-// 出站消息轮询 - 发送到右侧"最近交互"而不是聊天窗口
+// 出站消息轮询 — result/proposal/report 进右侧"最近突触"，
+// progress（目标认领/执行起点，2026-09-08）进中央对话流
 let outboxCursor = 0;
 async function pollOutbox() {
   try {
-    const j = await (await fetch(`/ocos/outbox?after=${outboxCursor}`)).json();
+    const j = await (await authFetch(`/ocos/outbox?after=${outboxCursor}`)).json();
     for (const m of j.data.messages) {
       // 过滤错误日志，只添加成功或用户友好的消息
       const content = m.content || '';
       if (content && !content.includes('LLM 规划失败') && !content.includes('proxy') && !content.includes("'status': 'failed'") && !content.includes('"status": "failed"')) {
+        if (m.kind === 'progress') {
+          addMessage(content, false, false);       // 执行起点 → 对话流
+        }
         const recentEl = document.getElementById('recentEpisodes');
         if (recentEl) {
           const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+          const mark = m.kind === 'progress' ? '⟳' : '✓';
           const div = document.createElement('div');
           div.className = 'episode-item';
-          div.innerHTML = `<span class="time">${time}</span><span class="status ok">✓</span><span>${content.slice(0, 40)}...</span>`;
+          div.innerHTML = `<span class="time">${time}</span><span class="status ok">${mark}</span><span>${content.slice(0, 40)}...</span>`;
           recentEl.prepend(div);
           // 限制显示数量
           while (recentEl.children.length > 10) recentEl.lastChild.remove();
@@ -939,8 +1071,17 @@ async function pollOutbox() {
   } catch (e) {}
 }
 setInterval(pollOutbox, 5000);
-pollOutbox();
+// 首刷校准游标（after=-1 只取 max rowid，不回放存量）再开始增量轮询
+(async () => {
+  try {
+    const j = await (await authFetch('/ocos/outbox?after=-1')).json();
+    outboxCursor = j.data.next_cursor || 0;
+  } catch (e) {}
+  pollOutbox();
+})();
 
+// 启动: 无 token → 直接唤起连接面板（不依赖 prompt）
+if (!authToken) showTokenGate();
 refreshAll();
 setInterval(refreshAll, 5000);
 

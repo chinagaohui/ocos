@@ -5,10 +5,13 @@ Freeze Phase 48: 提供统一接口查询语义/模式/经验记忆
 """
 
 from __future__ import annotations
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,8 +42,8 @@ class RecallResult:
 class ConflictGroup:
     """冲突记忆组 (Blueprint v1.1 L2).
 
-    同一方案/任务存在成功与失败两种经验时, 不简单 top-k,
-    而是输出结构化冲突供 L8 Metacognition 决策.
+    同一方案/任务存在失败证据 (含全失败) 时, 不简单 top-k,
+    而是输出结构化冲突供 L8 Metacognition 决策 (O-10).
     """
     subject: str            # 冲突主题 (任务/方案描述)
     success_rate: float     # 历史成功率
@@ -108,42 +111,49 @@ class MemoryRecall:
         return results[:limit]
 
     def _recall_semantic(self, context: str | None, limit: int) -> list[RecallResult]:
-        """从语义记忆中召回."""
+        """从语义记忆中召回.
+
+        O-1: KnowledgeEntry 的可展示字段是 statement（无 content 属性）。
+        O-11: 中文无分词，整句 keyword 对 scope_domain 精确匹配恒空——
+        长 keyword（>24 字符，多为未分词中文整句）跳过域查询；兜底通道
+        扩大候选池（min_confidence 0.5，池 >=24），交给 bi-gram 过滤做实际匹配。
+        """
         results = []
         if self._hub and hasattr(self._hub, 'semantic') and self._hub.semantic:
             try:
                 store = self._hub.semantic
-                # 尝试按领域查询
+                # 尝试按领域查询（仅对疑似真实域标签的短 keyword）
                 if context:
                     keywords = self._extract_keywords(context)
                     for keyword in keywords[:3]:
+                        if len(keyword) > 24:
+                            continue  # O-11: 未分词长串对域精确匹配无意义
                         try:
                             entries = store.query_by_domain(keyword, limit=limit)
                             for entry in entries:
                                 results.append(RecallResult(
                                     source="semantic",
                                     relevance=entry.confidence if hasattr(entry, 'confidence') else 0.5,
-                                    content=entry.content if hasattr(entry, 'content') else str(entry),
+                                    content=getattr(entry, "statement", None) or str(entry),
                                     metadata={"id": entry.id if hasattr(entry, 'id') else None},
                                 ))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning("Semantic domain query failed: %s", e)
 
-                # 兜底：查询高置信度条目
+                # 兜底：扩大候选池，由 bi-gram 过滤完成中文语境的实际匹配
                 if not results:
-                    entries = store.query_by_confidence(min_confidence=0.7, limit=limit)
+                    entries = store.query_by_confidence(min_confidence=0.5, limit=max(limit, 24))
                     for entry in entries:
                         results.append(RecallResult(
                             source="semantic",
                             relevance=entry.confidence if hasattr(entry, 'confidence') else 0.7,
-                            content=entry.content if hasattr(entry, 'content') else str(entry),
+                            content=getattr(entry, "statement", None) or str(entry),
                             metadata={"id": entry.id if hasattr(entry, 'id') else None},
                         ))
                 # FIX-09: bi-gram 相关性过滤
                 results = self._filter_by_relevance(results, context, min_score=0.12)
             except Exception as e:
-                import logging
-                logging.debug(f"Semantic recall failed: {e}")
+                logger.warning("Semantic recall failed: %s", e)
 
         return results
 
@@ -165,8 +175,7 @@ class MemoryRecall:
                 # FIX-09: bi-gram 相关性过滤
                 results = self._filter_by_relevance(results, context, min_score=0.15)
             except Exception as e:
-                import logging
-                logging.debug(f"Pattern recall failed: {e}")
+                logger.warning("Pattern recall failed: %s", e)
 
         return results
 
@@ -202,13 +211,16 @@ class MemoryRecall:
             # FIX-09: bi-gram 相关性过滤
             results = self._filter_by_relevance(results, context, min_score=0.15)
         except Exception as e:
-            import logging
-            logging.debug(f"Experience recall failed: {e}")
+            logger.warning("Experience recall failed: %s", e)
 
         return results
 
     def _recall_user(self) -> Optional[RecallResult]:
-        """召回用户画像摘要."""
+        """召回用户画像摘要.
+
+        设计确认 (O-13): 画像恒注入且 relevance=1.0 置顶，不参与 bi-gram
+        过滤——用户画像属于"总是相关"的背景知识，非按上下文检索的记忆。
+        """
         if self._user_memory:
             try:
                 summary = self._user_memory.summarize()
@@ -219,8 +231,8 @@ class MemoryRecall:
                         content=summary,
                         metadata={"type": "user_profile"},
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("User recall failed: %s", e)
         return None
 
     @staticmethod
@@ -267,20 +279,30 @@ class MemoryRecall:
                 expanded.add(syn)
         return expanded
 
-    def _dynamic_threshold(self, hub: Any) -> float:
-        """FIX-16: 根据记忆密度动态调整阈值 — 记忆多时放宽, 少时严格."""
+    def _dynamic_threshold(self, hub: Any) -> Optional[float]:
+        """FIX-16/O-12: 根据记忆密度动态调整阈值 — 记忆多时放宽, 少时严格.
+
+        O-12: 统计基数覆盖全部四库 (episode/belief/semantic/pattern).
+        返回 None 表示无密度数据 (无 hub / get_stats 异常), 调用方回退到
+        通道默认 min_score.
+        """
         if not hub or not hasattr(hub, 'get_stats'):
-            return 0.15
+            return None
         try:
             stats = hub.get_stats()
-            total = stats.get('episode_count', 0) + stats.get('belief_count', 0)
+            total = (
+                stats.get('episode_count', 0)
+                + stats.get('belief_count', 0)
+                + stats.get('semantic_count', 0)
+                + stats.get('pattern_count', 0)
+            )
             if total > 1000:
                 return 0.10  # 记忆丰富 → 放宽阈值
             elif total < 50:
                 return 0.25  # 记忆稀疏 → 严格过滤
             return 0.15
         except Exception:
-            return 0.15
+            return None
 
     def _filter_by_relevance(self, results: list[RecallResult],
                              context: str | None, min_score: float = 0.15
@@ -288,9 +310,10 @@ class MemoryRecall:
         """FIX-09/16: 按 bi-gram 重叠度过滤召回结果（FIX-16: 动态阈值 + 同义词扩展）."""
         if not context:
             return results
-        # FIX-16: 动态阈值 — 根据记忆密度调整
+        # FIX-16: 动态阈值 — O-3 修复: 有密度数据时动态阈值直接生效
+        # (稀疏→0.25 严格 / 丰富→0.10 放宽), 无数据时回退通道默认 min_score
         dynamic_min = self._dynamic_threshold(self._hub)
-        final_min = min(min_score, dynamic_min)  # 取更严格的
+        final_min = dynamic_min if dynamic_min is not None else min_score
         filtered = []
         for r in results:
             score = self._bi_gram_overlap(context, r.content)
@@ -374,7 +397,7 @@ class MemoryRecall:
                     evidence_count=succ + fail,
                     success_count=succ,
                     fail_count=fail,
-                    conflict=0.0 < rate < 1.0,
+                    conflict=rate < 1.0,  # O-10: 全失败(rate=0)同样进入 conflict_set
                 )
                 if group.conflict:
                     conflict_set.append(group)

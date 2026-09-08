@@ -44,7 +44,8 @@ from rich.panel import Panel
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import OptionList, RichLog, Static, TextArea
+from textual.screen import ModalScreen
+from textual.widgets import Input, OptionList, RichLog, Static, TextArea
 from textual.widgets.option_list import Option
 
 API_BASE = os.getenv("OCOS_API_BASE", "http://localhost:8900")
@@ -94,9 +95,13 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "deny": ("<n|id>", "拒绝待批动作"),
     "self-improve": ("", "触发自省升级提案"),
     "outbox": ("", "最近的 daemon 出站消息"),
+    "new": ("", "开启新会话（当前会话保留可恢复）"),
+    "reset": ("", "清空当前会话的消息记录"),
+    "abort": ("", "中止当前正在运行的轮（同 Esc）"),
+    "copy": ("<n>", "复制最近 n 条对话到剪贴板（默认10；同 Ctrl+Y）"),
     "quit": ("", "退出（同 Ctrl+D）"),
 }
-ALIASES = {"bg": "background", "exit": "quit", "?": "help"}
+ALIASES = {"bg": "background", "exit": "quit", "?": "help", "stop": "abort"}
 
 BUSY_TIP = "(tip) agent 工作时输入的消息会中断当前运行 — /busy queue 可改为排队, /busy steer 纠偏"
 
@@ -177,6 +182,13 @@ class SessionStore:
     def rename(self, sid: str, title: str) -> None:
         conn = self._conn()
         conn.execute("UPDATE sessions SET title=? WHERE id=?", (title, sid))
+        conn.commit()
+        conn.close()
+
+    def clear_session(self, sid: str) -> None:
+        """清空指定会话的消息记录（保留会话条目供恢复）。"""
+        conn = self._conn()
+        conn.execute("DELETE FROM messages WHERE session_id=?", (sid,))
         conn.commit()
         conn.close()
 
@@ -331,6 +343,77 @@ class InputArea(TextArea):
         return text
 
 
+class SessionPicker(ModalScreen[str | None]):
+    """Ctrl+P 会话选择器 — OpenClaw/Ctrl+P 风格的过滤式会话切换。
+
+    顶部过滤框（Input）+ 主 OptionList：↑↓ 选择、Enter 切换、Esc 关闭。
+    返回选中的 session id 或 None。
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "关闭", priority=True),
+        Binding("ctrl+j,enter", "submit_highlighted", "切换", priority=True),
+    ]
+
+    def __init__(self, store: SessionStore, current: str) -> None:
+        super().__init__()
+        self.store = store
+        self.current = current
+
+    def compose(self) -> ComposeResult:
+        yield Static("会话选择 — 输入过滤 · ↑↓ 选择 · Enter 切换 · Esc 关闭",
+                     id="sp-title")
+        yield Input(placeholder="过滤 (id 前缀 / 标题关键字)...", id="sp-filter")
+        yield OptionList(id="sp-list")
+
+    def _session_rows(self, query: str = "") -> list[dict]:
+        q = query.strip().lower()
+        rows = self.store.list_sessions(limit=50)
+        if not q:
+            return rows
+        out = []
+        for r in rows:
+            title = (r["title"] or "").lower()
+            if q in r["id"].lower() or q in title:
+                out.append(r)
+        return out
+
+    def _refresh(self) -> None:
+        query = self.query_one("#sp-filter", Input).value
+        ol = self.query_one("#sp-list", OptionList)
+        ol.clear_options()
+        for r in self._session_rows(query):
+            mark = "▸" if r["id"] == self.current else " "
+            title = r["title"] or "（未命名）"
+            ol.add_option(Option(
+                f" {mark} {r['id']}  {title}  ({r['messages']} msgs, {r['updated_at'][:16]}",
+                id=r["id"]))
+        if ol.option_count:
+            ol.highlighted = 0
+
+    def on_mount(self) -> None:
+        self._refresh()
+        self.query_one("#sp-filter", Input).focus()
+
+    def on_input_changed(self, _event: Input.Changed) -> None:
+        self._refresh()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id:
+            self.dismiss(str(event.option.id))
+
+    def action_submit_highlighted(self) -> None:
+        ol = self.query_one("#sp-list", OptionList)
+        if not ol.option_count:
+            self.dismiss(None)
+            return
+        option = ol.get_option_at_index(ol.highlighted or 0)
+        self.dismiss(str(option.id) if option.id else None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ChatScreen(App):
     """⚕ OCOS — Hermes Agent CLI 风格对话界面。"""
 
@@ -338,6 +421,8 @@ class ChatScreen(App):
     Screen { background: #101216; }
     #chat { height: 1fr; padding: 0 1; background: #101216; }
     #thinking { display: none; height: 1; padding: 0 1; color: yellow; background: #101216; }
+    #typing { display: none; height: auto; max-height: 14; padding: 0 1;
+              color: #c8ccd4; background: #101216; }
     #complete {
         display: none; height: auto; max-height: 12;
         background: #16191f; border-top: solid #2a2f3a;
@@ -358,6 +443,14 @@ class ChatScreen(App):
         Binding("ctrl+d", "quit", "退出", priority=True),
         Binding("ctrl+g", "editor", "外部编辑器", priority=True),
         Binding("ctrl+l", "clear", "清屏", priority=True),
+        Binding("escape", "abort", "中止当前轮", priority=True),
+        Binding("ctrl+p", "session_picker", "会话选择", priority=True),
+        Binding("ctrl+y", "copy_chat", "复制对话", priority=True),
+        # 聊天区翻页：上下键保留给输入框历史/光标，聊天用 PageUp/PageDown 独立翻动
+        Binding("pageup", "chat_page_up", "聊天上翻", priority=True),
+        Binding("pagedown", "chat_page_down", "聊天下翻", priority=True),
+        Binding("home", "chat_page_home", "聊天置顶", priority=True),
+        Binding("end", "chat_page_end", "聊天置底", priority=True),
     ]
 
     def __init__(self, resume: str | None = None, api_base: str = API_BASE) -> None:
@@ -395,6 +488,7 @@ class ChatScreen(App):
     def compose(self) -> ComposeResult:
         yield RichLog(id="chat", wrap=True, markup=False, highlight=False, min_width=60)
         yield Static("", id="thinking")
+        yield Static("", id="typing")
         yield OptionList(id="complete")
         yield Static("", id="status")
         with Static("", id="input-row"):
@@ -405,6 +499,19 @@ class ChatScreen(App):
     @property
     def chat_log(self) -> RichLog:
         return self.query_one("#chat", RichLog)
+
+    # ── 聊天区翻页（PageUp/PageDown/Home/End） ───────────────────────
+    def action_chat_page_up(self) -> None:
+        self.chat_log.scroll_page_up()
+
+    def action_chat_page_down(self) -> None:
+        self.chat_log.scroll_page_down()
+
+    def action_chat_page_home(self) -> None:
+        self.chat_log.scroll_home()
+
+    def action_chat_page_end(self) -> None:
+        self.chat_log.scroll_end()
 
     @property
     def input_area(self) -> InputArea:
@@ -582,13 +689,16 @@ class ChatScreen(App):
 
         status = Text(" ⚕ ")
         status.append(model, style="bold cyan")
+        status.append(f" │ #{(self.session_id or '')[-11:]}", style="dim")
         if width >= 76:
             status.append(f" │ {_fmt_tokens(used)}/{_fmt_tokens(MAX_CONTEXT_TOKENS)} │ ", style="dim")
             status.append(bar)
-            status.append(f" │ n/a │ {dur}", style="dim")
+            status.append(f" │ {dur}", style="dim")
             if bg:
                 status.append(f" │ ▶{bg}", style="magenta")
-            if not self.daemon_alive:
+            if self.daemon_alive:
+                status.append(f" │ daemon r{self.daemon_cycle}", style="dim")
+            else:
                 status.append(" │ ⚠ daemon 离线", style="yellow")
         elif width >= 52:
             status.append(f" │ {_fmt_tokens(used)} │ ", style="dim")
@@ -641,29 +751,56 @@ class ChatScreen(App):
         self._update_status()
 
     async def _do_turn(self, message: str) -> None:
+        # FIX: 流式 SSE — token 打字机（对齐 OpenClaw 流式效应）
+        reply = ""
+        provider = self.provider
+        streamed = ""
+        typing = self.query_one("#typing", Static)
         try:
             async with httpx.AsyncClient(base_url=self.api_base, timeout=CONVERSE_TIMEOUT,
                                          trust_env=False, headers=_api_headers()) as client:
-                # FIX-8: 携带会话 id → 服务端据此把对话写入同 session_id 的记忆
-                resp = await client.post(
-                    "/ocos/converse",
-                    json={"message": message, "session_id": self.session_id})
-            if resp.status_code != 200:
-                raise RuntimeError(f"HTTP {resp.status_code}")
-            data = resp.json().get("data", {})
-            reply = data.get("reply", "（无回复）")
-            self.provider = data.get("provider") or self.provider
+                async with client.stream(
+                        "POST", "/ocos/converse/stream",
+                        json={"message": message, "session_id": self.session_id}) as resp:
+                    if resp.status_code != 200:
+                        body = (await resp.aread()).decode("utf-8", "replace")[:200]
+                        raise RuntimeError(f"HTTP {resp.status_code}: {body}")
+                    event_name, data_buf = "message", ""
+                    async for line in resp.aiter_lines():
+                        if line == "":
+                            if event_name == "done":
+                                meta = json.loads(data_buf or "{}")
+                                reply = str(meta.get("reply", ""))
+                                provider = str(meta.get("provider") or provider)
+                            elif event_name == "error":
+                                raise RuntimeError(data_buf or "stream error")
+                            else:
+                                streamed += data_buf
+                                if streamed:
+                                    typing.display = True
+                                    typing.update(Text(_strip_markdown(streamed)))
+                            event_name, data_buf = "message", ""
+                        elif line.startswith("event: "):
+                            event_name = line[7:].strip()
+                        elif line.startswith("data: "):
+                            data_buf = line[6:]
         except asyncio.CancelledError:
+            typing.display = False
             raise
         except Exception as e:
             self.turn_active = False
+            typing.display = False
             self._stop_spinner(ok=False)
             self._sys_line(f"[red]连接失败（ocos-server 在跑吗？）{escape(str(e)[:120])}[/red]")
             self._drain_queue()
             return
 
+        typing.display = False
+        if not reply:
+            reply = streamed or "（无回复）"
         self.turn_active = False
         self._stop_spinner(ok=True)
+        self.provider = provider
         self._bot_line(reply)
         self.messages.append({"role": "assistant", "kind": "text", "content": reply})
         self.store.add_message(self.session_id, "assistant", reply)
@@ -696,6 +833,10 @@ class ChatScreen(App):
                     self._pending_approvals = approvals.json().get("data", {}).get("pending", [])
         except Exception:
             return
+        self._render_outbox_rows(rows)
+
+    def _render_outbox_rows(self, rows: list) -> None:
+        """渲染 outbox 增量行（D1 kind 分类面板；可独立测试）。"""
         for row in rows:
             self._outbox_cursor = max(self._outbox_cursor, row.get("rid", 0))
             content = str(row.get("content", "")).strip()
@@ -703,9 +844,24 @@ class ChatScreen(App):
                 continue
             self._recent_outbox.append(row)
             self._recent_outbox = self._recent_outbox[-20:]
-            # UX-J: 目标执行结果（sender=ocos）→ 对话流圆角面板回推，
-            # 承接 converse 里"完成后呈现结果"的承诺；其余留 /outbox 查看
-            self._panel(_strip_markdown(content), "目标执行结果", border="cyan")
+            # D1（2026-09-07）: 按 kind 分类面板 — 结果/提议/报告不再
+            # 混用同一标题（此前所有 outbound 都标"目标执行结果"）。
+            # 无 kind 的历史行按 result 兜底（行为兼容）。
+            kind = str(row.get("kind") or "result")
+            if kind == "proposal":
+                self._panel(_strip_markdown(content), "主动提议",
+                            border="yellow")
+            elif kind == "report":
+                self._panel(_strip_markdown(content), "成长报告",
+                            border="green")
+            elif kind == "progress":
+                # P1 执行可见性（2026-09-08）: 目标认领/执行起点 —
+                # 独立面板样式，不冒充"目标执行结果"
+                self._panel(_strip_markdown(content), "⟳ 目标认领",
+                            border="cyan")
+            else:
+                self._panel(_strip_markdown(content), "目标执行结果",
+                            border="cyan")
         if self.turn_active and self._pending_approvals and not self._approval_hinted:
             # 待批动作需要用户操作 — 每轮只提示一次，细节在 /approvals
             self._approval_hinted = True
@@ -730,6 +886,8 @@ class ChatScreen(App):
             "approvals": self._cmd_approvals, "approve": self._cmd_approve,
             "deny": self._cmd_deny, "self-improve": self._cmd_self_improve,
             "outbox": self._cmd_outbox, "quit": self.action_quit,
+            "new": self._cmd_new, "reset": self._cmd_reset, "abort": self._cmd_abort,
+            "copy": self._cmd_copy,
         }.get(name)
         if handler is None:
             self._sys_line(f"[red]未知命令: /{escape(name)} — /help 查看命令[/red]")
@@ -746,9 +904,13 @@ class ChatScreen(App):
                 body.append(f" {args}", style="dim italic")
             body.append(f"  {desc}\n")
         body.append("\n 快捷键: ", style="dim")
-        body.append("Alt+Enter/Ctrl+J 换行 · Ctrl+G 编辑器 · Ctrl+C 中断(双击退出) · Ctrl+D 退出 · Tab 补全\n",
+        body.append("↑/↓ 输入框历史/光标 · PgUp/PgDn 聊天翻页 · Home/End 聊天置顶/置底 · "
+                    "Esc 中止当前轮 · Ctrl+P 会话选择 · Ctrl+Y 复制对话 · "
+                    "Alt+Enter/Ctrl+J 换行 · Ctrl+G 编辑器 · Ctrl+C 中断(2 次退出) · "
+                    "Ctrl+D 退出 · Tab 补全\n",
                     style="dim")
-        body.append(" 鼠标: 默认终端原生选区，直接选中复制、右键粘贴；--mouse 切换为程序内鼠标",
+        body.append(" 鼠标: 滚轮/滚动条翻动聊天区 · Shift+拖拽 原生选中复制 · "
+                    "Shift+Ctrl+V/中键 粘贴 · Ctrl+Y 或 /copy 程序内复制\n",
                     style="dim")
         self.chat_log.write(Panel(body, title="⚕ 命令", title_align="left",
                                   border_style="dim", box=rich_box.ROUNDED, padding=(0, 1)))
@@ -810,7 +972,7 @@ class ChatScreen(App):
 
     def _cmd_resume(self, arg: str) -> None:
         if not arg:
-            self._sys_line("[dim]用法: /resume <id|title>（/sessions 查看）[/dim]")
+            self._sys_line("[dim]用法: /resume <id|title>（/sessions 查看，或 Ctrl+P）[/dim]")
             return
         sid = self.store.find(arg)
         if not sid:
@@ -820,6 +982,41 @@ class ChatScreen(App):
         msgs = self.store.get_messages(sid)
         self.messages = msgs
         self._render_recap(msgs)
+
+    def _cmd_new(self, arg: str) -> None:
+        """开启新会话，当前会话保留供 /resume 或 Ctrl+P 恢复。"""
+        self.session_id = self.store.create_session()
+        self.messages = []
+        self.turn_tokens = 0
+        self.chat_log.clear()
+        self._sys_line(f"[dim]已开启新会话 {escape(self.session_id)}（原会话可 /sessions、Ctrl+P 恢复）[/dim]")
+
+    def _cmd_reset(self, arg: str) -> None:
+        """清空当前会话消息记录（会话条目保留）。"""
+        if self.turn_active:
+            self._cancel_turn()
+        self.store.clear_session(self.session_id)
+        self.messages = []
+        self.turn_tokens = 0
+        self.chat_log.clear()
+        self._sys_line("[dim]当前会话已重置（历史消息清空）[/dim]")
+
+    def _cmd_abort(self, arg: str) -> None:
+        self.action_abort()
+
+    async def _cmd_copy(self, arg: str) -> None:
+        n = 10
+        if arg:
+            try:
+                n = max(1, min(int(arg), 500))
+            except ValueError:
+                n = 10
+        text = self._chat_text(tail=n)
+        if not text:
+            self._sys_line("[dim]暂无对话可复制[/dim]")
+            return
+        await self.copy_to_clipboard(text)
+        self._sys_line(f"[dim]已复制最近 {n} 条对话到剪贴板[/dim]")
 
     def _cmd_save(self, arg: str) -> None:
         path = Path(arg) if arg else (Path.home() / ".ocos" /
@@ -1027,6 +1224,50 @@ class ChatScreen(App):
         self._last_ctrl_c = now
         self._sys_line("[dim]再按一次 Ctrl+C (2s 内) 强制退出 · Ctrl+D 退出[/dim]")
 
+    def action_abort(self) -> None:
+        """Esc：优先关闭补全下拉；运行中则中止当前轮（对齐 OpenClaw Esc）。"""
+        if self.completion_open:
+            self._hide_completions()
+            self.input_area.focus()
+            return
+        if self.turn_active:
+            self._cancel_turn()
+        else:
+            self.input_area.focus()
+
+    async def action_session_picker(self) -> None:
+        """Ctrl+P：可过滤的会话选择器，选择后切换并 recap（对齐 OpenClaw Ctrl+P）。"""
+        await self.push_screen(
+            SessionPicker(self.store, self.session_id),
+            callback=self._on_session_picked)
+
+    def _on_session_picked(self, sid: str | None) -> None:
+        if sid and sid != self.session_id:
+            self.session_id = sid
+            msgs = self.store.get_messages(sid)
+            self.messages = list(msgs)
+            self._render_recap(msgs)
+        self.input_area.focus()
+
+    async def action_copy_chat(self) -> None:
+        """Ctrl+Y / /copy[:n] — 把当前会话最近消息复制到系统剪贴板。
+
+        程序内兜底复制（不依赖终端原生的 Shift+拖选）。
+        """
+        await self.copy_to_clipboard(self._chat_text(tail=10))
+        self._sys_line("[dim]已复制最近对话到剪贴板（Ctrl+Y 复）[/dim]")
+
+    def _chat_text(self, tail: int = 10) -> str:
+        msgs = self.messages[-tail:]
+        if not msgs:
+            return ""
+        lines = []
+        for m in msgs:
+            who = "你" if m.get("role") == "user" else "OCOS"
+            content = str(m.get("content", ""))
+            lines.append(f"[{who}] {content}")
+        return "\n\n".join(lines)
+
     async def action_editor(self) -> None:
         editor = os.getenv("EDITOR", "vi")
         tmp = tempfile.NamedTemporaryFile("w", suffix=".md", delete=False)
@@ -1086,11 +1327,11 @@ def _redirect_console_logs() -> None:
 
 
 def run_tui(resume: str | None = None, host: str = "localhost", port: int = 8900,
-            mouse: bool = False) -> None:
+            mouse: bool = True) -> None:
     """启动 TUI（cmd_chat 入口）。退出后打印恢复摘要。
 
-    mouse=False（默认）不占用终端鼠标上报 — 原生选中/复制/右键粘贴可用；
-    传 mouse=True 则启用程序内鼠标（滚动/点击），终端选区会失效。
+    mouse=True（默认）启用程序内鼠标捕获 — 滚轮/滚动条可翻动聊天区；
+    仅当需要保留终端原生选中/复制/右键粘贴时传 mouse=False（或 CLI --no-mouse）。
     """
     _redirect_console_logs()
     app = ChatScreen(resume=resume, api_base=f"http://{host}:{port}")

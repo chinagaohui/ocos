@@ -38,6 +38,7 @@ class HealthLoop:
         homeostasis: Optional[HomeostasisManager] = None,
         interval_ticks: int = 100,
         db_path: Optional[str] = None,   # PW-3.1: 诊断循环需要 db 路径
+        self_check_interval_checks: int = 6,   # L2-1: 每 N 次体检跑一轮四层自检
     ) -> None:
         self._runtime = runtime
         self._examiner = examiner or CognitiveExaminer()
@@ -49,6 +50,12 @@ class HealthLoop:
         self._last_detail: dict[str, Any] = {}
         self._db_path = db_path
         self._diagnosis_summary: dict[str, Any] = {}
+        # L2-1: 四层断言式自检（红线回归/认知/因果链/活体），惰性装配
+        self._self_check_every = max(1, self_check_interval_checks)
+        self._check_count = 0
+        self._self_check_runner: Any = None
+        self._last_self_check: dict[str, Any] = {}
+        self._improve_summary: dict[str, Any] = {}   # L2-4 自改进提案统计
 
     # ── 对外只读状态 ─────────────────────────────────────────────────────────
 
@@ -61,6 +68,11 @@ class HealthLoop:
     def last_detail(self) -> dict[str, Any]:
         """最近一次体检的采集项（goal 栈深 / WM 占用 / 决策失败率等）。"""
         return dict(self._last_detail)
+
+    @property
+    def last_self_check(self) -> dict[str, Any]:
+        """L2-1: 最近一次四层自检摘要（未运行过为 {}）。"""
+        return dict(self._last_self_check)
 
     @property
     def alerts(self) -> AlertManager:
@@ -184,7 +196,35 @@ class HealthLoop:
             )
 
         self._last_finding = detected
+        self._run_self_check()
         return detected
+
+    # ── L2-1: 四层断言式自检（红线回归/认知/因果链/活体）─────────────────
+
+    def _run_self_check(self) -> None:
+        """每 N 次体检跑一轮 SelfCheckRunner；失败项经 record_self_check 告警。"""
+        self._check_count += 1
+        if self._check_count < self._self_check_every:
+            return
+        self._check_count = 0
+        try:
+            if self._self_check_runner is None:
+                from ocos.daemon.self_check import SelfCheckRunner
+                self._self_check_runner = SelfCheckRunner(db_path=self._db_path)
+            report = self._self_check_runner.run()
+            self._last_self_check = report.to_outcome()
+            from ocos.daemon.self_check import record_self_check
+            record_self_check(self._db_path, report, self._alerts)
+        except Exception as _sc_e:   # 自检装配/运行异常诚实降级，不中断体检
+            logger.debug("self_check skipped: %s", _sc_e)
+        # L2-4: 反思产物 → 自改进提案入待批（治理链守门 + 人工批准，
+        # V8 约束；失败不阻断体检）
+        try:
+            if self._db_path:
+                from ocos.daemon.improve_link import propose_from_reflections
+                self._improve_summary = propose_from_reflections(self._db_path)
+        except Exception as _im_e:
+            logger.debug("improve proposal skipped: %s", _im_e)
 
     # ── 采集辅助 ──────────────────────────────────────────────────────────────
 
