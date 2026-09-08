@@ -70,13 +70,13 @@ MasterAgent 不删除，按职能拆解：
 
 ## 六、分期执行清单（Migration Plan）
 
-| Phase | 内容 | 风险 | 验收门 |
-|---|---|---|---|
-| **P0 冻结生效**（立即，零代码） | 本文档生效；六条冻结令入项目记忆；审计结论入 ARCHITECTURE_FREEZE_PROTOCOL 体系 | 零 | 文档+记忆落盘确认 |
-| **P1 低风险 ARCHIVE 批次** | 归档零引用/被替代模块：agent/{attention,working_memory,episode_memory,memory_consolidation,belief_consolidation,learning_trigger,identity_anchor,adaptive_params,drift_detector,context_compressor,retry_policy}.py + engines/writer_engine.py + ResultUnderstandingLayer 接线点标记。形式按 AFP 归档惯例（标记 deprecated + 移入归档命名空间，不物理删除） | 低 | 全量回归绿（2787+4424）；生产服务无新增 WARNING/ERROR |
-| **P2 MERGE** | LifeCycleOrchestrator fatigue/proactive/shutdown 三职能迁入 daemon；原模块归档 | 中 | 行为级：疲劳触发 dream、主动输出、优雅关闭三项 E2E 不回归 |
-| **P3 RE-HOST** | daemon 侧 Learning/Consolidation Service 建立；LearningEngine 语义迁入；dream 宿主从 MasterAgent 移交 | 高（触碰 dream 生产闭环） | dream 全链 E2E：learn→persist→wisdom 落库证据不中断；learning rules 持久化行为等价 |
-| **P4 Single-Path Production Verification** | 单主链验证：断言生产无任何 MasterAgent 认知五步调用路径；tests/test_behavioral_acceptance_20260908.py 全绿；与既有 T1-T10 行为验收合并 | 中 | 验收通过后 DELETE 批次（ReasoningEngine 等四引擎+CognitiveBridge+DecisionLoop）方可启动 |
+| Phase | 内容 | 风险 | 验收门 | 状态 |
+|---|---|---|---|---|
+| **P0 冻结生效**（立即，零代码） | 本文档生效；六条冻结令入项目记忆；审计结论入 ARCHITECTURE_FREEZE_PROTOCOL 体系 | 零 | 文档+记忆落盘确认 | ✅ 2026-09-08 |
+| **P1 低风险 ARCHIVE 批次** | 归档零引用/被替代模块：agent/{attention,working_memory,episode_memory,memory_consolidation,belief_consolidation,learning_trigger,adaptive_params,drift_detector,context_compressor,retry_policy}.py + engines/writer_engine.py + ResultUnderstandingLayer 接线点标记。形式按 AFP 归档惯例（标记 deprecated + 移入归档命名空间，不物理删除） | 低 | 全量回归绿（2787+4424）；生产服务无新增 WARNING/ERROR | ✅ commit fdf451d（identity_anchor 精查后剔除重定级 🟢） |
+| **P2 MERGE** | LifeCycleOrchestrator fatigue/proactive/shutdown 三职能迁入 daemon；原模块归档 | 中 | 行为级：疲劳触发 dream、主动输出、优雅关闭三项 E2E 不回归 | ✅ commit c8e7317（fatigue/proactive 本就由 daemon tick 直接实现，仅 shutdown 转发需并入） |
+| **P3 RE-HOST** | daemon 侧 Learning/Consolidation Service 建立；dream 触发编排语义迁入；LearningEngine 语义暂驻 agent（渐进抽取第二段待后续） | 高（触碰 dream 生产闭环） | dream 全链 E2E：learn→persist→wisdom 落库证据不中断；learning rules 持久化行为等价 | ✅ commit c8e7317（**治理发现**：Phase 39 Governance Freeze 禁止 ocos/runtime import ocos.agent，service 宿主定为 daemon 编排层；l7/lifecycle 测试已改调 service） |
+| **P4 Single-Path Production Verification** | 单主链验证：断言生产无任何 MasterAgent 认知五步调用路径；tests/test_behavioral_acceptance_20260908.py 全绿；与既有 T1-T10 行为验收合并 | 中 | 验收通过后 DELETE 批次（ReasoningEngine 等四引擎+CognitiveBridge+DecisionLoop）方可启动 | ✅ commit c8e7317：test_single_path_convergence_20260908.py 六项断言全过（冻结令 1/2/3 + R2/R3 收敛态 + runtime 治理边界固化）；重启 E2E 正常；全量 7034 passed（2 失败为开发中 stimulus 文件，非本批范围）。DELETE 批次尚待用户立项 |
 
 ## 七、违冻条款（禁止事项）
 
