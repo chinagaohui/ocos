@@ -147,51 +147,9 @@ class TestGatewayValidatorChain:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 29a4.4: MemoryConsolidation full pipeline
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestConsolidationPipeline:
-    """四层管道：LTM → Retrieval → Compression → Token Budget。"""
-
-    def test_full_consolidation_flow(self):
-        from ocos.agent.memory_consolidation import (
-            AttentionDrivenRetrieval, ContextCompressor, MemoryConsolidationScheduler,
-        )
-
-        # L1: Long-term memory entries
-        ltm = []
-        for i in range(50):
-            ltm.append({
-                "content": f"experience-{i}: executed task with result {i % 3}",
-                "tags": [f"domain-{i % 4}"],
-                "importance": 0.3 + (i % 7) * 0.1,
-            })
-
-        # L1→L2: Retrieve by attention focus
-        retriever = AttentionDrivenRetrieval(max_results=30)
-        retrieval = retriever.retrieve("experience task", ltm)
-        assert retrieval.total_scanned == 50
-        assert len(retrieval.items) > 0
-
-        # L2→L3: Compress to token budget
-        compressor = ContextCompressor(token_budget=600)  # ~2400 chars
-        working = [{"content": it["content"], "importance": it.get("score", 0.5)}
-                   for it in retrieval.items]
-        compressed, stats = compressor.compress(working)
-
-        assert stats.compressed_tokens <= stats.budget, (
-            f"Budget exceeded: {stats.compressed_tokens} > {stats.budget}"
-        )
-        assert stats.compression_ratio > 0
-
-        # L3→Scheduler: Full cycle
-        scheduler = MemoryConsolidationScheduler(consolidation_interval=1)
-        c_items, c_stats = scheduler.consolidate(
-            working, compressor=ContextCompressor(token_budget=300),
-        )
-        assert scheduler.consolidation_count == 1
-        assert c_stats is not None
-
+# 29a4.4: MemoryConsolidation full pipeline — 已随收敛裁决 P1 归档
+# （ocos.agent.memory_consolidation → ocos/_archive/agent/，测试随功能归档，
+#   见 docs/COGNITIVE_RUNTIME_CONVERGENCE_DECISION_v1.0.md）
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 29a4.5: CapabilityAdapter retry/fallback
@@ -260,7 +218,6 @@ class TestFullIntegration:
         from ocos.capability.echo_agent import EchoAgent
         from ocos.constitution.statement_validator import StatementValidator
         from ocos.capability.lifecycle_manager import AgentLifecycleManager
-        from ocos.agent.memory_consolidation import ContextCompressor
 
         # 1. Discover + Register
         kg = KnowledgeGraph()
@@ -299,13 +256,7 @@ class TestFullIntegration:
         em.save(exp)
         assert em.query_by_capability("echo-cap")
 
-        # 7. Consolidate (optional: compress experience)
-        compressor = ContextCompressor(token_budget=500)
-        records = em.query_by_capability("echo-cap")
-        if records:
-            items = [{"content": r.get("id", str(r)), "importance": 0.5}
-                     for r in records]
-            compressed, stats = compressor.compress(items)
-            assert stats.compressed_tokens <= stats.budget
+        # 7. Consolidate — 已随收敛裁决 P1 归档（ContextCompressor），
+        #    经验沉淀现役由 dream 巩固链（agent_runtime Step10 + MemoryHub）承担
 
         em.close()

@@ -1,3 +1,7 @@
+# ARCHIVED（收敛裁决 P1，2026-09-08）— 本模块已冻结归档，非生产代码。
+# 依据: docs/COGNITIVE_RUNTIME_CONVERGENCE_DECISION_v1.0.md（FROZEN DECISION）
+# 禁止从生产路径 import 本模块（违冻条款见来源文档第七节）。
+
 """Phase 24-D: Memory Consolidation Pipeline — LTM→Working→Context 压缩管道。
 
 Freeze §5: 四层记忆上下文模型

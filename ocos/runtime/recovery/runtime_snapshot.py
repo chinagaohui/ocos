@@ -137,18 +137,30 @@ class SnapshotStore:
         path = self._base / f"{snapshot_id}.json"
         if not path.exists():
             return None
-        return RuntimeSnapshot.from_dict(json.loads(path.read_text()))
+        try:
+            return RuntimeSnapshot.from_dict(json.loads(path.read_text()))
+        except (json.JSONDecodeError, ValueError, OSError):
+            # 损坏快照诚实降级为不存在（恢复链不得被损坏数据杀死）
+            return None
 
     def latest(self) -> RuntimeSnapshot | None:
-        """加载最新快照（按文件名时间排序）。"""
+        """加载最新快照（按文件名时间排序）。
+
+        L3 自愈加固（2026-09-08）：crash-loop 期间写快照可被中断产生空/
+        截断文件——latest 跳过不可解析文件取次新，全部损坏时诚实返回
+        None（无快照可恢复 ≠ 起不来）。
+        """
         files = sorted(
             self._base.glob("*.json"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
-        if not files:
-            return None
-        return RuntimeSnapshot.from_dict(json.loads(files[0].read_text()))
+        for path in files:
+            try:
+                return RuntimeSnapshot.from_dict(json.loads(path.read_text()))
+            except (json.JSONDecodeError, ValueError, OSError):
+                continue
+        return None
 
     def latest_id(self) -> str | None:
         snap = self.latest()

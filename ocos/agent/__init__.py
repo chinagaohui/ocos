@@ -8,10 +8,8 @@ Agent 是整个 OCOS 的唯一意识主体。所有 Engine 是器官，Agent 是
 - IdentityAnchor — 身份锚点（BOOT 顺序第一个）
 - GoalStack — 6 级目标栈（MISSION→LONG→MID→SHORT→TASK→ACTION）
 - Goal (types) — 目标类型定义
-- Intent — 意图提取
-- Attention — 注意力管理器
-- AgentWorkingMemory — 工作记忆（意识内容）
-- EpisodeMemory — 情景记忆（经历片段）
+- AgentWorkingMemory → 已归档（ocos/_archive，现役为 runtime.context_manager.WorkingMemory）
+- EpisodeMemory → 已归档（ocos/_archive，现役为 memory/episode 家族）
 - CapabilityManager — 能力列表
 - ExecutionManager — 执行跟踪
 - LifeCycleOrchestrator — 生命周期编排器
@@ -31,9 +29,6 @@ from ocos.agent.interfaces import (
 from ocos.agent.goal_types import Goal, GoalLevel, GoalStatus
 from ocos.agent.goal_stack import GoalStack
 from ocos.agent.intent import Intent
-from ocos.agent.attention import Attention, FocusMode
-from ocos.agent.working_memory import AgentWorkingMemory, WorkItem
-from ocos.agent.episode_memory import EpisodeMemory, Episode
 from ocos.agent.capability_manager import CapabilityManager
 from ocos.agent.execution_manager import ExecutionManager
 from ocos.agent.identity_anchor import IdentityAnchor
@@ -70,14 +65,7 @@ __all__ = [
     "GoalStack",
     # Intent
     "Intent",
-    # Attention
-    "Attention",
-    "FocusMode",
     # Memory
-    "AgentWorkingMemory",
-    "WorkItem",
-    "EpisodeMemory",
-    "Episode",
     # Management
     "CapabilityManager",
     "ExecutionManager",

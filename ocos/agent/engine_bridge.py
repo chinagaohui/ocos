@@ -100,9 +100,10 @@ def _ensure_engines_registered() -> None:
     """幂等注册内置引擎。
 
     模块级调用一次 (常规导入顺序); EngineBridge.__init__ 再兜底调用一次 —
-    当 ocos.engines 包先于本模块被导入时 (engines/__init__ → writer_engine
-    → ocos.agent.__init__ → engine_bridge 的循环链), 模块级注册会因
-    writer_engine 尚未初始化完成而静默失败, 兜底注册保证 writer 可用。
+    当 ocos.engines 包先于本模块被导入时, 模块级注册会因引擎尚未初始化
+    完成而静默失败, 兜底注册保证可用。
+    WriterEngine 兜底已随收敛裁决 P1 移除（归档至 ocos/_archive/engines/，
+    writer 角色现役由 DecisionBridge/TaskDAG LLM 承担）。
     """
     if "planner" not in ENGINE_REGISTRY:
         try:
@@ -119,14 +120,6 @@ def _ensure_engines_registered() -> None:
             ENGINE_REGISTRY["reasoning_engine"] = ReasoningEngine
         except ImportError:
             logger.debug("ReasoningEngine not available.")
-
-    if "writer" not in ENGINE_REGISTRY:
-        try:
-            from ocos.engines.writer_engine import WriterEngine
-            ENGINE_REGISTRY["writer"] = WriterEngine
-            ENGINE_REGISTRY["writer_engine"] = WriterEngine
-        except ImportError:
-            logger.debug("WriterEngine not available.")
 
 
 _ensure_engines_registered()

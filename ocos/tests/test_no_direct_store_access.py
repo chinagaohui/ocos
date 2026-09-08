@@ -111,8 +111,12 @@ def test_no_direct_store_access():
     all_violations: list[tuple[str, int, str]] = []
 
     py_files = sorted(OCOS_DIR.rglob("*.py"))
+    # 冻结归档命名空间不受生产架构规则约束（收敛裁决 P1）
+    archive_dir = OCOS_DIR / "_archive"
     for fpath in py_files:
         if "tests" in str(fpath):
+            continue
+        if str(fpath).startswith(str(archive_dir)):
             continue
         if fpath.name == "__init__.py":
             continue

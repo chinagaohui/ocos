@@ -472,6 +472,9 @@ class TestGrowthEngine:
             "ocos/execution/bridge.py",
             "ocos/interaction/__main__.py",
             "ocos/interaction/api/routes/converse.py",
+            "ocos/interaction/api/static/index.html",  # D-UI: 前端 token 接入
+            "ocos/interaction/channel.py",  # D2: webhook HMAC 签名
+            "ocos/learning/experience_learning.py",  # D-UI: 失败归因修正
             "ocos/interaction/cli/commands/chat.py",
             "ocos/interaction/converse.py",
             "ocos/interaction/inbox.py",
@@ -483,6 +486,10 @@ class TestGrowthEngine:
             "ocos/interaction/cli/commands/run.py",  # FIX-17
             "ocos/daemon/factory.py",  # FIX-17: 注入 proactive_output_callback
             "ocos/autonomous_runtime/action_dispatcher.py",  # P2-1: 新增 QUERY_DB ActionType
+            "ocos/daemon/motivation.py",  # L3/V3: propose_stimulus 感知-反应（2026-09-07）
+            "ocos/perception_bus/__init__.py",  # V3: push_stimulus 刺激入队（2026-09-07）
+            "ocos/perception/stimulus_scanner.py",  # V3: 新增刺激扫描器（2026-09-07）
+            "ocos/monitoring/vitals.py",  # V3/V6 指标 + perception（2026-09-07）
             # FIX-08/09/10: interaction→learning persistence + world_model
             "ocos/memory/recall.py",
             "ocos/learning/persistence.py",
@@ -493,6 +500,78 @@ class TestGrowthEngine:
             "ocos/tests/test_pending_store.py",
             "ocos/tests/test_phase49d_metacognition.py",
             "ocos/tests/test_power_on_w1_w4.py",
+            # ── AGI 计划 + 升级方案 v1.0（L0/L1/L2/L3，2026-09-06/07）──
+            # L0: 自主闸/软制动/vitals/API 鉴权/CLI；L1: 九引擎真实化
+            # L2: 自检/参与度/多通道/自改进/叙事 + dormant 归档
+            # L3: MotivationHub 自主目标管线 + bridge sink 注入
+            "ocos/execution/autonomy.py",  # L0-3（新增）
+            "ocos/interaction/cli/commands/autonomy.py",  # L0-3（新增）
+            "ocos/interaction/cli/commands/vitals.py",  # L0（新增）
+            "ocos/interaction/api/routes/openai_compat.py",  # 新增
+            "ocos/interaction/api/routes/ws.py",  # 新增
+            "ocos/daemon/self_check.py",  # L2-1（新增）
+            "ocos/daemon/channel_link.py",  # L2-3（新增）
+            "ocos/daemon/improve_link.py",  # L2-4（新增）
+            "ocos/daemon/growth_narrative.py",  # L2-5（新增）
+            "ocos/daemon/motivation.py",  # L3-1（新增）
+            "ocos/daemon/health_loop.py",  # L2-1: 自检接入
+            "ocos/daemon/active_interaction.py",  # L2-2: 参与度信号
+            "ocos/engagement/signals.py",  # L2-2（新增）
+            "ocos/engagement/manager.py",  # L2: dormant 归档标注
+            "ocos/orchestration/__init__.py",  # L2: dormant 归档标注
+            "ocos/external_communication/manager.py",  # L2: dormant 归档标注
+            "ocos/engines/narrative_pipeline.py",  # L2: 范围澄清标注
+            "ocos/engines/reasoning_engine.py",  # L1
+            "ocos/engines/planning_engine.py",  # L1
+            "ocos/engines/decision_making_engine.py",  # L1
+            "ocos/engines/simulation_engine.py",  # L1
+            "ocos/engines/reflection_engine.py",  # L1
+            "ocos/engines/prediction_engine.py",  # L1
+            "ocos/engines/learning_engine.py",  # L1
+            "ocos/engines/policy_engine.py",  # L1: autonomy_gate
+            "ocos/engines/goal_arbitration_engine.py",  # L1: autonomy_gate
+            "ocos/engines/text_generator.py",  # L1
+            "ocos/memory/episode/store.py",  # L1: 自愈建表
+            "ocos/memory/__init__.py",  # 审计 O-14: 包出口导出 MemoryHub
+            "ocos/memory/hub.py",  # 审计 O-2/O-8/O-12: shared-cache 内存库 / shutdown 置空 / 统计四库
+            "ocos/memory/user/model.py",  # 审计 O-4/O-5/O-6/O-9: 合并语义 / load 容错 / WAL / 版本递增
+            "ocos/storage/connection.py",  # 审计 O-2: file: URI (shared-cache) 连接支持
+            "ocos/capability/agent_discovery.py",  # AGI: 智能体探查
+            "ocos/interaction/api/server.py",  # L0: AuthMiddleware
+            "ocos/interaction/cli/commands/restart.py",  # L0: 重启编排
+            "ocos/interaction/cli/commands/goal.py",  # UX-1
+            "ocos/tests/test_agent_discovery.py",  # L1: 期望对齐诚实语义
+            "ocos/tests/test_goal_arbitration_engine.py",  # L1: autonomy_gate 语义
+            "ocos/tests/test_policy_engine.py",  # L1: autonomy_gate 条数
+            "ocos/tests/test_simulation_engine.py",  # L1: 真扰动语义
+            "ocos/interaction/cli/commands/approvals.py",  # L3: autonomous_goal sink 注入
+            # ── L7/L8 学习闭环 + 全自动模式（2026-09-07）──
+            "ocos/goal/store.py",  # claim_pending_approved_self（SELF 认领缺口）
+            "ocos/tests/test_goal_claim.py",
+            "ocos/agent/self_evolution_link.py",  # apply 去重闸（重复追加缺陷）
+            "ocos/monitoring/vitals.py",  # V2/V3/V4/V6 指标
+            "ocos/tests/test_l7_learning_loop.py",
+            "ocos/daemon/vitals_report.py",
+            # ── D-UI: 沙盒白名单开关（2026-09-07）──
+            "ocos/tests/conftest.py",  # 沙盒开关测试隔离夹具
+            "ocos/tests/test_text_generator.py",  # LLM 单测 importorskip 守卫
+            # ── 收敛裁决 P1（2026-09-08）：Legacy 器官归档 + 快照容错加固 ──
+            "ocos/agent/__init__.py",
+            "ocos/agent/engine_bridge.py",
+            "ocos/engines/__init__.py",
+            "ocos/runtime/recovery/runtime_snapshot.py",
+            "ocos/tests/test_no_direct_store_access.py",
+            "ocos/_archive/agent/adaptive_params.py",
+            "ocos/_archive/agent/attention.py",
+            "ocos/_archive/agent/belief_consolidation.py",
+            "ocos/_archive/agent/context_compressor.py",
+            "ocos/_archive/agent/drift_detector.py",
+            "ocos/_archive/agent/episode_memory.py",
+            "ocos/_archive/agent/learning_trigger.py",
+            "ocos/_archive/agent/memory_consolidation.py",
+            "ocos/_archive/agent/retry_policy.py",
+            "ocos/_archive/agent/working_memory.py",
+            "ocos/_archive/engines/writer_engine.py",
         }
         violations = [l for l in changed if l not in allowed]
         assert violations == [], f"测试污染了生产代码: {violations}"

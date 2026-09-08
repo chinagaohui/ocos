@@ -51,7 +51,9 @@ ALLOWED_IMPORTS = {
     "ocos.runtime": ["ocos.kernel", "ocos.events", "ocos.models"],
     "ocos.models": ["ocos.kernel"],
     "ocos.platform": ["ocos.kernel", "ocos.events", "ocos.models"],
-    "ocos.engines": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.knowledge", "ocos.platform", "ocos.agent.retry_policy"],
+    "ocos.engines": ["ocos.kernel", "ocos.events", "ocos.models", "ocos.runtime", "ocos.knowledge", "ocos.platform", "ocos.agent.retry_policy",
+                     # L1 引擎真实化: 快路径下沉（Learning/Reflection 复用经验学习）+ autonomy_gate（Policy/Arbitration 挂闸）
+                     "ocos.learning", "ocos.execution.autonomy"],
     "ocos.plugins": ["ocos.kernel", "ocos.events", "ocos.platform", "ocos.engines"],
     "ocos.knowledge": ["ocos.knowledge", "ocos.memory.semantic"],  # GAP-P2-1: registry→semantic 镜像
     "ocos.knowledge.store": [],
@@ -87,7 +89,9 @@ ALLOWED_IMPORTS = {
     # Phase 21: 新增基础设施层
     "ocos.snapshot": ["ocos.storage"],
     "ocos.goal": ["ocos.agent", "ocos.storage"],
-    "ocos.constitution": ["ocos.goal", "ocos.agent", "ocos.kernel"],
+    "ocos.constitution": ["ocos.goal", "ocos.agent", "ocos.kernel",
+                          "ocos.memory",  # L4-1: 宪法修订审计 episode 落库（先例: execution L0-3 audit）
+                          "ocos.execution.pending"],  # L4-1: propose_change 提案入待批队列（先例: monitoring → execution.autonomy）
     # Phase 23: Capability 层
     "ocos.capability": ["ocos.logging", "ocos.agent", "ocos.platform", "ocos.constitution", "ocos.contracts.feedback_abi", "ocos.contracts.attention_abi", "ocos.kernel"],
     "ocos.task": ["ocos.logging"],
@@ -167,6 +171,7 @@ ALLOWED_IMPORTS = {
     "ocos.interaction": ["ocos.goal", "ocos.constitution", "ocos.logging",
                          "ocos.memory", "ocos.memory.episode", "ocos.memory.belief",
                          "ocos.self.identity_boundary",
+                         "ocos.self.agent_self_model",  # L4-2: 自我模型画像注入对话 prompt（先例: identity_boundary）
                          "ocos.storage", "ocos.agent", "ocos.execution",
                          "ocos.engines",
                          "ocos.capability_reality", "ocos.event_memory",
@@ -176,18 +181,25 @@ ALLOWED_IMPORTS = {
                          "ocos.autonomous_runtime",  # PW-2.1: ActionType for sandbox
                          # S1.3 (白皮书 P1-2b): USE| 动作执行前过权限网关
                          # （仅限 permission_gateway 安全组件，fail-closed）
-                         "ocos.capability.permission_gateway"],
+                         "ocos.capability.permission_gateway",
+                         # CHAT-ROUTE FIX (2026-09-07): _gateway_check 个人模式
+                         # SSRF 豁免复用 sandbox_ops.sandbox_disabled()（与 bridge 对齐）
+                         "ocos.operations"],
                          # UX 自我认知 + PW-1.2 风格画像 + PW-1.4 内视执行史
     "ocos.interaction.cli": ["ocos.interaction"],
+    # L0: vitals 聚合自洽性指标（读 autonomy 审计路径常量）
+    "ocos.monitoring": ["ocos.logging", "ocos.execution.autonomy"],
     "ocos.interaction.cli.commands": ["ocos.interaction", "ocos.goal", "ocos.planning",
-                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution", "ocos.perception", "ocos.capability.agents", "ocos.growth", "ocos.engines", "ocos.reflection"],  # S4: Organ Client; P1-B: CLI self-modification via SelfModificationAgent; Phase 50: growth CLI (LLM via engines); Phase 52: self review
+                                       "ocos.opentale_bridge", "ocos.daemon", "ocos.storage", "ocos.execution", "ocos.perception", "ocos.capability.agents", "ocos.growth", "ocos.engines", "ocos.reflection",  # S4: Organ Client; P1-B: CLI self-modification via SelfModificationAgent; Phase 50: growth CLI (LLM via engines); Phase 52: self review
+                                       "ocos.tui", "ocos.monitoring"],  # UX: TUI 前端入口; L0: ocos vitals 聚合
     "ocos.interaction.repl": ["ocos.interaction"],
     "ocos.interaction.repl.commands": ["ocos.interaction", "ocos.goal",
                                         "ocos.storage", "ocos.planning",
                                         "ocos.execution"],  # UX-P2: /approvals 与 CLI 同源
     "ocos.interaction.api": ["ocos.interaction"],
     "ocos.interaction.api.routes": ["ocos.interaction", "ocos.goal", "ocos.kernel",
-                                     "ocos.planning", "ocos.opentale_bridge", "ocos.execution"],  # S6: WebChat 决策/器官调用
+                                     "ocos.planning", "ocos.opentale_bridge", "ocos.execution",
+                                     "ocos.monitoring"],  # §3.1: /ocos/metrics vitals 端点（先例: cli.commands 允许 monitoring）
     # Phase 52: Perception System
     "ocos.perception": ["ocos.perception", "ocos.world_model"],  # GAP-P1-3: 感知链桥接世界模型
     # Phase 50: Growth Module — 外部信号→自我优化 (仅 logging + LLM engines)
@@ -225,10 +237,13 @@ ALLOWED_IMPORTS = {
     "ocos.execution": ["ocos.autonomous_runtime", "ocos.agent_orchestration",
                        "ocos.interaction", "ocos.capability_reality",
                        "ocos.capability.permission_gateway",  # S3.2: 入口网关前检
+                       "ocos.capability.skill_registry",  # V2 技能重放: 合成技能图读侧匹配
                        "ocos.storage",
                        "ocos.operations", "ocos.event_memory", "ocos.digital_world",
                        "ocos.agent", "ocos.daemon", "ocos.engines",
-                       "ocos.monitoring"],  # S3.5: LLM 调用计数器（record_global 进程级埋点）
+                       "ocos.monitoring",  # S3.5: LLM 调用计数器（record_global 进程级埋点）
+                       "ocos.self.agent_self_model",  # 自我认知事实块（2026-09-07 防自省幻觉，先例: interaction）
+                       "ocos.memory"],  # L0-3: autonomy 级别切换/制动 audit episode 落库
                        # PW-2.1 治理化应用 + PW-3.1 系统修复 + UX-F1 LLM 执行器
                        # PW-2.1 治理化应用 + PW-3.1 系统修复执行
     # P1-B: daemon 生产装配层 — CLI 只依赖 daemon 门面，内核组件由 daemon 组装
@@ -241,7 +256,11 @@ ALLOWED_IMPORTS = {
                     "ocos.monitoring",  # S3.5: Prometheus 指标接入生产
                     "ocos.learning",  # FIX-6: L8 元认知置信度 (CapabilityConfidence)
                     "ocos.constitution.behavioral",  # FIX-6b: 行为宪法 (BehavioralConstitution)
-                    "ocos.interaction"],  # P0-2/P0-3: SessionManager
+                    "ocos.constitution.versioned",  # L4-1/L4-3: 版本化宪法装配 + 连续性基线 hash（先例: behavioral）
+                    "ocos.interaction",  # P0-2/P0-3: SessionManager
+                    "ocos.engagement",  # L2-2: 参与度信号 (collect_engagement)
+                    "ocos.memory",  # L2-5/L3: 自检/叙事/动机 episode 落库
+                    "ocos.living_verification"],  # L2-1: 因果链审计/活体验证复用
     # Phase L: Autonomous Goal Manager — 自主目标系统
     "ocos.autonomous": [
         "ocos.logging",
@@ -361,9 +380,14 @@ def test_no_illegal_cross_package_imports():
     py_files = sorted(OCOS_DIR.rglob("*.py"))
     # 排除测试文件自身和 __init__.py
     test_dir = OCOS_DIR / "tests"
+    # 排除冻结归档命名空间（ocos/_archive）——历史快照不受生产 import 规则约束，
+    # 见 docs/COGNITIVE_RUNTIME_CONVERGENCE_DECISION_v1.0.md
+    archive_dir = OCOS_DIR / "_archive"
 
     for fpath in py_files:
         if fpath.parent == test_dir or str(fpath).startswith(str(test_dir)):
+            continue
+        if fpath.parent == archive_dir or str(fpath).startswith(str(archive_dir)):
             continue
         if fpath.name == "__init__.py":
             continue

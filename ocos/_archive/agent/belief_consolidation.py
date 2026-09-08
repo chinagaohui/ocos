@@ -1,3 +1,7 @@
+# ARCHIVED（收敛裁决 P1，2026-09-08）— 本模块已冻结归档，非生产代码。
+# 依据: docs/COGNITIVE_RUNTIME_CONVERGENCE_DECISION_v1.0.md（FROZEN DECISION）
+# 禁止从生产路径 import 本模块（违冻条款见来源文档第七节）。
+
 """P1-A — Episode → Belief 迁移轨迹（CLS 慢系统写路径）。
 
 将 EpisodeStore 中最近的 Episode 巩固为持久化 Belief：
