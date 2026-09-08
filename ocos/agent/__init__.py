@@ -12,7 +12,7 @@ Agent 是整个 OCOS 的唯一意识主体。所有 Engine 是器官，Agent 是
 - EpisodeMemory → 已归档（ocos/_archive，现役为 memory/episode 家族）
 - CapabilityManager — 能力列表
 - ExecutionManager — 执行跟踪
-- LifeCycleOrchestrator — 生命周期编排器
+- LifeCycleOrchestrator → 已归档（ocos/_archive，生命周期职能并入 daemon）
 """
 
 from ocos.agent.state import AgentState, AgentStatus
@@ -32,7 +32,6 @@ from ocos.agent.intent import Intent
 from ocos.agent.capability_manager import CapabilityManager
 from ocos.agent.execution_manager import ExecutionManager
 from ocos.agent.identity_anchor import IdentityAnchor
-from ocos.agent.life_cycle_orchestrator import LifeCycleOrchestrator, TickResult
 from ocos.agent.capability_selector import CapabilitySelector
 from ocos.agent.meta_controller import MetaController
 from ocos.agent.decision_loop import DecisionLoop
@@ -72,8 +71,6 @@ __all__ = [
     # Identity
     "IdentityAnchor",
     # Life Cycle
-    "LifeCycleOrchestrator",
-    "TickResult",
     # Cog Cortex
     "CapabilitySelector",
     "MetaController",

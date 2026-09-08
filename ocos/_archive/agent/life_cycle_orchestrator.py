@@ -1,3 +1,6 @@
+# ARCHIVED（收敛裁决 P2，2026-09-08）— LifeCycleOrchestrator 已 MERGE 入 daemon，非生产代码。
+# 依据: docs/COGNITIVE_RUNTIME_CONVERGENCE_DECISION_v1.0.md R3。
+
 """LifeCycleOrchestrator — 生命周期编排器。
 
 自动运行 Master Agent 的完整生命周期：

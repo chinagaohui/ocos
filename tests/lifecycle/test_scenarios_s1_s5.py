@@ -41,7 +41,10 @@ class TestS1OvernightGrowth:
         from ocos.daemon import ResidentRuntime
         rt = ResidentRuntime.__new__(ResidentRuntime)
         rt._db_path = str(tmp_path / "life.db")
-        assert rt._synthesize_skills() == 1
+        # 收敛裁决 P3: 技能合成宿主 = ConsolidationService
+        from ocos.daemon.consolidation_service import LearningConsolidationService
+        svc = LearningConsolidationService(rt._db_path)
+        assert svc._synthesize_skills() == 1
 
         # 次日同型任务: 规划侧拿到已验证步骤（复用而非重新探索）
         from ocos.execution.bridge import DecisionBridge
@@ -65,7 +68,8 @@ class TestS1OvernightGrowth:
         from ocos.daemon import ResidentRuntime
         rt = ResidentRuntime.__new__(ResidentRuntime)
         rt._db_path = str(tmp_path / "life.db")
-        rt._synthesize_skills()
+        from ocos.daemon.consolidation_service import LearningConsolidationService
+        LearningConsolidationService(rt._db_path)._synthesize_skills()
         from ocos.execution.bridge import DecisionBridge
         b = DecisionBridge.__new__(DecisionBridge)
         b._db_path = str(tmp_path / "life.db")

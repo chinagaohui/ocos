@@ -81,13 +81,18 @@ class ResidentRuntime:
             max_cycles=max_cycles,
             db_path=db_path,
         )
-        # Phase B: 生命周期编排器伴生层 — 负责疲劳检测、SLEEP转换、主动输出
-        self._orchestrator: Any = None
+        # 收敛裁决 P3（2026-09-08）: Learning/Consolidation Service — dream
+        # 巩固触发编排的唯一宿主（原 daemon._run_dream_cycle 语义迁入）。
+        self._consolidation = None
         try:
-            from ocos.agent.life_cycle_orchestrator import LifeCycleOrchestrator
-            self._orchestrator = LifeCycleOrchestrator(agent)
+            from ocos.daemon.consolidation_service import LearningConsolidationService
+            self._consolidation = LearningConsolidationService(db_path)
         except Exception as e:
-            logger.warning("LifeCycleOrchestrator unavailable: %s", e)
+            logger.warning("ConsolidationService unavailable: %s", e)
+        # 收敛裁决 P2（2026-09-08）：LifeCycleOrchestrator 已归档
+        # （ocos/_archive/agent/）——疲劳检测/主动输出本就由 tick 直接实现，
+        # shutdown 语义并入 stop()（原 orchestrator.shutdown 仅转发
+        # agent.shutdown()）。见 docs/COGNITIVE_RUNTIME_CONVERGENCE_DECISION_v1.0.md
         # Phase E: 自我演化监控 — 定期检查 SelfModel 是否需要演化。
         # 装配期只置空：memory hub 在 runtime.boot() 才存在，旧装配分支
         # 在 __init__ 期取 hub（恒 None）+ `belief()` 误作方法（property）
@@ -492,12 +497,14 @@ class ResidentRuntime:
         if self._tick_thread:
             self._tick_thread.join(timeout=timeout)
         with self._lock:
-            # Phase B: orchestrator 安全关闭
+            # 收敛裁决 P2: 安全关闭 — 原 orchestrator.shutdown 仅转发
+            # agent.shutdown()，语义并入此处
             try:
-                if self._orchestrator is not None:
-                    self._orchestrator.shutdown()
+                agent_obj = getattr(self._runtime, "agent", None)
+                if agent_obj is not None and hasattr(agent_obj, "shutdown"):
+                    agent_obj.shutdown()
             except Exception:
-                pass
+                logger.exception("agent shutdown during stop failed")
             self._state = DaemonState.STOPPED
             logger.info("ResidentRuntime daemon stopped. %d goals processed.", self._goal_processed)
 
@@ -656,7 +663,7 @@ class ResidentRuntime:
                 # P1-1: 周期性 dream 巩固（Episode → Belief/Pattern/Wisdom）
                 if self._hb_ticks % max(1, self.dream_interval_ticks) == 0:
                     try:
-                        self._run_dream_cycle()
+                        self._consolidate()
                     except Exception:
                         logger.exception("Dream consolidation failed")
                 # Phase 33: 将队列中的目标导入 runtime 的 goal_store
@@ -676,8 +683,9 @@ class ResidentRuntime:
                 except Exception:
                     logger.exception("Tick failed (cycle=%d)", self._runtime._cycle_count)
 
-                # Phase B: 伴生 orchestrator 疲劳检测 + 主动输出 — 不重跑认知循环，只做状态检查
-                if self._orchestrator is not None:
+                # 收敛裁决 P2: 疲劳检测 + 主动输出 — 直接对 agent 状态检查
+                # （原 orchestrator 伴生层已归档，本分支从未经过它）
+                if True:
                     try:
                         agent_obj = getattr(self._runtime, "agent", None)
                         attention = getattr(agent_obj, "attention", None) if agent_obj is not None else None
@@ -685,7 +693,7 @@ class ResidentRuntime:
                             if attention.needs_sleep():
                                 logger.info("Fatigue detected at tick %d — triggering sleep/dream", self._hb_ticks)
                                 try:
-                                    self._run_dream_cycle()
+                                    self._consolidate()
                                 except Exception:
                                     logger.exception("Fatigue dream failed")
                         # 定期主动输出（每 60 tick ≈ 5min @ 5s/tick）
@@ -963,132 +971,18 @@ class ResidentRuntime:
                         except Exception:
                             logger.exception("Motivation record_result failed")
 
-    def _run_dream_cycle(self) -> None:
-        """P1-1: 完整睡眠巩固序列 — 修复生命周期相位后 sleep→dream。
+    def _consolidate(self) -> None:
+        """收敛裁决 P3: dream 巩固统一入口 — 委托 Learning/Consolidation Service。
 
-        此前直接调 dream() 会因 lifecycle 处于 BOOTING 而抛
-        "Cannot transition BOOTING to DREAMING"（合法路径要求
-        BOOTING→ACTIVE→SLEEPING→DREAMING），巩固管线从未运转。
+        service 装配失败时诚实跳过（巩固不可用 ≠ daemon 不可用）。
         """
-        agent_obj = getattr(self._runtime, "agent", None)
-        if agent_obj is None or not hasattr(agent_obj, "dream"):
+        if self._consolidation is None:
+            logger.debug("consolidation unavailable — dream cycle skipped")
             return
-        from ocos.agent.lifecycle import LifecyclePhase
-        cl = getattr(agent_obj, "_control_loop", None)
-        if cl is not None:
-            lc = getattr(cl, "_lifecycle", None)
-            phase = getattr(lc, "phase", None)
-            if phase == LifecyclePhase.BOOTING:
-                # BOOTING → ACTIVE（合法迁移，tick 一直在跑本就处于活跃态）
-                lc.transition_to_phase(LifecyclePhase.ACTIVE)
-        agent_obj.sleep()    # ACTIVE → SLEEPING（WM 巩固 + 持久化）
-        out = agent_obj.dream()   # SLEEPING → DREAMING → 巩固 → wake
-        # FIX-08/FIX-20: dream 后持久化 learning rules
-        # 原实现读 agent_obj.learning —— 属性不存在（实际为 _learning_engine），
-        # 持久化从未生效；改由 persist_latest_rules 从真实引擎取最新模型落库
-        try:
-            from ocos.learning.persistence import persist_latest_rules
-            saved = persist_latest_rules(agent_obj, self._db_path)
-            if saved:
-                logger.info("Persisted %d learning rule(s) after dream", saved)
-        except Exception:
-            logger.debug("dream rules persistence skipped")
-        # V2/S1: 技能合成 — 同型成功经验 ≥2 次 → SkillGraph 落注册表
-        # （经验→技能写入端；bridge _skill_replay_hint 为重放读侧）
-        try:
-            self._synthesize_skills()
-        except Exception:
-            logger.exception("Skill synthesis failed")
-        logger.info("Dream consolidation: wisdom_total=%s consolidation=%s",
-                    (out.get("wisdom_stats") or {}).get("wisdom_total", "?"),
-                    out.get("consolidation_stats", {}))
-
-    def _synthesize_skills(self) -> int:
-        """V2/S1: 技能合成 — 同型成功经验 ≥2 次 → SkillGraph（无 LLM）。
-
-        口径: goal_result 成功记录（decision 以 ✓/✅ 开头）按目标描述
-        （context.goal，缺省取 decision 摘要）前 40 字聚合；同型 ≥2 次
-        且注册表无同名图 → 合成单步 decision 技能图落 capability.db
-        （与主库同目录）。重放读侧 = bridge._skill_replay_hint。
-        """
-        import sqlite3
-        import uuid as _uuid
-        from pathlib import Path as _P
-        from ocos.capability.skill_registry import SkillRegistry
-        from ocos.capability.models import Skill, SkillGraph
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = conn.execute(
-                "SELECT decision, context FROM episodes "
-                "WHERE source='goal_result' AND action='goal_result' "
-                "ORDER BY created_at DESC LIMIT 120").fetchall()
-        finally:
-            conn.close()
-        patterns: dict = {}
-        for r in rows:
-            d = str(r["decision"] or "").strip()
-            if not (d.startswith("✓") or d.startswith("✅")):
-                continue
-            try:
-                ctx = json.loads(r["context"] or "{}")
-            except (ValueError, TypeError):
-                ctx = {}
-            goal = str(ctx.get("goal") or "").strip()
-            key = (goal or d.split("→", 1)[0]).strip()[:40]
-            if key:
-                patterns.setdefault(key, []).append(d[:200])
-        if not patterns:
-            return 0
-        reg = SkillRegistry(
-            db_path=str(_P(self._db_path).parent / "capability.db"))
-        reg.init_db()
-        try:
-            existing = {g.name for g in reg.list_graphs()}
-        except Exception:
-            existing = set()
-        created = 0
-        for key, results in patterns.items():
-            if len(results) < 2 or key in existing:
-                continue
-            skill = Skill(
-                id=f"SK-{_uuid.uuid4().hex[:10]}",
-                name=key,
-                description=("已验证经验（成功 %d 次）：%s"
-                             % (len(results), results[0][:120])),
-                input_state={"task": key},
-                required_capability="decision",
-            )
-            graph = SkillGraph(
-                id=f"SG-{_uuid.uuid4().hex[:10]}",
-                name=key,
-                description="同型成功经验 ≥2 次自动合成（dream 巩固）",
-                skills=[skill],
-                entry_point=skill.id,
-            )
-            try:
-                reg.save_skill(skill)
-                reg.save_graph(graph)
-                created += 1
-            except Exception as e:
-                logger.debug("skill save failed: %s", e)
-        if created:
-            logger.info("Synthesized %d skill graph(s) from "
-                        "successful experience", created)
-            base = os.environ.get("OCOS_AUDIT_DIR", "").strip()
-            audit_dir = (_P(base).expanduser() if base
-                         else _P.home() / ".ocos" / "audit")
-            try:
-                audit_dir.mkdir(parents=True, exist_ok=True)
-                with (audit_dir / "learning.jsonl").open(
-                        "a", encoding="utf-8") as f:
-                    f.write(json.dumps({
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                        "type": "skill_synthesized", "count": created,
-                    }, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
-        return created
+        agent_obj = getattr(self._runtime, "agent", None)
+        if agent_obj is None:
+            return
+        self._consolidation.run_dream_cycle(agent_obj)
 
     def _write_heartbeat(self) -> None:
         """UX-F3: 每 tick 写心跳文件（Web 侧栏/状态命令判断存活）。

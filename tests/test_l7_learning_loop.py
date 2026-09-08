@@ -195,15 +195,18 @@ class TestSkillReplay:
                                 "✓ 已生成季度销售汇总报表 → done")
         conn.close()
         from ocos.daemon import ResidentRuntime
+        from ocos.daemon.consolidation_service import LearningConsolidationService
         rt = ResidentRuntime.__new__(ResidentRuntime)
         rt._db_path = str(tmp_path / "l7.db")
-        created = rt._synthesize_skills()
+        # 收敛裁决 P3: 技能合成语义宿主 = ConsolidationService
+        svc = LearningConsolidationService(rt._db_path)
+        created = svc._synthesize_skills()
         assert created == 1
         marks = [m for m in _learning_marks(tmp_path)
                  if m["type"] == "skill_synthesized"]
         assert marks and marks[0]["count"] == 1
         # 幂等：同名图不重复合成
-        assert rt._synthesize_skills() == 0
+        assert svc._synthesize_skills() == 0
         # 重放读侧命中合成技能
         b = _make_bridge(tmp_path, monkeypatch)
         hint = b._skill_replay_hint("请整理季度销售报告并汇总")

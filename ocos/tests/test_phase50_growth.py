@@ -572,6 +572,7 @@ class TestGrowthEngine:
             "ocos/_archive/agent/retry_policy.py",
             "ocos/_archive/agent/working_memory.py",
             "ocos/_archive/engines/writer_engine.py",
+            "ocos/_archive/agent/life_cycle_orchestrator.py",
         }
         violations = [l for l in changed if l not in allowed]
         assert violations == [], f"测试污染了生产代码: {violations}"
