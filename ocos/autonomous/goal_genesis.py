@@ -231,6 +231,21 @@ class GoalGenesis:
                 proposal.risk_level, proposal.proposal_id, proposal.description[:60],
             )
         self._persist(proposal)
+
+        # Step 4.2: 审计增强 — 每次 approve/reject 写 JSONL
+        try:
+            from ocos.execution.autonomy import append_audit_record
+            append_audit_record({
+                "kind": "goal_proposal_approve",
+                "proposal_id": proposal.proposal_id,
+                "risk_level": proposal.risk_level,
+                "status": proposal.status,
+                "approval_path": proposal.approval_path,
+                "description": proposal.description[:100],
+            })
+        except Exception:
+            pass  # 审计失败不阻塞
+
         return proposal
 
     def to_goal(self, proposal: GoalProposal, goal_store: Any) -> Optional[str]:
