@@ -712,6 +712,52 @@ class TextGenerator:
         """是否有可用的 LLM 提供商。"""
         return self._provider.available
 
+    def generate(
+        self,
+        prompt: str | None = None,
+        user_prompt: str | None = None,
+        system_prompt: str | None = None,
+        temperature: float = 0.8,
+        max_tokens: int = 2000,
+    ) -> str:
+        """通用 Q&A 接口 — 同步包装 provider.generate (asyncio.run).
+
+        供 LLMTutor / 认知循环等非写作管线模块调用。
+        写作管线请用 generate_chapter / generate_rewrite.
+
+        兼容两种调用风格:
+            generate("问什么")
+            generate(user_prompt="问什么", system_prompt="你是专家")
+        """
+        import asyncio
+
+        # 兼容 user_prompt 和 prompt 两种参数名
+        actual_prompt = user_prompt if user_prompt is not None else prompt
+        if not actual_prompt:
+            logger.warning("TextGenerator.generate: empty prompt")
+            return ""
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    return pool.submit(
+                        asyncio.run,
+                        self._provider.generate(
+                            actual_prompt, system_prompt, temperature, max_tokens,
+                        ),
+                    ).result()
+            return asyncio.run(
+                self._provider.generate(
+                    actual_prompt, system_prompt, temperature, max_tokens,
+                )
+            )
+        except Exception as e:
+            logger.warning("TextGenerator.generate failed: %s", e)
+            return ""
+
     async def generate_chapter(
         self,
         chapter: dict[str, Any],

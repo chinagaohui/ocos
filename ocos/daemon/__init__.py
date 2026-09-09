@@ -997,6 +997,70 @@ class ResidentRuntime:
             return
         self._consolidation.run_dream_cycle(agent_obj)
 
+    # ── 依赖注入 helpers ────────────────────────────────────────────
+
+    def _build_ingestor(self, db_path: str) -> "UnifiedIngestor":
+        """构建完整注入的 UnifiedIngestor (KnowledgeRegistry + SemanticStore + AccessMatrix).
+
+        让 ingest 真正落到 knowledge SQL 表，而不是空操作。
+        """
+        from ocos.learning.unified_ingestor import UnifiedIngestor
+        try:
+            from ocos.memory.semantic.store import SemanticStore
+            from ocos.knowledge.store.registry import (
+                KnowledgeRegistry, AccessMatrix,
+            )
+            from ocos.knowledge.store.ontology import KnowledgeLevel
+
+            semantic_store = SemanticStore(db_path=db_path)
+            semantic_store.initialize()
+            access_matrix = AccessMatrix()
+            for lvl in KnowledgeLevel:
+                access_matrix.set_permission(
+                    "daemon_experience", lvl, can_read=True, can_write=True,
+                )
+            registry = KnowledgeRegistry(
+                semantic_store=semantic_store,
+                access_matrix=access_matrix,
+            )
+            return UnifiedIngestor(
+                knowledge_registry=registry,
+                db_path=db_path,
+            )
+        except Exception:
+            logger.warning(
+                "Full ingestor injection failed — fallback to plain",
+                exc_info=True,
+            )
+            return UnifiedIngestor(db_path=db_path)
+
+    @staticmethod
+    def _build_researcher() -> "WebResearcher":
+        """构建注入 SearchOps 的 WebResearcher (DuckDuckGo, 无需 key)."""
+        from ocos.learning.channels.web_researcher import WebResearcher
+        try:
+            from ocos.operations.search_ops import SearchOps
+            return WebResearcher(search_ops=SearchOps(), max_results=5)
+        except Exception:
+            return WebResearcher()
+
+    @staticmethod
+    def _build_tutor() -> "LLMTutor":
+        """构建注入 TextGenerator 的 LLMTutor.
+
+        TextGenerator() 空构造能自动读 ~/.ocos/config.json 的 DeepSeek key.
+        """
+        from ocos.learning.channels.llm_tutor import LLMTutor
+        try:
+            from ocos.engines.text_generator import TextGenerator
+            tg = TextGenerator()
+            if not tg.available:
+                logger.info("LLMTutor: TextGenerator not available (no LLM key)")
+                return LLMTutor()  # 无 generator → ask() 返回空
+            return LLMTutor(text_generator=tg)
+        except Exception:
+            return LLMTutor()
+
     # ── Phase S2-P1b: UnifiedIngestor 经验自动摄入 ──
     def _ingest_experience(self) -> None:
         """每 dream_interval 触发 — ExperienceExtractor → UnifiedIngestor.
@@ -1006,43 +1070,13 @@ class ResidentRuntime:
         """
         try:
             from ocos.learning.channels.experience_extractor import ExperienceExtractor
-            from ocos.learning.unified_ingestor import (
-                UnifiedIngestor, IngestStatus,
-            )
+            from ocos.learning.unified_ingestor import IngestStatus
+
             db_path = getattr(self, "_db_path", None)
             if not db_path:
                 return
-            # T1: 构建完整知识层依赖注入链路
-            try:
-                from ocos.memory.semantic.store import SemanticStore
-                from ocos.knowledge.store.registry import (
-                    KnowledgeRegistry, AccessMatrix,
-                )
-                from ocos.knowledge.store.ontology import KnowledgeLevel
-                from ocos.memory.belief.store import BeliefStore
-                semantic_store = SemanticStore(db_path=db_path)
-                semantic_store.initialize()  # 必须！否则 connection 未就绪
-                # daemon 需要通配写权限覆盖所有知识层级
-                access_matrix = AccessMatrix()
-                for lvl in KnowledgeLevel:
-                    access_matrix.set_permission("daemon_experience", lvl, can_read=True, can_write=True)
-                    access_matrix.set_permission("manual_test", lvl, can_read=True, can_write=True)
-                registry = KnowledgeRegistry(
-                    semantic_store=semantic_store,
-                    access_matrix=access_matrix,
-                )
-                belief_store = BeliefStore(db_path=db_path)
-            except Exception:
-                logger.warning(
-                    "Full knowledge layer injection failed — "
-                    "fallback to plain UnifiedIngestor", exc_info=True)
-                registry = belief_store = None
             extractor = ExperienceExtractor(db_path=db_path)
-            ingestor = UnifiedIngestor(
-                knowledge_registry=registry,
-                belief_store=belief_store,
-                db_path=db_path,
-            )
+            ingestor = self._build_ingestor(db_path)
             artifacts = extractor.extract_recent(days=7, limit=20)
             if not artifacts:
                 return
@@ -1119,9 +1153,9 @@ class ResidentRuntime:
             if not suggestions:
                 return
 
-            ingestor = UnifiedIngestor(db_path=db_path)
-            researcher = WebResearcher()
-            tutor = LLMTutor()
+            ingestor = self._build_ingestor(db_path)
+            researcher = self._build_researcher()
+            tutor = self._build_tutor()
             total_stored = 0
             for topic in suggestions[:2]:  # 每轮最多 2 个调研（限流）
                 # 渠道 1: WebResearcher
