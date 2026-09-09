@@ -20,10 +20,6 @@ _REDACT_LIMIT = 50
 _MESSAGE_LIMIT = 200
 
 
-def redact_enabled() -> bool:
-    """脱敏开关（进程内首次读取环境变量后固定）。"""
-    return _REDACT_ENABLED
-
 
 def redact_text(value: str, limit: int = _REDACT_LIMIT) -> str:
     """超长文本截断并追加 [REDACTED:{len}]，防用户内容明文进日志。"""

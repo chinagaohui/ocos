@@ -153,6 +153,9 @@ Examples:
                      choices=["L0", "L1", "L2", "L3", "L4"],
                      help="验收阶段（默认 L4）")
 
+    # ── daily-self-care（Phase 1: 每日自我关心只读扫描） ──────
+    _add_daily_self_care_parser(subparsers)
+
     return parser
 
 
@@ -435,3 +438,21 @@ def _add_growth_parser(subparsers: argparse._SubParsersAction) -> None:
     grow.add_argument("--confidence", type=float, default=0.5, help="置信度")
     grow.add_argument("--preview", action="store_true",
                       help="只分析+展示 diff, 不执行")
+
+
+def _add_daily_self_care_parser(subparsers: argparse._SubParsersAction) -> None:
+    """ocos daily-self-care — Phase 1: 每日自我关心只读扫描。"""
+    dsc = subparsers.add_parser(
+        "daily-self-care",
+        help="每日自我关心: 代码健康扫描 + 环境快照（只读）",
+    )
+    dsc_sub = dsc.add_subparsers(dest="dsc_action", title="daily-self-care subcommands")
+
+    scan = dsc_sub.add_parser(
+        "scan",
+        help="Phase 1: 只读扫描 (S1-S5 代码健康 + 环境快照)",
+    )
+    scan.add_argument("--db", type=str, default="",
+                      help="SQLite 路径（默认 ~/.ocos/ocos.db）")
+    scan.add_argument("--no-backup", action="store_true",
+                      help="跳过 DB 在线备份（Phase 0 默认执行）")

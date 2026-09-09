@@ -61,10 +61,15 @@ REQUIRED_PROPOSAL_FIELDS = ("rationale", "file_path", "new_content")
 _WANTED_PATCH_RE = re.compile(r'"old_snippet"\s*:\s*"[^"]+"', re.DOTALL)
 
 # 自动执行规模护栏 (防 LLM 大段删除/重写 — 语义破坏语法门拦不住):
-#   - 净删除 > MAX_NET_DELETION_LINES 行 → 拒绝自动执行 (需人工)
-#   - 改动后行数 < 原文 50% → 拒绝 (疑似大段删改)
-MAX_NET_DELETION_LINES = 30
-MIN_KEEP_RATIO = 0.5
+#   双轨护栏 (OR 关系 — 任一超限即拒绝):
+#     A. 绝对行数: 净删 > MAX_NET_DELETION_LINES 行 → 拒绝
+#     B. 比例护栏: 净删 / 原文件行数 > MAX_DELETION_RATIO → 拒绝
+#   - 删 _N 个独立小函数 (每个 5-15 行) 通常 ≤ 50 行且 ≤ 15%，放行
+#   - 删文件前半段 (集中 100+ 行) 触发 A 或 B，拒绝
+#   - 改动后行数 < 原文 MIN_KEEP_RATIO → 拒绝 (疑似大段删改)
+MAX_NET_DELETION_LINES = 50    # 绝对上限 (从旧值 30 放宽到 50)
+MAX_DELETION_RATIO = 0.15      # 相对上限 15% (双轨)
+MIN_KEEP_RATIO = 0.5           # 改动后保留 ≥ 50% 原文
 
 
 def _deletion_scale(original: str, proposed: str) -> tuple[int, float]:
@@ -79,14 +84,36 @@ def _deletion_scale(original: str, proposed: str) -> tuple[int, float]:
 
 
 def _exceeds_scale_guard(original: str, proposed: str) -> tuple[bool, str]:
-    """规模护栏: 超限返回 (True, 原因)。"""
+    """规模护栏 (双轨 OR — 任一超限即拒绝)。
+
+    A. 绝对行数护栏: 净删 > MAX_NET_DELETION_LINES 行 → 拒绝
+       防集中大段删除，放宽到 50 行以适配多函数批量清理。
+    B. 比例护栏: 净删 / 原文件行数 > MAX_DELETION_RATIO → 拒绝
+       防小文件上的不成比例删除。
+    C. 保留比例护栏: 改动后 < MIN_KEEP_RATIO 原文 → 拒绝
+       防整个文件被重写。
+    """
     net_deleted, keep_ratio = _deletion_scale(original, proposed)
+
+    # A. 绝对行数
     if net_deleted > MAX_NET_DELETION_LINES:
         return True, (f"net deletion {net_deleted} > {MAX_NET_DELETION_LINES} lines "
-                      "(需人工审批)")
+                      "(集中大段删除, 需人工审批)")
+
+    # B. 比例
+    orig_lines = len(original.splitlines()) if original.strip() else 0
+    if orig_lines > 0:
+        deletion_ratio = net_deleted / orig_lines
+        if deletion_ratio > MAX_DELETION_RATIO:
+            return True, (f"net deletion {net_deleted}/{orig_lines} = "
+                          f"{deletion_ratio:.0%} > {MAX_DELETION_RATIO:.0%} "
+                          "(需人工审批)")
+
+    # C. 保留比例
     if keep_ratio < MIN_KEEP_RATIO:
         return True, (f"proposed size {keep_ratio:.0%} < {MIN_KEEP_RATIO:.0%} of original "
                       "(疑似大段删改, 需人工审批)")
+
     return False, ""
 
 
@@ -435,7 +462,19 @@ class GrowthAnalyzer:
             except json.JSONDecodeError:
                 return None
 
-        if not data.get("worthwhile"):
+        # worthwhile 兜底: 缺字段时从 rationale 推断
+        worthwhile_raw = data.get("worthwise")
+        if worthwhile_raw is None:
+            rationale_hint = str(data.get("rationale", "")).lower()
+            negative_keywords = ("不值得", "不建议", "不适合", "skip", "no worthwhile",
+                                 "not worthwhile", "不需要", "风险", "猜测")
+            is_negative = any(kw in rationale_hint for kw in negative_keywords)
+            worthwhile = not is_negative and bool(str(data.get("rationale", "")).strip())
+            logger.info("GrowthAnalyzer: worthwhile inferred=%s (from rationale)", worthwhile)
+        else:
+            worthwhile = bool(worthwhile_raw)
+
+        if not worthwhile:
             return None
 
         rationale = str(data.get("rationale", ""))

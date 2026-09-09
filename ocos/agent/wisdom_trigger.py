@@ -43,7 +43,9 @@ def consolidate_wisdom(hub, current_tick: int = 0,
     from ocos.personal_memory.wisdom_store import WisdomStore
     from ocos.self.self_types import ExperiencePattern
 
-    episodes = hub.episode.query_by_time(limit=50)
+    # FIX: active_only=False — 和 _consolidate_episodes 同修复.
+    # 只扫 ACTIVE 会导致第一次 dream 后所有 episode 被 consolidated → 后续 wisdom 永远空.
+    episodes = hub.episode.query_by_time(limit=200, active_only=False)
     if len(episodes) < min_episodes:
         return {"patterns": 0, "candidates": 0, "persisted": 0,
                 "wisdom_total": 0, "reason": "insufficient_episodes"}

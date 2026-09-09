@@ -63,6 +63,53 @@ class LoopOrchestrator:
         """注入 CognitiveCouplingBridge — 将信念事件实时反馈给稳态。"""
         self._coupling_bridge = bridge
 
+    # ── 记忆提供者注入（让 wisdom / belief / goals 真正被消费） ──
+
+    def inject_memory_providers(
+        self,
+        *,
+        db_path: Optional[str] = None,
+        belief_store=None,
+        goal_store=None,
+        self_snapshot_fn=None,
+    ) -> None:
+        """一次性把所有记忆/知识提供者接进 ContextSynchronizer。
+
+        这是"学习闭环"的消费端接线 —— 没有这行，wisdom/belief 就是死数据。
+        """
+        # Wisdom provider — 从 WisdomStore 读 principle 文本
+        def _wisdom_provider() -> list[str]:
+            if db_path:
+                try:
+                    from ocos.agent.wisdom_trigger import load_wisdom_context
+                    return load_wisdom_context(db_path, limit=5)
+                except Exception:
+                    return []
+            return []
+
+        # Goals provider — 活跃 goal 列表
+        def _goals_provider() -> list[str]:
+            if goal_store is None:
+                return []
+            try:
+                goals = goal_store.query_active() if hasattr(goal_store, "query_active") else []
+                return [g.description[:80] for g in goals if g]
+            except Exception:
+                return []
+
+        # Self snapshot provider
+        def _self_provider() -> str:
+            if self_snapshot_fn:
+                try:
+                    return str(self_snapshot_fn())[:200]
+                except Exception:
+                    return ""
+            return "Agent current state: unknown"
+
+        self.synchronizer.set_wisdom_provider(_wisdom_provider)
+        self.synchronizer.set_goals_provider(_goals_provider)
+        self.synchronizer.set_self_provider(_self_provider)
+
     # ── 主循环 ──
 
     def tick(self, perception_input: str = "") -> LoopContext:

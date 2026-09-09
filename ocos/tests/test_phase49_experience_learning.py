@@ -314,7 +314,7 @@ class TestMasterAgentFastPathLearning:
             def __init__(self, eps):
                 self._eps = list(eps or [])
 
-            def query_by_time(self, limit=200):
+            def query_by_time(self, limit=200, active_only=True):
                 return self._eps[:limit]
 
             def mark_consolidated(self, ep_id):

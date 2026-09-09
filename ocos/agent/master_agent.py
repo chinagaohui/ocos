@@ -548,6 +548,17 @@ class MasterAgent:
         except Exception:
             pass  # 认知上下文注入失败不阻塞思考
 
+        # Phase 49-B (L4-C): 注入 wisdom + belief — 学习沉淀消费
+        try:
+            wisdom = self.wisdom_context(limit=5)
+            if wisdom.get("available"):
+                premises["wisdom"] = wisdom
+            belief = self.belief_context(limit=5)
+            if belief.get("available"):
+                premises["beliefs"] = belief
+        except Exception:
+            pass  # wisdom/belief 注入失败不阻塞思考
+
         try:
             result: BridgeResult = self._bridge.reason(
                 operation="deduction",
@@ -1010,6 +1021,50 @@ class MasterAgent:
             recall_ctx["error"] = str(e)
         return recall_ctx
 
+    def wisdom_context(self, limit: int = 5) -> dict:
+        """Phase 49-B (L4-C): 消费智慧原则 — 从 dream 巩固的 wisdom_items 加载.
+
+        这是"学习闭环"最后一公里: dream 产生 wisdom → think() 读进 prompt → 决策改变.
+        之前 WisdomStore 有 4 条 wisdom 但生产代码零消费 — 这里补上.
+        """
+        ctx: dict = {"principles": [], "available": False, "source": "wisdom"}
+        hub = getattr(self, "_memory_hub_ref", None)
+        if hub is None:
+            return ctx
+        try:
+            from ocos.agent.wisdom_trigger import load_wisdom_context
+            db_path = getattr(hub, "_db_path", None)
+            if db_path:
+                principles = load_wisdom_context(db_path, limit=limit)
+                ctx["principles"] = principles
+                ctx["available"] = bool(principles)
+        except Exception:
+            pass
+        return ctx
+
+    def belief_context(self, limit: int = 5) -> dict:
+        """Phase 49-B (L4-C): 消费高置信度 belief — 从 BeliefStore 加载.
+
+        belief 321 条但从不进 prompt — 这里把 top 5 按 confidence 排序注入.
+        """
+        ctx: dict = {"beliefs": [], "available": False, "source": "belief"}
+        store = getattr(self, "_belief_store", None)
+        if store is None:
+            return ctx
+        try:
+            beliefs = store.query_by_confidence(
+                min_confidence=0.5, limit=limit
+            )
+            lines = [
+                f"{b.statement} (conf={b.confidence:.2f}, evidence={len(b.evidence_ids or ())})"
+                for b in beliefs
+            ]
+            ctx["beliefs"] = lines
+            ctx["available"] = bool(lines)
+        except Exception:
+            pass
+        return ctx
+
     def _act_via_bridge(self, decision: Any) -> Any:
         """Phase 22-A: 通过 EngineBridge 将决策派发到真实引擎。
 
@@ -1439,13 +1494,17 @@ class MasterAgent:
         if store is None:
             return stats  # 无 Episode 存储 → 降级不抛
 
-        # 1. 重放今日 ACTIVE Episodes
+        # 1. 重放今日 Episodes（所有 status — 幂等由下面 belief_evidence 去重保证）
+        #    之前 active_only=True 导致第一次 dream 扫完后今日新 episode 永远跳过
         today_start = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
         episodes = [
             ep
-            for ep in store.query_by_time(limit=self._CONSOLIDATION_BATCH_LIMIT)
+            for ep in store.query_by_time(
+                limit=self._CONSOLIDATION_BATCH_LIMIT * 2,  # 加倍补偿不再限 active 的扩大
+                active_only=False,  # 扫全部，幂等由 evidence_ids 去重
+            )
             if ep.created_at >= today_start
         ]
         stats["replayed"] = len(episodes)

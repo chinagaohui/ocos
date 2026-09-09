@@ -39,10 +39,6 @@ def complete_command(text: str) -> list[str]:
     return [c for c in REPL_COMMANDS if c.startswith(text)]
 
 
-def complete_path(text: str) -> list[str]:
-    """文件路径补全（预留，当前未使用）。"""
-    return []
-
 
 class ReplCompleter:
     """REPL 自动补全器。

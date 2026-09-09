@@ -202,6 +202,10 @@ def main(argv: list[str] | None = None) -> int:
             from ocos.interaction.cli.commands.vitals import cmd_vitals
             return cmd_vitals(args, session)
 
+        elif args.command == "daily-self-care":
+            from ocos.interaction.cli.commands.daily_self_care import cmd_daily_self_care
+            return cmd_daily_self_care(args, session)
+
         else:
             parser.print_help()
             return 1

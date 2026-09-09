@@ -13,45 +13,6 @@ from typing import Any
 from ocos.kernel.abi import Event, EventType, SCHEMA_VERSION
 
 
-def serialize_event(event: Event) -> str:
-    """将 Event 序列化为 JSON 字符串。"""
-    return json.dumps({
-        "event_id": event.event_id,
-        "event_type": event.event_type.value,
-        "source": event.source,
-        "timestamp": event.timestamp,
-        "payload": event.payload,
-        "trace_id": event.trace_id,
-        "schema_version": event.schema_version,
-    }, ensure_ascii=False)
-
-
-def deserialize_event(data: str | dict[str, Any]) -> Event:
-    """从 JSON 字符串或字典反序列化为 Event。"""
-    if isinstance(data, str):
-        parsed = json.loads(data)
-    else:
-        parsed = data
-
-    return Event(
-        event_id=parsed.get("event_id", ""),
-        event_type=EventType(parsed.get("event_type", "scheduler.tick")),
-        source=parsed.get("source", ""),
-        timestamp=parsed.get("timestamp", ""),
-        payload=parsed.get("payload", {}),
-        trace_id=parsed.get("trace_id", ""),
-        schema_version=parsed.get("schema_version", SCHEMA_VERSION),
-    )
-
-
-def validate_schema_version(version: str) -> bool:
-    """检查 schema 版本兼容性（MAJOR 必须相同）。"""
-    if not version or not SCHEMA_VERSION:
-        return False
-    v_major = version.split(".")[0]
-    s_major = SCHEMA_VERSION.split(".")[0]
-    return v_major == s_major
-
 
 # ── Event Type Schema Registry ──────────────────────────────────────────────────
 

@@ -164,13 +164,3 @@ class InteractionContext:
 
 
 # ── 便捷工厂 ──────────────────────────────────────────────────────
-
-
-def create_inmemory_context() -> InteractionContext:
-    """创建内存上下文（stateless CLI 调用）。"""
-    return InteractionContext(db_path=":memory:")
-
-
-def create_persistent_context(db_path: str = "ocos.db") -> InteractionContext:
-    """创建持久化上下文（REPL / API 服务器）。"""
-    return InteractionContext(db_path=db_path)

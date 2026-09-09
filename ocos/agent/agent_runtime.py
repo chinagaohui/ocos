@@ -2179,7 +2179,13 @@ class AgentRuntime:
                     "success": result.get("success", False),
                     "cycle": self._cycle_count,
                 },
-                condition=f"tick@{self._cycle_count}",
+                # FIX: condition 应该是"任务上下文"而非 tick 序号。
+                # tick@N 让每次 tick 都是唯一分组 → PatternExtractor 永远组不出 ≥min_samples 的模式。
+                # 改成 agent+success — 同类任务重复出现时自然聚合.
+                condition=(
+                    f"agent={result.get('agent', 'unknown')}, "
+                    f"success={str(result.get('success', False)).lower()}"
+                ),
                 significance_score=0.6 if result.get("success") else 0.3,
                 evaluation_trace={"source": "step9_ingest", "cycle": self._cycle_count},
                 source="decision",

@@ -483,15 +483,3 @@ class PerformanceManager:
 
 # ── 工厂函数 ────────────────────────────────────────────────────────────────
 
-
-def create_performance_manager(
-    cache_max_size: int = 1000,
-    batch_size: int = 10,
-    **kwargs,
-) -> PerformanceManager:
-    """创建 PerformanceManager。"""
-    return PerformanceManager(
-        cache_max_size=cache_max_size,
-        batch_size=batch_size,
-        **kwargs,
-    )

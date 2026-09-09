@@ -45,13 +45,57 @@ python -m pytest ocos/tests/test_integration.py -v
 cat docs/ARCHITECTURE.md
 ```
 
-## 项目状态（2026-09-08 基线）
+## 项目状态（2026-09-09 更新）
 
-- **代码规模：** 167,311 行 / 817 modules / 2,364 classes
-- **测试数量：** 7,034 passed（另有 34/34 生产验证检查项全通过）
-- **生产状态：** systemd 常驻 daemon 运行中，行为级验收 10 项全绿
-- **当前阶段：** 认知运行时收敛（P0-P4 完成）→ Behavioral Delta 验证
+- **代码规模：** ~168,000 行 / ~825 modules / ~2,370 classes
+- **测试数量：** 4,366 passed（baseline 零回归）
+- **生产状态：** systemd 常驻 daemon 运行中（cycle 持续增长），行为级验收全绿
+- **当前阶段：** 学习管线闭环修复完成 → 多渠道外部学习就绪
 - **主链：** ResidentRuntime → RuntimeKernel → AgentRuntime.tick() → TaskDAG → DecisionBridge → Permission → Execution
+- **学习链路：** EpisodeStore → PatternExtractor(condition=agent=X,success=Y) → consolidate → wisdom_trigger → wisdom_context()/belief_context() → think() premises ✅ 全链路打通
+
+## 学习管线
+
+OCOS 的学习管线已从"空转磨坊"修复为闭环运转：
+
+| 层 | 模块 | 状态 | 说明 |
+|----|------|------|------|
+| 数据层 | AgentRuntime.condition | ✅ 已修复 | `tick@N` → `agent=X, success=Y` — 让 PatternExtractor 能自然聚合 |
+| 巩固层 | _consolidate_episodes | ✅ 已修复 | `active_only=False` — 第一次 dream 后 consolidated episode 不再被跳过 |
+| 巩固层 | wisdom_trigger | ✅ 已修复 | `active_only=False` + `limit=200` — 同根因修复 |
+| 消费层 | wisdom_context() + belief_context() | ✅ 已接线 | 注入 think() premises — 学习沉淀真被消费进决策 |
+| 多渠道 | UnifiedIngestor | 🆕 新增 | filter → extract → store → register 统一摄入入口 |
+| 多渠道 | WebResearcher | 🆕 新增 | DuckDuckGo Instant Answer API 网络搜索调研 |
+| 多渠道 | LLMTutor | 🆕 新增 | TextGenerator LLM 知识库问答 |
+| 多渠道 | ExperienceExtractor | 🆕 新增 | EpisodeStore/DB fallback 任务经验提取 |
+
+### 生产数据取证（~/.ocos/ocos.db）
+
+| 指标 | 修复前 | 修复后 |
+|------|--------|--------|
+| condition 分组 | 1007×tick@N（每次 tick 唯一） | 608×researcher, 356×writer, 43×reviewer（自然聚合） |
+| PatternExtractor 候选 | 0 个 | **9 个**（≥min_samples=3 聚合） |
+| consolidate replayed | 1 条 | **248 条** |
+| pattern 持久化 | 12 条（全是 daemon 事件噪声） | **16 条**（+4 条真实任务模式） |
+| wisdom 产出 | 5 条（模板化，没人读） | **6 条**（+1 新聚类，think() 每次读 5 条） |
+| belief 被消费 | ❌ 321 条全沉底 | ✅ think() 每次读 5 条 by confidence |
+
+### 学习链路三层法则
+
+1. **数据层 condition 必须编码任务语义** — 不能用无意义的 tick 序号（`tick@N`），必须编码 agent 类型 + 执行结果（`agent=researcher, success=true`）让 PatternExtractor 能按同类聚合
+2. **consolidation 不能用 active_only=True** — 它假设"第一次 dream 会扫完所有"，但实际上 daemon 启动后新产生的 episode 永远不会被后续 dream 扫到
+3. **产出必须真被 think() 读进 premises** — wisdom/belief 写了没人读等于白写。必须通过 `wisdom_context()` / `belief_context()` 注入 `_bridge.reason(premises={...})`
+
+### 修复文件
+
+- `ocos/agent/agent_runtime.py` — condition 字段根因修复
+- `ocos/agent/master_agent.py` — active_only=False + wisdom_context()/belief_context() 注入
+- `ocos/agent/wisdom_trigger.py` — active_only=False
+- `ocos/cognitive_loop/loop_orchestrator.py` — inject_memory_providers()
+- `ocos/learning/unified_ingestor.py` — 🆕 统一摄入入口
+- `ocos/learning/channels/web_researcher.py` — 🆕 网络搜索渠道
+- `ocos/learning/channels/llm_tutor.py` — 🆕 LLM 问答渠道
+- `ocos/learning/channels/experience_extractor.py` — 🆕 经验提取渠道
 
 ## 文档
 

@@ -142,7 +142,3 @@ class EchoAgent:
 
 # ── 便捷工厂 ─────────────────────────────────────────────────────────────────
 
-
-def make_echo_agent() -> EchoAgent:
-    """创建 EchoAgent 实例 (工厂函数)。"""
-    return EchoAgent()
