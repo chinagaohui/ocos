@@ -999,7 +999,11 @@ class ResidentRuntime:
 
     # ── Phase S2-P1b: UnifiedIngestor 经验自动摄入 ──
     def _ingest_experience(self) -> None:
-        """每 dream_interval 触发 — ExperienceExtractor → UnifiedIngestor."""
+        """每 dream_interval 触发 — ExperienceExtractor → UnifiedIngestor.
+
+        注入完整 KnowledgeRegistry(semantic_store) + BeliefStore ——
+        让 ingest 真正落到 knowledge / belief SQL 表。
+        """
         try:
             from ocos.learning.channels.experience_extractor import ExperienceExtractor
             from ocos.learning.unified_ingestor import (
@@ -1008,8 +1012,37 @@ class ResidentRuntime:
             db_path = getattr(self, "_db_path", None)
             if not db_path:
                 return
+            # T1: 构建完整知识层依赖注入链路
+            try:
+                from ocos.memory.semantic.store import SemanticStore
+                from ocos.knowledge.store.registry import (
+                    KnowledgeRegistry, AccessMatrix,
+                )
+                from ocos.knowledge.store.ontology import KnowledgeLevel
+                from ocos.memory.belief.store import BeliefStore
+                semantic_store = SemanticStore(db_path=db_path)
+                semantic_store.initialize()  # 必须！否则 connection 未就绪
+                # daemon 需要通配写权限覆盖所有知识层级
+                access_matrix = AccessMatrix()
+                for lvl in KnowledgeLevel:
+                    access_matrix.set_permission("daemon_experience", lvl, can_read=True, can_write=True)
+                    access_matrix.set_permission("manual_test", lvl, can_read=True, can_write=True)
+                registry = KnowledgeRegistry(
+                    semantic_store=semantic_store,
+                    access_matrix=access_matrix,
+                )
+                belief_store = BeliefStore(db_path=db_path)
+            except Exception:
+                logger.warning(
+                    "Full knowledge layer injection failed — "
+                    "fallback to plain UnifiedIngestor", exc_info=True)
+                registry = belief_store = None
             extractor = ExperienceExtractor(db_path=db_path)
-            ingestor = UnifiedIngestor(db_path=db_path)
+            ingestor = UnifiedIngestor(
+                knowledge_registry=registry,
+                belief_store=belief_store,
+                db_path=db_path,
+            )
             artifacts = extractor.extract_recent(days=7, limit=20)
             if not artifacts:
                 return

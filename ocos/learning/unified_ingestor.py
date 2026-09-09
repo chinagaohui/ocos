@@ -214,25 +214,31 @@ class UnifiedIngestor:
             return fallback_id
 
         try:
-            from ocos.knowledge.store.registry import (
-                KnowledgeUnit, AccessLevel, AccessScope,
+            from ocos.knowledge.store.registry import AccessScope
+            from ocos.knowledge.store.ontology import (
+                KnowledgeUnit, KnowledgeLevel, KnowledgeStatus,
             )
 
-            level = self._infer_access_level(art)
+            level = self._infer_knowledge_level(art)
+            # KnowledgeUnit 只有 8 个字段: unit_id/level/status/content/
+            # source/version/parent_id/timestamp —— 没有 title/confidence/
+            # tags/metadata 等
             unit = KnowledgeUnit(
                 unit_id=art.content_key,
-                title=art.title or art.content[:50],
-                content=art.content[:500],
                 level=level,
-                confidence=art.confidence,
-                tags=frozenset(art.tags or {art.channel.value}),
-                created_at=art.created_at,
-                metadata={
+                status=KnowledgeStatus.CANDIDATE,
+                content={
+                    "statement": art.content[:500],
+                    "confidence": float(art.confidence),
+                    "domain": art.knowledge_type or art.channel.value,
                     "channel": art.channel.value,
-                    "source_url": art.source_url,
-                    "knowledge_type": art.knowledge_type,
-                    **art.metadata,
+                    "source_url": art.source_url or "",
+                    "tags": list(art.tags or {art.channel.value}),
                 },
+                source=art.source_url or art.channel.value,
+                version=1,
+                parent_id="",
+                timestamp=art.created_at,
             )
             ok, msg = self._registry.register(
                 unit, owner=owner,
@@ -311,17 +317,19 @@ class UnifiedIngestor:
             return True
         return False
 
-    def _infer_access_level(self, art: IngestArtifact) -> Any:
-        """根据渠道和置信度推断 KnowledgeUnit 访问等级."""
-        from ocos.knowledge.store.registry import AccessLevel
+    def _infer_knowledge_level(self, art: IngestArtifact) -> "KnowledgeLevel":
+        """根据渠道和置信度推断 KnowledgeLevel (OBSERVATION→POLICY)."""
+        from ocos.knowledge.store.ontology import KnowledgeLevel
 
         if art.channel == SourceChannel.EXPERIENCE:
-            return AccessLevel.OBSERVATION  # 自己的经验 = 底层观测
+            return KnowledgeLevel.OBSERVATION   # 自己的经验 = 底层观测
+        if art.channel == SourceChannel.WEB:
+            return KnowledgeLevel.EVIDENCE       # 外部搜索 = 证据层
         if art.confidence >= 0.8:
-            return AccessLevel.FACT  # 高置信度外部知识 = 事实
+            return KnowledgeLevel.PRINCIPLE      # 高置信度 = 原则
         if art.confidence >= 0.5:
-            return AccessLevel.CONCEPT  # 中等 = 概念
-        return AccessLevel.HYPOTHESIS  # 低 = 假说
+            return KnowledgeLevel.PATTERN        # 中等 = 模式
+        return KnowledgeLevel.OBSERVATION        # 低 = 观测
 
     # ── 状态查询 ────────────────────────────────────────────────────────
 
