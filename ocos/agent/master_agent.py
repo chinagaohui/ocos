@@ -567,6 +567,10 @@ class MasterAgent:
             belief = self.belief_context(limit=5)
             if belief.get("available"):
                 premises["beliefs"] = belief
+            # Phase S2 (L2-C): 注入 knowledge (SemanticStore) — GAP-P0-2 修复
+            knowledge = self.knowledge_context(limit=5)
+            if knowledge.get("available"):
+                premises["knowledge"] = knowledge
         except Exception:
             pass  # wisdom/belief 注入失败不阻塞思考
 
@@ -1071,6 +1075,31 @@ class MasterAgent:
                 for b in beliefs
             ]
             ctx["beliefs"] = lines
+            ctx["available"] = bool(lines)
+        except Exception:
+            pass
+        return ctx
+
+    def knowledge_context(self, limit: int = 5, min_confidence: float = 0.5) -> dict:
+        """Phase S2 (L2-C): 消费语义知识 — 从 SemanticStore knowledge 表加载.
+
+        GAP-P0-2 修复: knowledge 表 (SemanticStore) 是 L2 语义知识层核心,
+        之前能写入但没人读进决策 — 这里补上.
+        """
+        ctx: dict = {"entries": [], "available": False, "source": "knowledge"}
+        store = getattr(self, "_semantic_store", None)
+        if store is None:
+            return ctx
+        try:
+            entries = store.query_by_confidence(
+                min_confidence=min_confidence, limit=limit,
+                active_only=False,  # 取 unstable 也比没有好（knowledge 表还在积累阶段）
+            )
+            lines = [
+                f"{e.statement} (conf={e.confidence:.2f}, domain={e.scope.domain})"
+                for e in entries
+            ]
+            ctx["entries"] = lines
             ctx["available"] = bool(lines)
         except Exception:
             pass

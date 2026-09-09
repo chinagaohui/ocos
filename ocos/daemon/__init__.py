@@ -666,6 +666,18 @@ class ResidentRuntime:
                         self._consolidate()
                     except Exception:
                         logger.exception("Dream consolidation failed")
+
+                    # Phase S2-P1b: 经验自动摄入（UnifiedIngestor）
+                    try:
+                        self._ingest_experience()
+                    except Exception:
+                        logger.exception("UnifiedIngestor failed")
+
+                    # Phase S2-P1a: EpistemicDrive 触发外部调研
+                    try:
+                        self._epistemic_research()
+                    except Exception:
+                        logger.exception("Epistemic research failed")
                 # Phase 33: 将队列中的目标导入 runtime 的 goal_store
                 self._drain_goal_queue()
                 # 全自动模式: 待批队列自动通过（ask 模式零开销空转）
@@ -984,6 +996,79 @@ class ResidentRuntime:
         if agent_obj is None:
             return
         self._consolidation.run_dream_cycle(agent_obj)
+
+    # ── Phase S2-P1b: UnifiedIngestor 经验自动摄入 ──
+    def _ingest_experience(self) -> None:
+        """每 dream_interval 触发 — ExperienceExtractor → UnifiedIngestor."""
+        try:
+            from ocos.learning.channels.experience_extractor import ExperienceExtractor
+            from ocos.learning.unified_ingestor import UnifiedIngestor
+            db_path = getattr(self, "_db_path", None)
+            if not db_path:
+                return
+            extractor = ExperienceExtractor(db_path=db_path)
+            ingestor = UnifiedIngestor(db_path=db_path)
+            artifacts = extractor.extract_recent(days=7, limit=20)
+            if not artifacts:
+                return
+            stored = dup = filt = 0
+            for art in artifacts:
+                try:
+                    r = ingestor.ingest(art, source_type="experience")
+                    stored += int(getattr(r, "stored", 0))
+                    dup += int(getattr(r, "duplicates", 0))
+                    filt += int(getattr(r, "filtered", 0))
+                except Exception:
+                    pass
+            logger.info("Phase S2-P1b ingest: %d artifacts → stored=%d dedup=%d filtered=%d",
+                       len(artifacts), stored, dup, filt)
+        except Exception:
+            logger.debug("UnifiedIngestor skipped (no data or missing deps)", exc_info=True)
+
+    # ── Phase S2-P1a: EpistemicDrive → WebResearcher 自动调研 ──
+    def _epistemic_research(self) -> None:
+        """每 dream_interval 触发 — EpistemicDrive 高不确定性 domain → WebResearcher."""
+        try:
+            from ocos.reasoning.curiosity import PredictionGapTracker, EpistemicDrive
+            from ocos.learning.channels.web_researcher import WebResearcher
+            from ocos.learning.unified_ingestor import UnifiedIngestor
+
+            db_path = getattr(self, "_db_path", None)
+            if not db_path:
+                return
+
+            # EpistemicDrive: 拿 top 1 不确定性 domain
+            tracker = PredictionGapTracker(db_path=db_path)
+            drive = EpistemicDrive(tracker=tracker, db_path=db_path, top_n=1)
+            suggestions = list(drive.suggest_growth())[:1] + list(drive.suggest_explore())[:1]
+            if not suggestions:
+                return
+
+            ingestor = UnifiedIngestor(db_path=db_path)
+            researcher = WebResearcher()
+            total = 0
+            for topic in suggestions[:2]:  # 每轮最多 2 个调研（限流）
+                try:
+                    result = researcher.research(topic)
+                    if result and getattr(result, "findings", None):
+                        # 转 IngestArtifact → UnifiedIngestor 入库
+                        from ocos.learning.unified_ingestor import IngestArtifact
+                        artifacts = [IngestArtifact(
+                            source_id=f"web-research-{topic[:20]}",
+                            content=f"调研「{topic}」: {finding}",
+                            confidence=getattr(result, "confidence", 0.7),
+                            metadata={"topic": topic, "source": result.source},
+                        ) for finding in result.findings[:3]]
+                        for art in artifacts:
+                            ingestor.ingest(art, source_type="web_research")
+                        total += len(artifacts)
+                        logger.info("Phase S2-P1a web research: '%s' → %d findings", topic[:40], len(artifacts))
+                except Exception:
+                    pass  # 单个调研失败不阻塞
+
+            logger.info("Phase S2-P1a total web research artifacts: %d", total)
+        except Exception:
+            logger.debug("Epistemic research skipped", exc_info=True)
 
     def _write_heartbeat(self) -> None:
         """UX-F3: 每 tick 写心跳文件（Web 侧栏/状态命令判断存活）。
