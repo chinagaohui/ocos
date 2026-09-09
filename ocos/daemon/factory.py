@@ -169,6 +169,33 @@ def build_master_agent(agent_id: str, db_path: Optional[str] = None):
     except Exception as e:
         logger.warning("Dream stores unavailable: %s", e)
 
+    # GAP-P2-1 修复: Phase S2 语义知识层完整装配
+    # SemanticStore → KnowledgeRegistry (注入 semantic_store) → KnowledgeGraphMgr
+    _semantic_store = None
+    _knowledge_registry = None
+    _knowledge_graph = None
+    try:
+        from ocos.memory.semantic.store import SemanticStore
+        _semantic_store = SemanticStore(db_path=db_path or ":memory:")
+        _semantic_store.initialize()
+    except Exception as e:
+        logger.warning("SemanticStore unavailable: %s", e)
+    try:
+        from ocos.knowledge.store.registry import KnowledgeRegistry, AccessMatrix
+        _knowledge_registry = KnowledgeRegistry(
+            access_matrix=AccessMatrix(),
+            semantic_store=_semantic_store,  # GAP-P2-1: 注入 → register/update 自动镜像到 knowledge 表
+        )
+    except Exception as e:
+        logger.warning("KnowledgeRegistry unavailable: %s", e)
+    try:
+        from ocos.knowledge.graph import KnowledgeGraph
+        _knowledge_graph = KnowledgeGraph()
+        if _semantic_store is not None:
+            _knowledge_graph.bind_semantic(_semantic_store)
+    except Exception as e:
+        logger.warning("KnowledgeGraph unavailable: %s", e)
+
     return MasterAgent(
         agent_id=agent_id,
         identity=IdentityBoundary.create_default(),
@@ -188,6 +215,9 @@ def build_master_agent(agent_id: str, db_path: Optional[str] = None):
         episode_store=_episode_store,
         belief_store=_belief_store,
         pattern_store=_pattern_store,
+        # GAP-P2-1: Phase S2 语义知识层注入
+        semantic_store=_semantic_store,
+        knowledge_graph=_knowledge_graph,
         **engines,
     ), _registry_holder
 

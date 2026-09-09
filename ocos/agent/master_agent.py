@@ -92,6 +92,8 @@ class MasterAgent:
         # P2-C: Dream consolidation stores (optional — 默认惰性创建内存存储)
         belief_store: Any = None,
         pattern_store: Any = None,
+        # Phase S2: 语义知识存储（可选注入 — GAP-P2-1 修复: 让 consolidation 能沉淀到 SemanticStore）
+        semantic_store: Any = None,
         # P2-D: 主动输出通道（可选注入；默认本地日志）
         proactive_output_callback: Any = None,
         # Phase Q: 外部交互通道管理（可选注入；由 AgentRuntime 组装）
@@ -161,6 +163,15 @@ class MasterAgent:
         # P2-D: Dream consolidation stores（惰性创建内存存储，显式注入优先）
         self._belief_store = belief_store
         self._pattern_store = pattern_store
+        # Phase S2: 语义知识存储 — GAP-P2-1 修复
+        self._semantic_store = semantic_store
+        if self._semantic_store is None:
+            try:
+                from ocos.memory.semantic.store import SemanticStore
+                self._semantic_store = SemanticStore(db_path=":memory:")
+                self._semantic_store.initialize()
+            except Exception:
+                self._semantic_store = None
         if self._belief_store is None:
             self._belief_store = BeliefStore(db_path=":memory:")
             self._belief_store.initialize()
@@ -1573,6 +1584,33 @@ class MasterAgent:
                 stats["pruned"] += 1
             else:
                 stats["patterns_strengthened"] += 1  # 已存在 → 加强计数（不重复插入）
+
+        # 3.5. Semantic 知识沉淀（GAP-P2-1 修复: 让 pattern 升级为 Semantic KnowledgeEntry）
+        # 从已存 pattern 里提取 → KnowledgeEntry 写入 SemanticStore
+        if self._semantic_store is not None:
+            try:
+                from ocos.memory.semantic.models import KnowledgeEntry, KnowledgeScope
+                new_semantic = 0
+                for pat in self._pattern_store.query_by_status(
+                    "active", limit=self._CONSOLIDATION_BATCH_LIMIT * 2
+                ) if hasattr(self._pattern_store, 'query_by_status') else []:
+                    # 高置信 pattern → 升级为 KnowledgeEntry
+                    if pat.confidence < 0.6 or not hasattr(pat, 'trigger_condition'):
+                        continue
+                    statement = f"当 {pat.trigger_condition} 时，{pat.observed_relation}"
+                    scope_domain = pat.trigger_condition[:50]
+                    entry = KnowledgeEntry.create(
+                        statement=statement,
+                        source_patterns=[pat.id],
+                        confidence=pat.confidence,
+                        scope=KnowledgeScope(domain=scope_domain),
+                        stability=0.7,
+                    )
+                    self._semantic_store.save(entry)
+                    new_semantic += 1
+                stats["semantic_entries"] = new_semantic
+            except Exception:
+                pass  # Semantic 沉淀失败不阻塞 consolidation
 
         # 4. 弱 Belief 修剪（weaken → archive，退出推理）
         for belief in self._belief_store.query_by_status(
