@@ -47,12 +47,56 @@ cat docs/ARCHITECTURE.md
 
 ## 项目状态（2026-09-09 更新）
 
-- **代码规模：** ~168,000 行 / ~825 modules / ~2,370 classes
-- **测试数量：** 4,366 passed（baseline 零回归）
-- **生产状态：** systemd 常驻 daemon 运行中（cycle 持续增长），行为级验收全绿
-- **当前阶段：** 学习管线闭环修复完成 → 多渠道外部学习就绪
+- **代码规模：** ~169,500 行 / ~840 modules / ~2,380 classes
+- **测试数量：** 4,366-4,367 passed（baseline 零回归）
+- **生产状态：** systemd 常驻 daemon 运行中（cycle ≥ 619 持续增长）
+- **当前阶段：** 落地方案 6 步全部落地 → 等时间积累验证端到端 checklist
 - **主链：** ResidentRuntime → RuntimeKernel → AgentRuntime.tick() → TaskDAG → DecisionBridge → Permission → Execution
 - **学习链路：** EpisodeStore → PatternExtractor(condition=agent=X,success=Y) → consolidate → wisdom_trigger → wisdom_context()/belief_context() → think() premises ✅ 全链路打通
+- **自治治理：** GoalGenesis 提案引擎 + 分级批准 (LOW/MEDIUM auto / HIGH reject) + 4 级自治阶梯 (L0-L3) + ShadowVerifier 沙箱验证 + CircuitBreaker 熔断降级 + 4 个 Prometheus 北极星指标
+
+## 落地方案（对齐 Coze 报告）
+
+执行级落地方案：`docs/AUTONOMY_EXECUTION_PLAN_v1.0.md`
+
+| Step | 报告阶段 | 内容 | 状态 |
+|------|---------|------|------|
+| Step 1 | P1 宪法修正案 | GoalGenesis 提案引擎 + 分级批准 + goal_proposal 审计表 + motivation 接入 | ✅ 完成 |
+| Step 2 | P4 自治度闸门 | dream() L0 skip + 4 级自治阶梯已存在 (ocos/execution/autonomy.py) | ✅ 完成 |
+| Step 3 | P5 自进化 | ShadowVerifier 沙箱 + GrowthOptimizer.apply_in_sandbox 护栏 ①-⑦ | ✅ 完成 |
+| Step 4 | 治理层 | RiskRegistry (4 条结构化风险) + CircuitBreaker 熔断降级 + 审计 JSONL 增强 | ✅ 完成 |
+| Step 5 | 北极星指标 | 4 个 Prometheus gauge — overreach / completion_rate / failure_delta / proposal_rate | ✅ 完成 |
+| Step 6 | 端到端验收 | daemon 24h 运行 + checklist 全过 | 🟡 等时间积累 |
+
+### 落地方案新增/改动文件
+
+- `ocos/autonomous/goal_genesis.py` — 🆕 GoalGenesis 提案引擎 + 分级批准
+- `ocos/agent/master_agent.py` — ✏️ dream() L0 闸门 + knowledge_context()/wisdom_context()/belief_context()
+- `ocos/daemon/motivation.py` — ✏️ _propose() 接入 GoalGenesis + authority=PROPOSAL
+- `ocos/growth/shadow_verifier.py` — 🆕 ShadowVerifier 沙箱 + EvolutionGuard 护栏
+- `ocos/growth/engine.py` — ✏️ GrowthOptimizer.apply_in_sandbox()
+- `ocos/governance/risk_registry.py` — 🆕 RiskRegistry + CircuitBreaker 熔断
+- `ocos/governance/autonomy_metrics.py` — 🆕 北极星指标 Prometheus exposition
+- `docs/AUTONOMY_EXECUTION_PLAN_v1.0.md` — 🆕 执行级落地方案
+
+### 北极星指标（生产实时值）
+
+```
+ocos_overreach_events_total              = 1    (HIGH risk REJECTED, 正确被拒)
+ocos_autonomous_completion_rate_pct      = 12.5 (等 daemon 24h 积累)
+ocos_proposal_approval_rate_pct          = 66.7 ✅ (≥ 50% 达标!)
+```
+
+### 安全护栏
+
+GrowthOptimizer 自动 apply 必须全部满足：
+① autonomy_level == L3
+② ShadowVerifier 沙箱 pytest 通过
+③ scale_guard 通过 (绝对 50 行 OR 比例 15% OR 保留 ≥ 50%)
+④ pytest 零回归
+⑤ 改动文件数 ≤ 5
+⑥ 不碰红线文件 (宪法/权限/决策类型)
+⑦ CircuitBreaker 未熔断
 
 ## 学习管线
 
