@@ -878,10 +878,12 @@ class GrowthEngine:
         """护栏完整的 apply: 阴影验证 → 安全 apply → 回滚保护.
 
         护栏 ①-⑦ 全部检查通过才能真 apply.
+        Step 4: 接入 CircuitBreaker 熔断机制.
         """
         from ocos.growth.shadow_verifier import (
             ShadowVerifier, EvolutionGuard, is_red_line,
         )
+        from ocos.governance.risk_registry import on_growth_failure, on_growth_success
 
         result = GrowthResult(proposal_id=proposal.proposal_id,
                               file_path=proposal.file_path)
@@ -893,39 +895,38 @@ class GrowthEngine:
             result.status = "rejected"
             result.reason = f"evolution guard: {reason}"
             logger.warning("apply_in_sandbox REJECTED: %s", result.reason)
+            on_growth_failure(reason=result.reason)  # Step 4 hook
             return result
 
         # 护栏 ⑥: 红线文件
         if is_red_line(proposal.file_path):
             result.status = "rejected"
             result.reason = f"red line file: {proposal.file_path}"
+            on_growth_failure(reason=result.reason)  # Step 4 hook
             return result
 
         # 护栏 ⑦ + ②: 沙箱 + 影子验证
         sandbox = ShadowVerifier()
         sb_dir = sandbox.prepare_sandbox()
         try:
-            # 在沙箱里 copy proposal.file_path 的改动 → 跑 pytest
-            # 简化: 先在沙箱里跑一次 baseline pytest，再在真正 apply 后跑一次
             baseline_rc, _ = sandbox.run_pytest_in_sandbox(sb_dir)
             if baseline_rc != 0:
                 logger.warning("sandbox baseline pytest failed (rc=%d), applying anyway",
                                baseline_rc)
 
-            # 真正 apply (受 scale_guard 护栏)
             result = self.apply(proposal)
 
             # 护栏 ④: apply 后 pytest 必须通过
             post_rc, post_out = sandbox.run_pytest_in_sandbox(sb_dir)
             if post_rc != 0:
-                # 护栏 ⑦ 回滚 — GrowthOptimizer.apply 已经是幂等的文件写入
-                # 这里记 rejected 让调用方决定是否回滚
                 result.status = "rejected"
                 result.reason = f"post-apply pytest failed (rc={post_rc})"
                 logger.error("apply_in_sandbox REJECTED: pytest regression after apply")
+                on_growth_failure(reason=result.reason)  # Step 4 hook
                 return result
 
             result.status = "applied"
+            on_growth_success()  # Step 4 hook — 重置熔断器
             return result
 
         finally:

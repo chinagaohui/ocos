@@ -304,6 +304,13 @@ class MetricsRegistry:
                 lines.append(f"ocos_histograms_count{{name=\"{name}\"}} {len(values)}")
         lines.append("")
 
+        # Step 5: 追加北极星指标 (autonomy_metrics) — 实时从 DB 计算
+        try:
+            from ocos.governance.autonomy_metrics import prometheus_metrics
+            lines.append(prometheus_metrics())
+        except Exception:
+            pass  # DB 不存在或指标模块不可用时静默降级
+
         return "\n".join(lines)
 
     def reset(self) -> None:
