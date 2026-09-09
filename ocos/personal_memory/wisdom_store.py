@@ -107,14 +107,40 @@ class WisdomStore:
         ).fetchall()
         for user_id, wisdom_id, principle, state, source_patterns, evidence in rows:
             coll = store.get_or_create_collection(user_id)
+
+            # source_patterns 容错
+            try:
+                sp = _json.loads(source_patterns or "[]")
+                if not isinstance(sp, list):
+                    sp = []
+            except (ValueError, TypeError):
+                sp = []
+
+            # evidence 容错 — 兼容历史遗留 dict / str 格式
+            # 合法格式 = list[dict(WisdomEvidence fields)]
+            ev_list: list[WisdomEvidence] = []
+            try:
+                raw = _json.loads(evidence or "[]")
+                if isinstance(raw, dict):
+                    # 历史遗留: 单条 dict（不是 list） → 跳过
+                    pass
+                elif isinstance(raw, list):
+                    for e in raw:
+                        if isinstance(e, dict):
+                            try:
+                                ev_list.append(WisdomEvidence(**e))
+                            except TypeError:
+                                pass  # 字段不全 — 跳过这条 evidence
+                        # else: str / 其他类型 — 跳过
+            except (ValueError, TypeError):
+                pass
+
             item = WisdomItem(
                 wisdom_id=wisdom_id,
                 principle=principle,
                 state=WisdomState(state),
-                source_patterns=tuple(_json.loads(source_patterns or "[]")),
-                evidence=[
-                    WisdomEvidence(**e) for e in _json.loads(evidence or "[]")
-                ],
+                source_patterns=tuple(sp),
+                evidence=ev_list,
             )
             coll.items[wisdom_id] = item
         return store

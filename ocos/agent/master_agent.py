@@ -1462,6 +1462,12 @@ class MasterAgent:
             if hub is not None:
                 from ocos.agent.wisdom_trigger import consolidate_wisdom
                 consolidation["wisdom_stats"] = consolidate_wisdom(hub)
+            else:
+                # hub 未 attach — 返回降级 stats 而非缺失 key
+                consolidation["wisdom_stats"] = {
+                    "patterns": 0, "candidates": 0, "persisted": 0,
+                    "wisdom_total": 0, "reason": "hub_not_attached",
+                }
         except Exception:
             consolidation["wisdom_stats"] = {}  # 智慧提炼失败不阻塞睡眠
 
