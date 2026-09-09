@@ -1014,25 +1014,32 @@ class ResidentRuntime:
             if not artifacts:
                 return
             stored = dup = filt = fail = 0
-            for art in artifacts:
-                try:
-                    results = ingestor.ingest(
-                        art, owner="daemon_experience")
-                    # ingest() 总是返回 list[IngestResult] —— 单条也包装
-                    for r in results:
-                        if r.status == IngestStatus.STORED:
-                            stored += 1
-                        elif r.status == IngestStatus.DUPLICATE:
-                            dup += 1
-                        elif r.status == IngestStatus.FILTERED_LOW_QUALITY:
-                            filt += 1
-                        else:
-                            fail += 1
-                except Exception:
-                    logger.exception(
-                        "UnifiedIngestor failed for one artifact")
+            for exp in artifacts:
+                # ExperienceExtractor 返回 ExperienceArtifact —— 先调
+                # to_ingest_artifacts() 转成 IngestArtifact 再喂 ingestor
+                ingest_arts = (
+                    exp.to_ingest_artifacts()
+                    if hasattr(exp, "to_ingest_artifacts")
+                    else [exp]
+                )
+                for art in ingest_arts:
+                    try:
+                        results = ingestor.ingest(
+                            art, owner="daemon_experience")
+                        for r in results:
+                            if r.status == IngestStatus.STORED:
+                                stored += 1
+                            elif r.status == IngestStatus.DUPLICATE:
+                                dup += 1
+                            elif r.status == IngestStatus.FILTERED_LOW_QUALITY:
+                                filt += 1
+                            else:
+                                fail += 1
+                    except Exception:
+                        logger.exception(
+                            "UnifiedIngestor failed for one artifact")
             logger.info(
-                "Phase S2-P1b ingest: %d artifacts → stored=%d dedup=%d "
+                "Phase S2-P1b ingest: %d raw → stored=%d dedup=%d "
                 "filtered=%d failed=%d",
                 len(artifacts), stored, dup, filt, fail)
         except Exception:
