@@ -426,20 +426,56 @@ class MotivationHub:
     # ── 落地 ──────────────────────────────────────────────────────────
 
     def _propose(self, c: GoalCandidate, level: int, stats: dict) -> None:
-        """单条提案落地：低风险 LEVEL>=2 直写 goals 表，其余进待批。"""
+        """单条提案落地：GoalGenesis 提案引擎 → 分级批准 → goal_store.save().
+
+        P1 宪法修正案 (Step 1.4): 原来直接 save，现在加 GoalProposal 中间层
+        + 分级批准通道。保留 level>=2 low_risk 条件，但 authority 改为 PROPOSAL。
+        """
+        # ── P1: GoalGenesis 提案引擎 ──────────────────────────────────
+        try:
+            from ocos.autonomous.goal_genesis import GoalGenesis
+            genesis = GoalGenesis(db_path=self._db_path)
+            proposals = genesis.produce(
+                suggestions=[c.description],
+                domain=c.domain,
+                source=c.kind.lower(),
+            )
+            prop = proposals[0]
+            prop.value_score = c.score  # 复用现有 score
+            genesis._persist(prop)
+            prop = genesis.approve(prop)  # LOW/MEDIUM auto, HIGH reject
+            if prop.status != "APPROVED":
+                stats.setdefault("rejected", 0)
+                stats["rejected"] += 1
+                logger.info("MotivationHub: GoalGenesis REJECTED %s (risk=%s)",
+                            prop.proposal_id, prop.risk_level)
+                return
+        except Exception:
+            # GoalGenesis 不可用时回退到旧逻辑（不阻塞 motivation）
+            logger.debug("GoalGenesis unavailable, falling back to direct save", exc_info=True)
+            genesis = None
+            prop = None
+
+        # ── 落地: 低风险直写 goals 表，其余进待批 ────────────────────
         goal_id = f"GOAL-AUTO-{uuid.uuid4().hex[:12]}"
-        via = "pending"
         if level >= 2 and c.low_risk and self._goal_store is not None:
-            via = "goals_table"
+            # P1: authority 从 AUTONOMOUS 改为 PROPOSAL（走 GoalGenesis 宪法通道）
+            prop_id = prop.proposal_id if prop else None
             self._goal_store.save(
                 goal_id=goal_id, level="TASK", status="PENDING",
                 description=c.description,
-                source="autonomous",
+                source="goal_genesis" if genesis else "autonomous",
+                source_id=prop_id or "",
                 metadata={"autonomous": True, "kind": c.kind,
                           "domain": c.domain, "score": c.score,
-                          "evidence": c.evidence},
-                origin_level="SELF", authority="AUTONOMOUS")
+                          "evidence": c.evidence,
+                          **({"proposal_id": prop_id, "value_score": prop.value_score,
+                              "risk_level": prop.risk_level} if prop else {})},
+                origin_level="SELF",
+                authority="PROPOSAL" if genesis else "AUTONOMOUS")
             stats["auto_enqueued"] += 1
+            if prop and genesis:
+                genesis.mark_completed(prop.proposal_id)
         elif self._pending_store is not None:
             pid = self._pending_store.enqueue(
                 action_type="autonomous_goal",

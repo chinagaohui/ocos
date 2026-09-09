@@ -1397,11 +1397,21 @@ class MasterAgent:
             self._control_loop.enter_sleep()
 
     def dream(self) -> Any:
-        """梦境：Memory Consolidation + Lessons Synthesis。
+        """梦境：Memory Consolidation + Lessons Synthesis.
 
         Phase 21: 从 Experience Candidate 合成 Lessons，存为 Episode。
         Phase 22: LifecycleManager 管理宏观阶段。
+
+        P4 自治度分级: L0 (只听不动) 跳过 dream；L1+ 正常跑。
         """
+        # P4: 自治度分级闸门 — L0 不跑 dream（只积累 episode，不巩固）
+        try:
+            from ocos.execution.autonomy import get_autonomy_level
+            if get_autonomy_level() < 1:
+                logger.info("dream skipped at autonomy level 0 (observe-only mode)")
+                return {"phase": "dream", "skipped": True, "reason": "level_0_observe"}
+        except Exception:
+            pass  # 自治模块不可用时降级到旧行为（正常跑 dream）
         self._control_loop.enter_dream()
         consolidation: dict[str, Any] = {
             "phase": "dream",
