@@ -156,8 +156,8 @@ class KnowledgeGraph:
                     for e in self._entities.values()
                 ],
                 "relations": [
-                    {"id": r.relation_id, "from": r.from_entity, "to": r.to_entity,
-                     "type": r.relation_type.name, "confidence": r.confidence}
+                    {"id": r.relation_id, "from": r.subject_id, "to": r.object_id,
+                     "type": r.predicate.name, "confidence": r.confidence}
                     for r in self._relations.values()
                 ],
                 "facts": [
@@ -166,27 +166,69 @@ class KnowledgeGraph:
                     for f in self._facts
                 ],
             }, ensure_ascii=False)
-            entry = KnowledgeEntry(
-                id="knowledge_graph_state",
+            # P2-4: 把 JSON payload 存 scope.limitations 里（scope 是 KnowledgeScope 对象）
+            scope = KnowledgeScope(
+                domain="graph_state",
+                limitations=(payload[:5000],),  # limitations tuple 里塞 JSON payload（简化方案）
+            )
+            entry = KnowledgeEntry.create(
                 statement=f"KnowledgeGraph: {len(self._entities)} entities, "
                          f"{len(self._relations)} relations, {len(self._facts)} facts",
-                source_patterns=(),
+                source_patterns=("knowledge_graph_state",),
                 confidence=1.0,
-                scope=KnowledgeScope(domain="graph_state"),
+                scope=scope,
                 stability=0.9,
-                revision=1,
-                status="active",
             )
-            # 用 save 存 statement（payload 通过 scope_domain 扩展存 JSON payload 的简化方式）
             self._semantic_store.save(entry)
         except Exception:
             pass  # persist 失败不阻塞
 
     def load_from_semantic(self) -> None:
-        """从 SemanticStore 恢复 Graph 状态（当前简化实现: 空操作，持久化通过 persist 记录到 knowledge 表）."""
-        # 简化: KnowledgeGraph 的持久化当前走 persist_to_semantic 存 summary，
-        # 后续完整恢复可以用 JSON payload 反序列化 entities/relations/facts
-        pass
+        """从 SemanticStore 恢复 Graph 状态（反序列化 persist_to_semantic 存的 JSON payload）."""
+        if self._semantic_store is None:
+            return
+        try:
+            from ocos.memory.semantic.models import KnowledgeStatus
+            entries = self._semantic_store.query_by_lineage(
+                source_patterns=("knowledge_graph_state",),
+                limit=10,
+            )
+            if not entries:
+                return
+            import json as _json
+            latest = entries[-1]
+            # P2-4: JSON payload 存 scope.limitations[0]
+            limitations = getattr(latest.scope, 'limitations', ()) if hasattr(latest, 'scope') else ()
+            if not limitations:
+                return
+            payload_str = limitations[0]
+            try:
+                payload = _json.loads(payload_str)
+            except Exception:
+                return  # 老版本没有 JSON payload
+            for ent_data in payload.get("entities", []):
+                from ocos.knowledge.graph import Entity, EntityType
+                try:
+                    etype = EntityType(ent_data.get("type", "CONCEPT"))
+                except ValueError:
+                    etype = EntityType.CONCEPT
+                self.add_entity(Entity(
+                    entity_id=ent_data["id"], name=ent_data["name"],
+                    entity_type=etype, confidence=ent_data.get("confidence", 1.0),
+                ))
+            for rel_data in payload.get("relations", []):
+                from ocos.knowledge.graph import Relation, RelationType
+                try:
+                    rtype = RelationType(rel_data.get("type", "PART_OF"))
+                except ValueError:
+                    rtype = RelationType.PART_OF
+                self.add_relation(Relation(
+                    relation_id=rel_data["id"],
+                    subject_id=rel_data["from"], predicate=rtype,
+                    object_id=rel_data["to"], confidence=rel_data.get("confidence", 1.0),
+                ))
+        except Exception:
+            pass  # load 失败静默跳过
 
     # ── Entity API ───────────────────────────────────────────────────────
 

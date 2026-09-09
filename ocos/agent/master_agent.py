@@ -1560,14 +1560,29 @@ class MasterAgent:
             belief_id = "BLF-" + hashlib.sha1(topic.encode("utf-8")).hexdigest()[:12]
             existing = self._belief_store.get(belief_id)
             if existing is None:
+                # P2-2: belief statement 去模板化 — 从 episodes 提取实际 action/outcome 合成
+                from collections import Counter as _Cnt
+                actions = _Cnt(getattr(ep, "action", "") for ep in eps if getattr(ep, "action", ""))
+                top_action = actions.most_common(1)[0][0] if actions else topic
+                # outcome 里统计 success/failure
+                succ = sum(1 for ep in eps if self._ep_success(ep))
+                total = len(eps)
+                if succ > total * 0.7:
+                    verdict = f"通常成功 ({succ}/{total})"
+                elif succ < total * 0.3:
+                    verdict = f"经常失败 ({total - succ}/{total})"
+                else:
+                    verdict = f"成败参半 ({succ}/{total})"
+                statement = f"{top_action} 类任务 {verdict}（主题: {topic[:40]}）"
+
                 now = datetime.now(timezone.utc)
                 belief = Belief(
                     id=belief_id,
-                    statement=f"主题「{topic}」相关经历持续出现",
+                    statement=statement,  # P2-2: 不再硬编码"主题 X 持续出现"
                     source_knowledge_ids=(),
                     evidence_ids=tuple(ep.id for ep in eps),
-                    confidence=self._BELIEF_INITIAL_CONFIDENCE,
-                    uncertainty=1.0 - self._BELIEF_INITIAL_CONFIDENCE,
+                    confidence=min(0.5 + 0.05 * min(total, 10), 0.95),  # 样本越多越高
+                    uncertainty=max(0.05, 1.0 - min(0.5 + 0.05 * min(total, 10), 0.95)),
                     scope={"domain": topic},
                     status=BeliefStatus.ACTIVE,
                     created_at=now,
@@ -3023,6 +3038,20 @@ class MasterAgent:
         self._control_loop.shutdown()
 
     # ── 内部 ──────────────────────────────────────────────────────────
+
+    # ── 内部 helpers ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _ep_success(ep) -> bool:
+        """从 Episode 的 outcome 字段判断是否成功（P2-2 belief 质量提升辅助）."""
+        outcome = getattr(ep, "outcome", None)
+        if outcome is None:
+            return False
+        if isinstance(outcome, dict):
+            return bool(outcome.get("success", False))
+        if isinstance(outcome, str):
+            return "success" in outcome.lower() or "成功" in outcome
+        return False
 
     def _safe_return_to_idle(self) -> None:
         """引擎失败时安全回到 IDLE，防止死锁。"""

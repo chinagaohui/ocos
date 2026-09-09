@@ -1025,6 +1025,20 @@ class ResidentRuntime:
         except Exception:
             logger.debug("UnifiedIngestor skipped (no data or missing deps)", exc_info=True)
 
+        # Phase S2-P2b: working_memory 自动填充 — 跨 tick 活跃推理上下文
+        try:
+            from ocos.storage.working_memory import WorkingMemory
+            wm = WorkingMemory(db_path=db_path)
+            agent_obj = getattr(self._runtime, "agent", None)
+            wm.store("daemon.cycle", {
+                "tick": self._hb_ticks,
+                "cycle": getattr(self._runtime, "_cycle_count", 0),
+                "autonomy_level": getattr(self, "_autonomy_level", "ask"),
+                "active_goal": str(getattr(agent_obj, "goal_stack", None))[:100] if agent_obj else None,
+            }, ttl=600)  # 10 分钟过期
+        except Exception:
+            pass
+
     # ── Phase S2-P1a: EpistemicDrive → WebResearcher 自动调研 ──
     def _epistemic_research(self) -> None:
         """每 dream_interval 触发 — EpistemicDrive 高不确定性 domain → WebResearcher."""

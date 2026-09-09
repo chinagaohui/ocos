@@ -62,12 +62,25 @@ def consolidate_wisdom(hub, current_tick: int = 0,
     for (action, success), eps in groups.items():
         if len(eps) < min_episodes:
             continue
+        # P2-3: wisdom label 去模板化 — 加入 action 类型 + 样本量
+        result_word = "成功" if success else "失败"
+        total_ep = len(eps)
+        # 从 condition 里提取 agent 类型
+        agents = set()
+        for ep in eps:
+            cond = getattr(ep, "condition", "") or ""
+            if "agent=" in cond:
+                ag = cond.split("agent=")[1].split(",")[0].strip()
+                if ag and ag not in ("self_fix", "unknown"):
+                    agents.add(ag)
+        agent_hint = f"（{','.join(sorted(agents))}）" if agents else ""
+        label = f"「{action}」类任务{result_word}率高 {agent_hint} — {total_ep} 次观察"
         patterns.append(ExperiencePattern(
             pattern_id=f"PAT-{action}-{'ok' if success else 'fail'}",
-            label=f"重复{('成功' if success else '失败')}的「{action}」类经历",
+            label=label,  # P2-3: 不再硬编码"重复成功的「X」类经历"
             category="successful" if success else "failure",
-            frequency=len(eps),
-            confidence=min(0.95, 0.5 + 0.05 * len(eps)),
+            frequency=total_ep,
+            confidence=min(0.95, 0.5 + 0.05 * total_ep),
             evidence_ids=tuple(e.id for e in eps),
             abstracted_at_tick=current_tick,
         ))
