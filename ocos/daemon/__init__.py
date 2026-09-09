@@ -1002,7 +1002,9 @@ class ResidentRuntime:
         """每 dream_interval 触发 — ExperienceExtractor → UnifiedIngestor."""
         try:
             from ocos.learning.channels.experience_extractor import ExperienceExtractor
-            from ocos.learning.unified_ingestor import UnifiedIngestor
+            from ocos.learning.unified_ingestor import (
+                UnifiedIngestor, IngestStatus,
+            )
             db_path = getattr(self, "_db_path", None)
             if not db_path:
                 return
@@ -1011,19 +1013,32 @@ class ResidentRuntime:
             artifacts = extractor.extract_recent(days=7, limit=20)
             if not artifacts:
                 return
-            stored = dup = filt = 0
+            stored = dup = filt = fail = 0
             for art in artifacts:
                 try:
-                    r = ingestor.ingest(art, source_type="experience")
-                    stored += int(getattr(r, "stored", 0))
-                    dup += int(getattr(r, "duplicates", 0))
-                    filt += int(getattr(r, "filtered", 0))
+                    results = ingestor.ingest(
+                        art, owner="daemon_experience")
+                    # ingest() 总是返回 list[IngestResult] —— 单条也包装
+                    for r in results:
+                        if r.status == IngestStatus.STORED:
+                            stored += 1
+                        elif r.status == IngestStatus.DUPLICATE:
+                            dup += 1
+                        elif r.status == IngestStatus.FILTERED_LOW_QUALITY:
+                            filt += 1
+                        else:
+                            fail += 1
                 except Exception:
-                    pass
-            logger.info("Phase S2-P1b ingest: %d artifacts → stored=%d dedup=%d filtered=%d",
-                       len(artifacts), stored, dup, filt)
+                    logger.exception(
+                        "UnifiedIngestor failed for one artifact")
+            logger.info(
+                "Phase S2-P1b ingest: %d artifacts → stored=%d dedup=%d "
+                "filtered=%d failed=%d",
+                len(artifacts), stored, dup, filt, fail)
         except Exception:
-            logger.debug("UnifiedIngestor skipped (no data or missing deps)", exc_info=True)
+            logger.debug(
+                "UnifiedIngestor skipped (no data or missing deps)",
+                exc_info=True)
 
         # Phase S2-P2b: working_memory 自动填充 — 跨 tick 活跃推理上下文
         try:
@@ -1046,7 +1061,9 @@ class ResidentRuntime:
             from ocos.reasoning.curiosity import PredictionGapTracker, EpistemicDrive
             from ocos.learning.channels.web_researcher import WebResearcher
             from ocos.learning.channels.llm_tutor import LLMTutor
-            from ocos.learning.unified_ingestor import UnifiedIngestor, IngestArtifact
+            from ocos.learning.unified_ingestor import (
+                UnifiedIngestor, IngestArtifact, SourceChannel, IngestStatus,
+            )
 
             db_path = getattr(self, "_db_path", None)
             if not db_path:
@@ -1055,49 +1072,73 @@ class ResidentRuntime:
             # EpistemicDrive: 拿 top 1 不确定性 domain
             tracker = PredictionGapTracker(db_path=db_path)
             drive = EpistemicDrive(tracker=tracker, db_path=db_path, top_n=1)
-            suggestions = list(drive.suggest_growth())[:1] + list(drive.suggest_explore())[:1]
+            suggestions = (
+                list(drive.suggest_growth())[:1]
+                + list(drive.suggest_explore())[:1]
+            )
             if not suggestions:
                 return
 
             ingestor = UnifiedIngestor(db_path=db_path)
             researcher = WebResearcher()
             tutor = LLMTutor()
-            total = 0
+            total_stored = 0
             for topic in suggestions[:2]:  # 每轮最多 2 个调研（限流）
                 # 渠道 1: WebResearcher
                 try:
                     result = researcher.research(topic)
                     if result and getattr(result, "findings", None):
-                        artifacts = [IngestArtifact(
-                            source_id=f"web-research-{topic[:20]}",
-                            content=f"调研「{topic}」: {finding}",
-                            confidence=getattr(result, "confidence", 0.7),
-                            metadata={"topic": topic, "source": getattr(result, "source", "web")},
-                        ) for finding in result.findings[:3]]
-                        for art in artifacts:
-                            ingestor.ingest(art, source_type="web_research")
-                        total += len(artifacts)
-                        logger.info("Phase S2-P1a web research: '%s' → %d findings", topic[:40], len(artifacts))
+                        for finding in result.findings[:3]:
+                            art = IngestArtifact(
+                                channel=SourceChannel.WEB_RESEARCH,
+                                content=f"调研「{topic}」: {finding}",
+                                title=f"web:{topic[:40]}",
+                                confidence=getattr(result, "confidence", 0.7),
+                                tags=["web_research", topic[:20]],
+                                metadata={
+                                    "topic": topic,
+                                    "source": getattr(result, "source", "web"),
+                                },
+                            )
+                            rs = ingestor.ingest(art, owner="epistemic_web")
+                            for r in rs:
+                                if r.status == IngestStatus.STORED:
+                                    total_stored += 1
+                        logger.info(
+                            "Phase S2-P1a web research: '%s' → %d findings",
+                            topic[:40], len(result.findings[:3]))
                 except Exception:
-                    pass
+                    logger.exception(
+                        "Phase S2-P1a web research failed for '%s'",
+                        topic[:40])
 
                 # 渠道 2: LLMTutor (内部 LLM 知识库问答)
                 try:
                     qa = tutor.ask(topic)
                     if qa and getattr(qa, "success", False) and getattr(qa, "answer", None):
                         art = IngestArtifact(
-                            source_id=f"llm-tutor-{topic[:20]}",
+                            channel=SourceChannel.LLM_QA,
                             content=f"LLM 问答「{topic}」: {qa.answer}",
+                            title=f"llm_qa:{topic[:40]}",
                             confidence=getattr(qa, "confidence", 0.6),
+                            tags=["llm_qa", topic[:20]],
                             metadata={"topic": topic, "source": "llm_tutor"},
                         )
-                        ingestor.ingest(art, source_type="llm_qa")
-                        total += 1
-                        logger.info("Phase S2-P1a llm tutor: '%s' → 1 answer", topic[:40])
+                        rs = ingestor.ingest(art, owner="epistemic_llm")
+                        for r in rs:
+                            if r.status == IngestStatus.STORED:
+                                total_stored += 1
+                        logger.info(
+                            "Phase S2-P1a llm tutor: '%s' → 1 answer",
+                            topic[:40])
                 except Exception:
-                    pass  # tutor 失败不阻塞 web_research
+                    logger.exception(
+                        "Phase S2-P1a llm tutor failed for '%s'",
+                        topic[:40])
 
-            logger.info("Phase S2-P1a total epistemic research artifacts: %d", total)
+            logger.info(
+                "Phase S2-P1a total epistemic artifacts stored: %d",
+                total_stored)
         except Exception:
             logger.debug("Epistemic research skipped", exc_info=True)
 
