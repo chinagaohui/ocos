@@ -1039,13 +1039,14 @@ class ResidentRuntime:
         except Exception:
             pass
 
-    # ── Phase S2-P1a: EpistemicDrive → WebResearcher 自动调研 ──
+    # ── Phase S2-P1a: EpistemicDrive → WebResearcher + LLMTutor 自动调研 ──
     def _epistemic_research(self) -> None:
-        """每 dream_interval 触发 — EpistemicDrive 高不确定性 domain → WebResearcher."""
+        """每 dream_interval 触发 — EpistemicDrive 高不确定性 domain → WebResearcher + LLMTutor."""
         try:
             from ocos.reasoning.curiosity import PredictionGapTracker, EpistemicDrive
             from ocos.learning.channels.web_researcher import WebResearcher
-            from ocos.learning.unified_ingestor import UnifiedIngestor
+            from ocos.learning.channels.llm_tutor import LLMTutor
+            from ocos.learning.unified_ingestor import UnifiedIngestor, IngestArtifact
 
             db_path = getattr(self, "_db_path", None)
             if not db_path:
@@ -1060,27 +1061,43 @@ class ResidentRuntime:
 
             ingestor = UnifiedIngestor(db_path=db_path)
             researcher = WebResearcher()
+            tutor = LLMTutor()
             total = 0
             for topic in suggestions[:2]:  # 每轮最多 2 个调研（限流）
+                # 渠道 1: WebResearcher
                 try:
                     result = researcher.research(topic)
                     if result and getattr(result, "findings", None):
-                        # 转 IngestArtifact → UnifiedIngestor 入库
-                        from ocos.learning.unified_ingestor import IngestArtifact
                         artifacts = [IngestArtifact(
                             source_id=f"web-research-{topic[:20]}",
                             content=f"调研「{topic}」: {finding}",
                             confidence=getattr(result, "confidence", 0.7),
-                            metadata={"topic": topic, "source": result.source},
+                            metadata={"topic": topic, "source": getattr(result, "source", "web")},
                         ) for finding in result.findings[:3]]
                         for art in artifacts:
                             ingestor.ingest(art, source_type="web_research")
                         total += len(artifacts)
                         logger.info("Phase S2-P1a web research: '%s' → %d findings", topic[:40], len(artifacts))
                 except Exception:
-                    pass  # 单个调研失败不阻塞
+                    pass
 
-            logger.info("Phase S2-P1a total web research artifacts: %d", total)
+                # 渠道 2: LLMTutor (内部 LLM 知识库问答)
+                try:
+                    qa = tutor.ask(topic)
+                    if qa and getattr(qa, "success", False) and getattr(qa, "answer", None):
+                        art = IngestArtifact(
+                            source_id=f"llm-tutor-{topic[:20]}",
+                            content=f"LLM 问答「{topic}」: {qa.answer}",
+                            confidence=getattr(qa, "confidence", 0.6),
+                            metadata={"topic": topic, "source": "llm_tutor"},
+                        )
+                        ingestor.ingest(art, source_type="llm_qa")
+                        total += 1
+                        logger.info("Phase S2-P1a llm tutor: '%s' → 1 answer", topic[:40])
+                except Exception:
+                    pass  # tutor 失败不阻塞 web_research
+
+            logger.info("Phase S2-P1a total epistemic research artifacts: %d", total)
         except Exception:
             logger.debug("Epistemic research skipped", exc_info=True)
 
