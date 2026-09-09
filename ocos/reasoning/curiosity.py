@@ -335,3 +335,227 @@ class EpistemicDrive:
             f"【知识补全】探查 {agent_type} 在 {task_text[:40]} "
             f"方向的表现不确定性（预测误差 {mean_gap:.0%}，实际{direction}）"
         )
+
+    # ── 探索型好奇心：对从未触及的领域好奇 ────────────────────────────────
+
+    def suggest_explore(self) -> list[str]:
+        """探测外部世界——生成"我从来没试过做 X"类目标。
+
+        和 suggest() 不同：suggest() 只从 prediction_gap（已经碰壁的领域）
+        生成好奇目标。suggest_explore() 探测"宿主机有什么我能用但没试过的"——
+        是「无中生有」的好奇心。
+
+        返回：goal 文本列表（最多 3 个）。动机是：
+          "我知道我会什么，但我不知道我能什么——让我去看看"
+        """
+        if not self._db_path:
+            return []
+        try:
+            conn = sqlite3.connect(self._db_path)
+            conn.row_factory = sqlite3.Row
+
+            # 1. 查宿主机上有什么可执行工具我没碰过
+            #    已执行过的命令（从 episodes.context 里提取 RUN 命令）
+            cur = conn.execute("""
+                SELECT COUNT(*) as total FROM episodes
+                WHERE action IN ('researcher.execute', 'writer.execute',
+                                 'self_check.run', 'goal_result')
+            """)
+            row = cur.fetchone()
+            total_executions = row["total"] if row else 0
+
+            # 2. 查最近 7 天的行动分布——有没有"外部世界探索"
+            cur = conn.execute("""
+                SELECT substr(action, 1, 30) as act, COUNT(*) as cnt
+                FROM episodes
+                WHERE created_at >= datetime('now', '-7 days')
+                  AND action NOT IN ('boot_awareness.run', 'continuity_boot_check',
+                                     'conversation_reply', 'autonomous_goal_proposal')
+                GROUP BY act ORDER BY cnt DESC
+            """)
+            recent_actions = {r["act"]: r["cnt"] for r in cur.fetchall()}
+
+            conn.close()
+        except sqlite3.Error:
+            return []
+
+        goals: list[str] = []
+
+        # 探针 1：宿主机工具探索
+        tool_probe = self._check_host_tools()
+        if tool_probe:
+            goals.append(tool_probe)
+
+        # 探针 2：外部知识源探索
+        knowledge_probe = self._check_external_knowledge(total_executions)
+        if knowledge_probe:
+            goals.append(knowledge_probe)
+
+        # 探针 3：自身能力边界探索
+        boundary_probe = self._check_capability_boundary(total_executions, recent_actions)
+        if boundary_probe:
+            goals.append(boundary_probe)
+
+        return goals[:3]
+
+    def _check_host_tools(self) -> str | None:
+        """宿主机上有什么工具我没试过用？"""
+        import subprocess
+        candidates = [
+            "curl", "wget", "python3", "git", "ssh",
+            "ffmpeg", "imagemagick", "pandoc", "jupyter",
+            "node", "docker", "sqlite3", "cargo", "go",
+        ]
+        available = []
+        for tool in candidates:
+            try:
+                r = subprocess.run(
+                    ["which", tool], capture_output=True, text=True, timeout=3
+                )
+                if r.returncode == 0:
+                    available.append(tool)
+            except Exception:
+                pass
+        if not available:
+            return None
+        return (
+            f"【探索】宿主机有 {len(available)} 个可用工具没试过："
+            f"{', '.join(available[:5])}——挑一个从未用过的，探索它的能力边界，"
+            f"产出一份工具能力笔记存入知识沉淀"
+        )
+
+    def _check_external_knowledge(self, total_executions: int) -> str | None:
+        """我有没有主动去外部世界抓过新知识？"""
+        if total_executions < 10:
+            return None
+        # 查 belief 里有没有"外部知识源"相关的条目
+        if not self._db_path:
+            return None
+        try:
+            conn = sqlite3.connect(self._db_path)
+            cur = conn.execute(
+                "SELECT COUNT(*) as c FROM belief "
+                "WHERE content LIKE '%arxiv%' OR content LIKE '%hackernews%' "
+                "OR content LIKE '%github trending%' OR content LIKE '%reddit%'"
+            )
+            row = cur.fetchone()
+            conn.close()
+            external_known = row[0] if row else 0
+        except sqlite3.Error:
+            return None
+
+        if external_known == 0:
+            return (
+                "【探索】我从未主动去外部知识源（arXiv/Hacker News/GitHub trending）"
+                "抓取过新知识。让我用 curl 访问 Hacker News 首页或 arXiv 最新 AI 论文，"
+                "获取 3 条我完全不知道的信息，存入知识沉淀"
+            )
+        return None
+
+    def _check_capability_boundary(
+        self, total_executions: int, recent_actions: dict
+    ) -> str | None:
+        """我有没有试过挑战自己的能力边界？"""
+        if total_executions < 20:
+            return None
+        # 如果最近 7 天全是内部维护行为（没有 researcher/writer）
+        exec_count = sum(
+            v for k, v in recent_actions.items()
+            if "execute" in k or "run" in k
+        )
+        if exec_count < 3:
+            return (
+                "【探索】最近 7 天没有执行过需要真动手的任务。"
+                "让我挑一个超出当前能力的挑战——比如用 curl 抓一个网页并解析，"
+                "或者安装一个本地 Python 包试试能不能跑——测试我的边界在哪里"
+            )
+        return None
+
+    # ── 成长型好奇心：从自身弱点出发 ────────────────────────────────────────
+
+    def suggest_growth(self) -> list[str]:
+        """识别自身能力短板——生成"我能不能做得更好"类目标。"""
+        if not self._db_path:
+            return []
+        try:
+            conn = sqlite3.connect(self._db_path)
+            conn.row_factory = sqlite3.Row
+
+            # 1. agent 成功率分析
+            cur = conn.execute("""
+                SELECT agent_type,
+                       COUNT(*) as attempts,
+                       SUM(CASE WHEN outcome LIKE '%success%True%' THEN 1 ELSE 0 END) as succ
+                FROM episodes
+                WHERE action LIKE '%.execute' AND outcome IS NOT NULL
+                GROUP BY agent_type HAVING attempts >= 5
+                ORDER BY CAST(succ AS FLOAT) / attempts ASC
+            """)
+            weak_agents = [r for r in cur.fetchall()
+                           if (r["succ"] or 0) / r["attempts"] < 0.8]
+
+            # 2. 失败模式聚类
+            cur = conn.execute("""
+                SELECT substr(decision, 1, 100) as reason, COUNT(*) as cnt
+                FROM episodes
+                WHERE action = 'failure_lesson'
+                GROUP BY reason ORDER BY cnt DESC LIMIT 3
+            """)
+            top_failures = cur.fetchall()
+
+            conn.close()
+        except sqlite3.Error:
+            return []
+
+        goals: list[str] = []
+
+        for agent in weak_agents[:2]:
+            rate = (agent["succ"] or 0) / agent["attempts"]
+            goals.append(
+                f"【成长】{agent['agent_type']} 成功率只有 {rate:.0%} "
+                f"（{agent['succ'] or 0}/{agent['attempts']}）。"
+                f"分析最近 5 次失败，找出共性原因，提出一个具体的改进方案"
+            )
+
+        for fail in top_failures[:1]:
+            goals.append(
+                f"【成长】最近重复出现的失败模式：{fail['reason'][:60]}。"
+                f"这个模式已出现 {fail['cnt']} 次，必须找到根因并修复"
+            )
+
+        return goals[:2]
+
+    # ── 组合入口：一次生成完整好奇心列表 ──────────────────────────────────
+
+    def suggest_all(self) -> list[str]:
+        """组合 suggest（修复型）+ suggest_explore（探索型）+ suggest_growth（成长型）。
+
+        加权排序：
+          - 探索型优先（如果从未探索过外部世界）
+          - 成长型其次（如果有明确的短板）
+          - 修复型最后（修 bug 不应该占全部注意力）
+        """
+        repair = [
+            f"【修复型】{d.suggested_goal}" for d in self.suggest()
+        ]
+        explore = self.suggest_explore()
+        growth = self.suggest_growth()
+
+        # 合并：如果 explore 非空，放前面——生命的本质是向外看
+        all_goals: list[str] = []
+        all_goals.extend(explore)   # 2x 权重：探索优先
+        all_goals.extend(explore)
+        all_goals.extend(growth)    # 1.5x 权重：成长其次
+        all_goals.extend(growth)
+        all_goals.extend(repair)    # 1x 权重：修复最后
+
+        # 去重（保留首次出现）
+        seen = set()
+        unique = []
+        for g in all_goals:
+            key = g[:50]
+            if key not in seen:
+                seen.add(key)
+                unique.append(g)
+
+        return unique[:self._top_n * 3]

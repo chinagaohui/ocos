@@ -287,32 +287,62 @@ class MotivationHub:
     def _from_self_exploration(self) -> list[GoalCandidate]:
         """自我探查（好奇心·第二源）。
 
-        PHASE-LIFE Phase 1: 先用 EpistemicDrive.suggest() 找"我最不确定的领域"
-        → 真正的好奇心（Nemori Predict-Calibrate Principle）。
-        没有数据时 fallback 到"从未被触及的模块"硬编码。
+        PHASE-LIFE Phase 2: EpistemicDrive.suggest_all() — 三种好奇心：
+          - 【探索型】无中生有：宿主机工具/外部知识源/能力边界
+          - 【成长型】弱点驱动：agent 成功率/重复失败模式
+          - 【修复型】预测误差：原来的 suggest() 行为
+        探索型 2x 权重优先，成长型 1.5x，修复型 1x。
         """
-        # Step 1: EpistemicDrive（真正的好奇心）
+        candidates: list[GoalCandidate] = []
+
+        # Step 1: EpistemicDrive.suggest_all()（三种好奇心）
         try:
             from ocos.reasoning.curiosity import PredictionGapTracker, EpistemicDrive
 
-            # 每次新建 tracker（进程内内存累积 + DB 持久化）
             tracker = PredictionGapTracker(db_path=self._db_path)
             drive = EpistemicDrive(tracker=tracker, db_path=self._db_path, top_n=1)
-            uncertainties = drive.suggest()
-            if uncertainties:
-                top = uncertainties[0]
-                return [GoalCandidate(
+
+            # 1a: 探索型好奇心（无中生有）
+            for goal_text in drive.suggest_explore():
+                candidates.append(GoalCandidate(
+                    kind="EXPLORE",
+                    description=goal_text,
+                    domain="exploration",
+                    value=0.9,           # 探索天然高价值
+                    novelty=1.0,         # 全新领域 → 最大新颖度
+                    feasibility=0.8,     # 都是只读/轻量操作
+                    evidence="epistemic.explore: 外部世界好奇心",
+                ))
+
+            # 1b: 成长型好奇心（弱点驱动）
+            for goal_text in drive.suggest_growth():
+                candidates.append(GoalCandidate(
+                    kind="GROW",
+                    description=goal_text,
+                    domain="growth",
+                    value=0.8,
+                    novelty=0.7,
+                    feasibility=0.9,
+                    evidence="epistemic.growth: 短板补齐",
+                ))
+
+            # 1c: 修复型好奇心（原来的 predict-calibrate）
+            for unc in drive.suggest():
+                candidates.append(GoalCandidate(
                     kind="PROBE",
-                    description=top.suggested_goal,
+                    description=unc.suggested_goal,
                     domain="research",
-                    value=0.7 + top.uncertainty_score,
-                    novelty=min(1.0, 0.5 + top.uncertainty_score),
+                    value=0.7 + unc.uncertainty_score,
+                    novelty=min(1.0, 0.5 + unc.uncertainty_score),
                     feasibility=0.7,
                     evidence=(
-                        f"epistemic drive: mean_gap={top.mean_gap:.2f} "
-                        f"n={top.sample_count} uncertainty={top.uncertainty_score:.2f}"
+                        f"epistemic.repair: mean_gap={unc.mean_gap:.2f} "
+                        f"n={unc.sample_count} uncertainty={unc.uncertainty_score:.2f}"
                     ),
-                )]
+                ))
+
+            if candidates:
+                return candidates[:3]  # 最多返回 3 个（探索/成长/修复各 1）
         except Exception as e:
             logger.debug("EpistemicDrive unavailable, falling back to module inventory: %s", e)
 
