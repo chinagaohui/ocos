@@ -1,5 +1,11 @@
 """T7-T10 行为级人工验收自动化脚本（2026-09-08）。
 
+⚠️ 结论冻结修正（2026-09-08 用户裁决）：本脚本 T9（跨任务经验迁移）的
+PASS 仅为 **Recall/Injection Evidence**（证明 artifact 召回进入上下文并
+被 LLM 引用），**不构成 Behavioral Delta 证明**。第二代三组 A/B/C 归因
+实验见 e2e_behavioral_delta_20260908.py，其结论为：对话执行路径下
+Learning→Behavior 未证明（行动抑制副作用）。
+
 用户裁决："全由你去测，不要让我手动"——本脚本用真实生产 LLM 配置
 驱动 ChatResponder 完整认知链（build_context 9 段 → LLM → USE| 循环），
 在隔离 tmp DB 上执行 T7/T8/T9/T10 四项行为验收，不污染生产库与对话流。

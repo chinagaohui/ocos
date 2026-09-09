@@ -154,10 +154,12 @@ class ExperienceBuilder:
         self,
         candidates: Optional[list[ExperienceCandidate]] = None,
     ) -> list[LessonsLearned]:
-        """从 COMPLETE ExperienceCandidate 综合跨经验教训。
+        """从 ExperienceCandidate 综合跨经验教训（Phase 21）。
 
-        Phase 21: 基于规则的归纳合成器。
-        未来可升级为 LLM 驱动的 LessonsSynthesizer。
+        PHASE-LIFE: daemon factory 现在注入了 experience_builder + episode_store，
+        Step 10 Learning Consolidation 每 10 tick 把 _recent_results 喂进 builder，
+        dream 每 200 tick 消费这些 candidate → _synthesize_lessons 有东西可合成。
+        历史上此方法返回 [] 是因为 factory 没注入 builder → dream Phase 21 被跳过。
 
         Args:
             candidates: 经验候选列表；None 则使用 get_complete()
@@ -165,11 +167,15 @@ class ExperienceBuilder:
         Returns:
             LessonsLearned 列表（空列表无异常）
         """
-        from ocos.memory.experience.lessons import LessonsSynthesizer
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
 
         source = candidates or self.get_complete()
         if len(source) < 2:
+            _log.debug("_synthesize_lessons: need >=2 complete candidates, got %d", len(source))
             return []
 
+        _log.info("_synthesize_lessons: synthesizing from %d candidates", len(source))
+        from ocos.memory.experience.lessons import LessonsSynthesizer
         synthesizer = LessonsSynthesizer()
         return synthesizer.synthesize(source)

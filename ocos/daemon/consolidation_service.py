@@ -38,7 +38,7 @@ class LearningConsolidationService:
     # ── 巩固周期 ─────────────────────────────────────────────────────
 
     def run_dream_cycle(self, agent: Any) -> dict[str, Any] | None:
-        """完整睡眠巩固序列 — 修复生命周期相位后 sleep→dream→persist→skills。"""
+        """完整睡眠巩固序列 — 修复生命周期相位后 sleep→dream→persist→skills→concept。"""
         if agent is None or not hasattr(agent, "dream"):
             return None
         self._fix_lifecycle_phase(agent)
@@ -46,6 +46,8 @@ class LearningConsolidationService:
         out = agent.dream()    # SLEEPING → DREAMING → 巩固 → wake
         self._persist_learning_rules(agent)
         created = self._synthesize_skills()
+        # PHASE-LIFE Phase 22: Concept formation — 从 Belief+Pattern 自动抽象概念
+        self._form_concepts()
         logger.info(
             "Dream consolidation: wisdom_total=%s consolidation=%s skills_created=%d",
             (out.get("wisdom_stats") or {}).get("wisdom_total", "?"),
@@ -53,6 +55,19 @@ class LearningConsolidationService:
             created,
         )
         return out
+
+    def _form_concepts(self) -> None:
+        """PHASE-LIFE Phase 22: 自动形成概念。"""
+        try:
+            from ocos.memory.concept import auto_form_concepts
+            concepts = auto_form_concepts(db_path=self._db_path)
+            if concepts:
+                logger.info(
+                    "PHASE-LIFE Phase 22: %d concepts formed from belief+pattern",
+                    len(concepts),
+                )
+        except Exception as e:
+            logger.debug("Concept formation skipped: %s", e)
 
     # ── 内部环节 ─────────────────────────────────────────────────────
 

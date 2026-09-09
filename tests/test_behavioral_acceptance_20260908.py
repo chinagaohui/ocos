@@ -17,6 +17,13 @@ LLM 行为级，标注为人工 E2E 项（见文件尾 docstring）。
     T8  纠正后下一次行为是否真的变化？              → 人工 E2E（LLM 行为）
     T9  同一用户长期使用是否越来越了解？            → user 源召回
     T10 重启后是不是"同一个正在继续工作的 Agent"？  → 身份 + 环境先验
+
+⚠️ 结论冻结修正（2026-09-08 用户裁决）：
+本套件 T1-T6/T9/T10 均为确定性注入验证 — 证明 artifact **召回进上下文**，
+属 **Recall/Injection Evidence**，**不构成 Behavioral Delta 证明**。
+Behavioral Delta 归因（蓝图 ER-2）须 A/B 对照实验：
+`tests/e2e_behavioral_delta_20260908.py`（三组 A/B/C × N，当前结论：
+对话执行路径下 Learning→Behavior 未证明）。
 """
 
 from __future__ import annotations

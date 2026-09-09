@@ -55,7 +55,7 @@ _DATA_COLLECT_RE = re.compile(
 # 不可能完成 → 命令行无写证据时诚实降级。不与采集豁免共用（开发类描述
 # 里常带"检查/运行"字样，如"确保可运行"，豁免会让条款形同虚设）。
 _BUILD_GOAL_RE = re.compile(
-    r"开发|实现|创建|构建|搭建|制作|安装|部署")
+    r"(?<!者)(开发|实现|创建|构建|搭建|制作|安装|部署)")
 # P0-2f 校准（2026-09-08「宿主机硬件画像」事件）: "部署可行性/部署方案评估"
 # 属探查评估意图，不是构建动作——描述命中评估词时 build 闸门不适用，
 # 否则纯只读画像任务（uname/df/free/nvidia-smi）被误降级【交付物缺失】
@@ -102,6 +102,77 @@ def _has_write_evidence(stdout: str) -> bool:
     return False
 
 logger = logging.getLogger(__name__)
+
+
+# ── P1: chat 目标智能路由（agent_type / task_type） ──────────────
+
+_INTERNET_KEYWORDS = re.compile(
+    r"(调研|学习|搜索|查|查找|搜|联网|全网|国际|最新|GitHub|github|Google|google"
+    r"|知乎|百度|必应|Bing|bing|研究|论文|paper|技术博客|tech|news|新闻"
+    r"|访问\s+https?://|http://|https://|www\.|\bURL\b|\burl\b)",
+    re.IGNORECASE,
+)
+
+_WRITE_KEYWORDS = re.compile(
+    r"(写|创建|新建|生成|修改|编辑|修复|实现|添加|重构|部署|安装|配置"
+    r"|写文件|落盘|保存|保存为|mkdir|touch|git\s+commit|git\s+push"
+    r"|pip\s+install|npm\s+install|docker|systemctl\s+start)",
+    re.IGNORECASE,
+)
+
+_ANALYZE_KEYWORDS = re.compile(
+    r"(分析|评估|诊断|检查|验证|测试|benchmark|性能|对比|测量|探查"
+    r"|梳理|总结|统计|监控|metrics|日志|log)",
+    re.IGNORECASE,
+)
+
+
+def _infer_agent_type(description: str, domain: Any = None) -> str:
+    """P1: 根据目标描述推断最合适的 agent_type。
+
+    路由逻辑（优先级从上到下，首个匹配）：
+      1. 含联网关键词（调研/搜索/URL）→ researcher
+         （LLM bridge 会选 shell+curl/wget 或直接用 LLM 知识）
+      2. 含写关键词（写/创建/修复/重构）→ code_executor
+      3. 含分析关键词（分析/评估/诊断）→ researcher
+      4. domain=writing → writer
+      5. 默认 → researcher（最通用，只读）
+
+    注: agent_type 主要影响 echo fallback 和元数据，真实执行由
+        DecisionBridge.execute_dag_task → LLM 驱动。
+    """
+    if not description:
+        return "researcher"
+    d = description[:200]
+    if _INTERNET_KEYWORDS.search(d):
+        logger.debug("chat task routing: internet keyword → researcher")
+        return "researcher"
+    if _WRITE_KEYWORDS.search(d):
+        logger.debug("chat task routing: write keyword → code_executor")
+        return "code_executor"
+    if _ANALYZE_KEYWORDS.search(d):
+        logger.debug("chat task routing: analyze keyword → researcher")
+        return "researcher"
+    # domain fallback
+    if domain is not None:
+        dn = str(domain).lower()
+        if "writing" in dn:
+            return "writer"
+    return "researcher"
+
+
+def _infer_task_type(description: str, domain: Any = None) -> str:
+    """P1: 根据描述推断 task_type（create|modify|analyze|execute|verify）。"""
+    if not description:
+        return "execute"
+    d = description[:200]
+    if _ANALYZE_KEYWORDS.search(d):
+        return "analyze"
+    if _WRITE_KEYWORDS.search(d):
+        if re.search(r"(新建|创建|写|生成|实现)", d):
+            return "create"
+        return "modify"
+    return "execute"
 
 
 def _truncate_text(text: Any, max_chars: int) -> str:
@@ -201,6 +272,8 @@ class AgentRuntime:
         self._active_dag: Any = None
         self._dag_cursor: int = 0
         self._dag_total: int = 0
+        self._dag_tick_count: int = 0   # P2: DAG 存活 tick 计数 → 超时杀
+        self._DAG_TICK_TIMEOUT: int = 200  # P2: 单 DAG 最多存活 200 tick ≈ 16min
         self._task_statuses: dict[str, str] = {}  # task_id → status
         self._recent_results: list[dict[str, Any]] = []
         self._result_mark: int = 0   # UX-F2+: 当前 DAG 起始下标（结果汇总按目标切片）
@@ -1057,7 +1130,10 @@ class AgentRuntime:
                         _task = PlanTask.create(
                             goal_id=g.goal_id,
                             description=ug.objective or ug.raw_input or g.description,
-                            task_type="analyze", agent_type="researcher",
+                            task_type=_infer_task_type(g.description,
+                                                       getattr(g, "domain", None)),
+                            agent_type=_infer_agent_type(g.description,
+                                                         getattr(g, "domain", None)),
                         )   # agent_type 限合法枚举（"executor" 曾致 ValueError → 分解永远失败）
                         dag.add_task(_task)
                     else:
@@ -1081,6 +1157,7 @@ class AgentRuntime:
                     self._active_dag = dag
                     self._dag_cursor = 0
                     self._dag_total = len(dag.tasks)
+                    self._dag_tick_count = 0   # P2: 新 DAG 重置超时计数
                     # UX-F2+: 结果汇总起点 — 只汇总当前目标的任务输出，
                     # 不混入上一目标残留（此前 _recent_results 不清空导致串味）
                     self._result_mark = len(getattr(self, "_recent_results", []))
@@ -1526,6 +1603,49 @@ class AgentRuntime:
         """
         # ── Phase 31: TaskDAG execution ──
         if self._active_dag is not None:
+            # P2: DAG 超时杀 — 每个 tick 存活 +1，超过阈值强制收尾
+            # hasattr 防御: 部分测试直接 AgentRuntime() 不走完整 __init__
+            _tick = getattr(self, "_dag_tick_count", 0)
+            _timeout = getattr(self, "_DAG_TICK_TIMEOUT", 999999)
+            self._dag_tick_count = _tick + 1
+            if _tick + 1 > _timeout:
+                logger.warning(
+                    "DAG timed out after %d ticks (limit=%d), force-closing",
+                    _tick + 1, _timeout)
+                self._recent_results.append({
+                    "task_id": "TIMEOUT",
+                    "description": (
+                        f"DAG 存活 {_tick + 1} tick "
+                        f"超过阈值 {_timeout}，强制终止"),
+                    "agent": "runtime",
+                    "output": "DAG_TIMEOUT",
+                    "success": False,
+                })
+                # 把关联目标标 FAIL
+                gid = getattr(self, "_active_dag_goal_id", None)
+                if gid and self._goal_store:
+                    try:
+                        g = self._goal_store.load(gid)
+                        if g is not None:
+                            from ocos.kernel.goal_types import GoalStatus
+                            g.status = GoalStatus.FAILED
+                            g.completed_at = datetime.now(timezone.utc)
+                            self._goal_store.save(g)
+                    except Exception as _e:
+                        logger.debug("DAG timeout goal status advance failed: %s", _e)
+                # 清理 DAG 状态
+                self._active_dag = None
+                self._dag_cursor = 0
+                self._dag_total = 0
+                self._dag_tick_count = 0
+                self._active_dag_goal_id = None
+                return {
+                    "step": 7, "name": "core_loop",
+                    "strategy": "dag_timeout",
+                    "progress": "forced_close",
+                    "tick_count": self._dag_tick_count,
+                }
+
             order = self._active_dag.topological_order()
             if self._dag_cursor < len(order):
                 tid = order[self._dag_cursor]
@@ -1785,24 +1905,198 @@ class AgentRuntime:
     def _tick_step_learning_consolidation(self) -> dict[str, Any]:
         """Step 10: Learning Consolidation — 经验巩固 + 信念提取（Phase 32 enhanced）。
 
-        B. 从 _recent_results 模式提取 Belief。
+        Phase-LIFE enhancements:
+        - 从 _recent_results 构建 ExperienceCandidate → 喂 builder（dream 有料可合成）
+        - PredictionGapTracker 记录预测误差（Phase 1: 好奇心自驱动的基础）
         """
         try:
             # 记忆巩固（每5 tick）
             if self._cycle_count % 5 == 0:
                 self.memory.consolidate_to_long_term()
 
-            # 信念提取（每10 tick — 现有逻辑 + Phase 32 pattern）
+            # 信念提取 + Experience 构建 + 预测误差（每10 tick）
             if self._cycle_count % 10 == 0:
                 self._extract_beliefs()
                 self._extract_beliefs_from_results()
+                self._ingest_results_to_experience_builder()
+                # PHASE-LIFE Phase 1: 记录 SymbolicReasoner 预测误差
+                self._track_prediction_gaps()
 
             return {
                 "step": 10, "name": "learning_consolidation",
                 "cycle": self._cycle_count,
             }
         except Exception as e:
+            logger.debug("Learning consolidation step failed: %s", e)
             return {"step": 10, "name": "learning_consolidation", "error": str(e)}
+
+    def _track_prediction_gaps(self) -> None:
+        """PHASE-LIFE Phase 1: EpistemicDrive — 记录预测误差。
+
+        对每个 goal_result，先用 SymbolicReasoner.predict() → expected，
+        然后对比 actual outcome → gap。gap 是 OCOS 的好奇心信号。
+
+        懒加载 PredictionGapTracker（第一次调用时创建），放在 self 上复用。
+        """
+        results = list(getattr(self, "_recent_results", []) or [])
+        if not results:
+            return
+
+        try:
+            from ocos.reasoning.symbolic import SymbolicReasoner
+            from ocos.reasoning.curiosity import PredictionGapTracker
+
+            # 懒创建 tracker（必须传 db_path 才能落库，让 MotivationHub 读到）
+            if not hasattr(self, "_gap_tracker"):
+                db_path = getattr(self, "_db_path", None)
+                self._gap_tracker = PredictionGapTracker(db_path=db_path)
+
+            sr = SymbolicReasoner()
+
+            for r in results:
+                success = bool(r.get("success", False))
+                task_text = str(r.get("description", r.get("task_id", "")))
+                agent_type = str(r.get("agent", ""))
+                if not task_text or not agent_type:
+                    continue
+
+                pred = sr.predict(task_text, agent_type)
+                self._gap_tracker.record(
+                    task_text=task_text,
+                    agent_type=agent_type,
+                    predicted_success=pred.expected_success,
+                    actual_success=success,
+                    confidence=pred.confidence,
+                )
+
+            stats = self._gap_tracker.stats()
+            if stats["total_gaps"] > 0:
+                logger.info(
+                    "PHASE-LIFE: gap tracker stats — domains=%d total=%d mean_gap=%.2f",
+                    stats["domains"], stats["total_gaps"], stats["mean_gap_all"],
+                )
+        except Exception as e:
+            logger.debug("Prediction gap tracking skipped: %s", e)
+
+    def _ingest_results_to_experience_builder(self) -> int:
+        """PHASE-LIFE: 把 _recent_results 喂进 ExperienceBuilder。
+
+        Step 9 (Result Ingest) 把 DAG/认知循环的执行结果写进 _recent_results；
+        Step 10 每 10 tick 扫一次，把新条目构建成 ExperienceCandidate 塞进
+        builder，同时落 EpisodeStore。这样 dream 周期（每 200 tick）时 builder
+        已经积累了足够多 candidate → _synthesize_lessons 能产出 C 类 Lesson。
+
+        Returns:
+            本次构建的 ExperienceCandidate 数量。
+        """
+        agent = getattr(self, "agent", None) or getattr(self, "_agent", None)
+        builder = getattr(agent, "_experience_builder", None) if agent else None
+        store = getattr(agent, "_episode_store", None) if agent else None
+        if builder is None:
+            return 0
+
+        try:
+            from ocos.memory.experience.models import (
+                TraceBundle, ExperienceSource, ExperienceCandidate,
+            )
+            from ocos.memory.experience.validator import ExperienceValidator
+            from ocos.memory.experience.models import ExperienceStatus
+            from ocos.memory.episode.models import Episode
+        except Exception as e:
+            logger.debug("Experience models unavailable: %s", e)
+            return 0
+
+        results = list(getattr(self, "_recent_results", []) or [])
+        if not results:
+            return 0
+
+        ingested = 0
+        for r in results:
+            try:
+                success = bool(r.get("success", False))
+                task_desc = str(r.get("description", r.get("task_id", "unknown")))[:200]
+                agent_type = str(r.get("agent", "unknown"))[:50]
+                output = str(r.get("output", r.get("result", "")))[:500]
+                task_id = str(r.get("task_id", ""))[:50] or f"task-{self._cycle_count}-{ingested}"
+                goal_id = str(r.get("goal_id", task_id))[:100]
+
+                # PHASE-LIFE: 字段对齐 LessonsSynthesizer 的读取预期
+                #   goal_context['goal_id'] → _group_by_goal 的 goal_ref
+                #   goal_context 其他 keys   → _ctx_keys 做上下文聚类
+                #   action_result['action'] → _action_str 提取动作
+                trace_bundle = TraceBundle(
+                    observation={
+                        "task": task_desc,
+                        "agent_type": agent_type,
+                        "output": output[:100],
+                    },
+                    reasoning_trace_id=f"step10-auto-{self._cycle_count}",
+                    decision_trace_id=f"step10-auto-{self._cycle_count}",
+                    action_result={
+                        "action": agent_type,       # synthesizer 读 action_result['action']
+                        "type": "dag_execution" if r.get("task_id") else "cognitive_loop",
+                        "result": output,
+                    },
+                    outcome={
+                        "success": success,
+                        "source": "step10_auto_ingest",
+                        "cycle": self._cycle_count,
+                        "agent_type": agent_type,
+                    },
+                    goal_context={
+                        "goal_id": goal_id,          # synthesizer 读 goal_context['goal_id']
+                        "agent_type": agent_type,
+                        "success": success,
+                    },
+                )
+
+                # 用 validator 判断 COMPLETE/INCOMPLETE（和 builder.build() 同逻辑）
+                complete, _missing = ExperienceValidator.required_fields_present(trace_bundle)
+                status = ExperienceStatus.COMPLETE if complete else ExperienceStatus.INCOMPLETE
+
+                candidate = ExperienceCandidate.create(
+                    trace_bundle=trace_bundle,
+                    source=ExperienceSource.DECISION,
+                    context={
+                        "agent_id": getattr(agent, "agent_id", "?"),
+                        "phase": "step10_learning_consolidation",
+                        "cycle": self._cycle_count,
+                        "task_id": r.get("task_id", ""),
+                    },
+                    status=status,
+                )
+
+                # 塞 builder — dream 时 _synthesize_lessons 能消费
+                builder._candidates.append(candidate)
+                ingested += 1
+
+                # 同时落 EpisodeStore（如果有的话）
+                if store is not None:
+                    try:
+                        episode = Episode.from_candidate(
+                            experience_id=candidate.id,
+                            context=candidate.context,
+                            goal=task_desc,
+                            decision=f"step10_auto success={success}",
+                            action="dag_execution" if r.get("task_id") else "cognitive_loop",
+                            outcome={"success": success},
+                            source="experience",
+                            tags=["auto_ingest", "step10", agent_type],
+                        )
+                        store.save(episode)
+                    except Exception as se:
+                        logger.debug("Episode save skipped: %s", se)
+
+            except Exception as e:
+                logger.debug("ExperienceCandidate ingestion failed: %s", e)
+                continue
+
+        if ingested:
+            logger.info(
+                "PHASE-LIFE: ingested %d results into ExperienceBuilder "
+                "(total=%d)", ingested, len(builder._candidates),
+            )
+        return ingested
 
     # ── 原有辅助方法 ────────────────────────────────────────────────────────
 

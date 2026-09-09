@@ -144,6 +144,31 @@ def build_master_agent(agent_id: str, db_path: Optional[str] = None):
         logger.warning("SkillRegistry unavailable: %s", e)
         _registry_holder = None
 
+    # PHASE-LIFE: Dream 巩固管线完整装配（此前 factory 不传这些 →
+    # agent._experience_builder=None → dream Phase 21 lesson synthesis
+    # 永远被跳过 → beliefs/patterns/lessons 恒 0 → dream 白跑）
+    _experience_builder = None
+    _episode_store = None
+    _belief_store = None
+    _pattern_store = None
+    try:
+        from ocos.memory.experience.builder import ExperienceBuilder
+        from ocos.memory.episode.store import EpisodeStore
+        _experience_builder = ExperienceBuilder()
+        _episode_store = EpisodeStore(db_path=db_path or ":memory:")
+        _episode_store.initialize()  # 显式建表（save/query 之前必须调）
+    except Exception as e:
+        logger.warning("Experience pipeline unavailable: %s", e)
+    try:
+        from ocos.memory.belief.store import BeliefStore
+        from ocos.memory.pattern.store import PatternStore
+        _belief_store = BeliefStore(db_path=db_path or ":memory:")
+        _belief_store.initialize()
+        _pattern_store = PatternStore(db_path=db_path or ":memory:")
+        _pattern_store.initialize()
+    except Exception as e:
+        logger.warning("Dream stores unavailable: %s", e)
+
     return MasterAgent(
         agent_id=agent_id,
         identity=IdentityBoundary.create_default(),
@@ -158,6 +183,11 @@ def build_master_agent(agent_id: str, db_path: Optional[str] = None):
         constitution=BehavioralConstitution(),
         # FIX-17: 注入主动输出回调 → 消息写入 UserInbox
         proactive_output_callback=proactive_output_callback,
+        # PHASE-LIFE: Dream 巩固管线完整注入
+        experience_builder=_experience_builder,
+        episode_store=_episode_store,
+        belief_store=_belief_store,
+        pattern_store=_pattern_store,
         **engines,
     ), _registry_holder
 

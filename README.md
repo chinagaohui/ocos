@@ -45,16 +45,20 @@ python -m pytest ocos/tests/test_integration.py -v
 cat docs/ARCHITECTURE.md
 ```
 
-## 项目状态
+## 项目状态（2026-09-08 基线）
 
-- **代码规模：** 148,000+ 行
-- **测试数量：** 260+ 个
-- **完成 Phase：** A-Z（25个）
-- **状态：** 核心能力栈构建完毕
+- **代码规模：** 167,311 行 / 817 modules / 2,364 classes
+- **测试数量：** 7,034 passed（另有 34/34 生产验证检查项全通过）
+- **生产状态：** systemd 常驻 daemon 运行中，行为级验收 10 项全绿
+- **当前阶段：** 认知运行时收敛（P0-P4 完成）→ Behavioral Delta 验证
+- **主链：** ResidentRuntime → RuntimeKernel → AgentRuntime.tick() → TaskDAG → DecisionBridge → Permission → Execution
 
 ## 文档
 
-- [架构文档](docs/ARCHITECTURE.md)
+- [项目白皮书 v1.3.1](docs/OCOS_项目白皮书_v1.2.md)（最完整现状）
+- [AGI 升级蓝图 v1.1](docs/BLUEPRINT_AGI_UPGRADE_v1.1.md)（当前路线）
+- [认知运行时收敛裁决 v1.0](docs/COGNITIVE_RUNTIME_CONVERGENCE_DECISION_v1.0.md)
+- [架构文档](docs/ARCHITECTURE.md)（部分被收敛裁决更新，见文档头状态标注）
 - [设计原则](docs/DESIGN_PRINCIPLES.md)
 - [API 参考](docs/API_REFERENCE.md)
 

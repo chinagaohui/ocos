@@ -20,6 +20,14 @@
   --muted: #546e7a;
   --glow-cyan: 0 0 20px rgba(0, 229, 255, 0.5);
   --glow-purple: 0 0 20px rgba(170, 0, 255, 0.5);
+
+  /* 消息区亮色（阅读友好） */
+  --msg-bg-bot: rgba(255, 255, 255, 0.04);
+  --msg-bg-user: rgba(41, 121, 255, 0.15);
+  --msg-border-bot: rgba(0, 229, 255, 0.25);
+  --msg-border-user: rgba(41, 121, 255, 0.45);
+  --thinking-bg: rgba(255, 255, 255, 0.025);
+  --thinking-border: rgba(255, 255, 255, 0.08);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -27,7 +35,7 @@ html, body { height: 100%; overflow: hidden; }
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: 'Courier New', 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
   font-size: 12px;
 }
 
@@ -49,19 +57,6 @@ body {
   animation: scan 4s linear infinite;
 }
 @keyframes scan { from { top: 0; } to { top: 100vh; } }
-
-/* ── CRT效应 ── */
-# crt-overlay {
-  position: fixed; inset: 0; z-index: 99;
-  background: repeating-linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0.03) 0px,
-    rgba(0, 0, 0, 0.03) 1px,
-    transparent 1px,
-    transparent 2px
-  );
-  pointer-events: none;
-}
 
 /* ── 主布局 ── */
 .app {
@@ -206,7 +201,7 @@ body {
 .metric-row .value.ok { color: var(--green); }
 .metric-row .value.warn { color: var(--amber); }
 
-/* ── 中央 - OCOS 上下文窗口（2026-09-07 替代大脑动画） ── */
+/* ── 中央 - OCOS 上下文窗口 ── */
 .center-panel {
   position: relative;
   display: flex;
@@ -251,7 +246,6 @@ body {
   letter-spacing: 0.1em;
   font-variant-numeric: tabular-nums;
 }
-/* 执行可见性徽章三态（2026-09-08）: 执行中呼吸 / 待命常显 / 离线红闪 */
 .ctx-badge.executing {
   color: var(--cyan);
   border-color: rgba(0,229,255,0.55);
@@ -279,12 +273,12 @@ body {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 16px 20px;
+  gap: 14px;
+  padding: 20px 24px;
   scroll-behavior: smooth;
 }
 
-/* ── 右侧面板 - 目标与记忆 ── */
+/* ── 右侧面板 ── */
 .right-panel {
   background: var(--panel);
   padding: 16px;
@@ -360,7 +354,7 @@ body {
   border-radius: 2px;
 }
 
-/* ── 底部栏 - 输入区（消息流已移入中央上下文窗口） ── */
+/* ── 底部栏 ── */
 .bottom-bar {
   grid-column: 2;
   background: linear-gradient(0deg, rgba(0,10,20,0.95) 0%, rgba(0,15,30,0.9) 100%);
@@ -377,44 +371,8 @@ body {
   text-transform: uppercase;
   display: none;
 }
-.chat-log { display: none; }   /* 旧容器保留兼容，消息流在 #ctxLog */
-.chat-msg {
-  padding: 10px 14px;
-  border-radius: 6px;
-  font-size: 13px;
-  line-height: 1.6;
-  max-width: 78%;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.chat-msg .msg-time {
-  display: block;
-  font-size: 9px;
-  color: var(--muted);
-  margin-bottom: 3px;
-  letter-spacing: 0.1em;
-}
-.chat-msg.user {
-  align-self: flex-end;
-  background: linear-gradient(135deg, rgba(41,121,255,0.2), rgba(0,229,255,0.1));
-  border: 1px solid rgba(41,121,255,0.3);
-  border-right: 3px solid var(--blue);
-  color: var(--fg);
-  border-radius: 6px 6px 2px 6px;
-}
-.chat-msg.bot {
-  align-self: flex-start;
-  background: linear-gradient(135deg, rgba(0,229,255,0.08), rgba(170,0,255,0.05));
-  border: 1px solid var(--panel-border);
-  border-left: 3px solid var(--cyan);
-  color: var(--fg);
-  border-radius: 6px 6px 6px 2px;
-}
-.chat-msg.bot.mock {
-  border-style: dashed;
-  border-color: rgba(255,171,0,0.3);
-  color: var(--amber);
-}
+.chat-log { display: none; }
+
 .input-area {
   display: flex; gap: 12px; align-items: flex-end;
 }
@@ -457,6 +415,210 @@ body {
 }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
+/* ═══════════════════════════════════════════════════════════════
+   ║  消息卡片（v2 — 结构化：输入/思考/结果 三段式）          ║
+   ═══════════════════════════════════════════════════════════════ */
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  max-width: 100%;
+  animation: msg-in 0.25s ease-out;
+}
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 用户消息（右对齐气泡，简洁） ── */
+.chat-msg.user {
+  align-self: flex-end;
+  max-width: 78%;
+}
+.chat-msg.user .msg-body {
+  background: linear-gradient(135deg, rgba(41,121,255,0.25), rgba(0,229,255,0.12));
+  border: 1px solid var(--msg-border-user);
+  border-right: 3px solid var(--blue);
+  border-radius: 10px 10px 2px 10px;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: #e8f4ff;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── OCOS 消息（左对齐卡片，支持多段） ── */
+.chat-msg.bot {
+  align-self: flex-start;
+  max-width: 88%;
+}
+
+/* 思考折叠块 */
+.thinking-block {
+  border: 1px solid var(--thinking-border);
+  border-radius: 8px;
+  background: var(--thinking-bg);
+  overflow: hidden;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.thinking-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--amber);
+  transition: background 0.15s;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+.thinking-header:hover {
+  background: rgba(255, 171, 0, 0.06);
+}
+.thinking-header .arrow {
+  display: inline-block;
+  transition: transform 0.15s;
+  font-size: 9px;
+}
+.thinking-block.open .thinking-header .arrow {
+  transform: rotate(90deg);
+}
+.thinking-content {
+  padding: 10px 14px 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11.5px;
+}
+.thinking-block.collapsed .thinking-content {
+  display: none;
+}
+
+/* 结果主体（markdown 渲染） */
+.msg-body {
+  background: var(--msg-bg-bot);
+  border: 1px solid var(--msg-border-bot);
+  border-left: 3px solid var(--cyan);
+  border-radius: 10px 10px 10px 2px;
+  padding: 14px 18px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  line-height: 1.75;
+  color: #f0fbff;
+}
+
+/* Markdown 内联样式 */
+.msg-body h1 { font-size: 17px; font-weight: 700; color: var(--cyan); margin: 14px 0 8px; letter-spacing: 0.04em; border-bottom: 1px solid var(--msg-border-bot); padding-bottom: 4px; }
+.msg-body h2 { font-size: 15px; font-weight: 700; color: var(--cyan); margin: 12px 0 6px; letter-spacing: 0.03em; }
+.msg-body h3 { font-size: 14px; font-weight: 600; color: #80f0ff; margin: 10px 0 4px; }
+.msg-body p { margin: 4px 0; }
+.msg-body ul, .msg-body ol { margin: 4px 0; padding-left: 22px; }
+.msg-body li { margin: 2px 0; }
+.msg-body strong { color: #fff; font-weight: 700; }
+.msg-body em { color: #b0c9ff; font-style: normal; }
+.msg-body code {
+  background: rgba(0, 229, 255, 0.12);
+  border: 1px solid rgba(0, 229, 255, 0.2);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  color: var(--cyan);
+}
+.msg-body pre {
+  background: rgba(0,0,0,0.45);
+  border: 1px solid var(--msg-border-bot);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 8px 0;
+  overflow-x: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.msg-body pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: #cde8ff;
+}
+.msg-body blockquote {
+  border-left: 3px solid var(--purple);
+  padding: 4px 12px;
+  margin: 6px 0;
+  color: #c7b3ff;
+  background: rgba(170, 0, 255, 0.06);
+  border-radius: 0 4px 4px 0;
+}
+.msg-body hr {
+  border: none;
+  border-top: 1px dashed var(--msg-border-bot);
+  margin: 10px 0;
+}
+
+/* 结构化步骤列表 */
+.msg-steps {
+  margin: 8px 0 4px;
+  padding: 8px 0;
+  border-top: 1px dashed var(--msg-border-bot);
+  border-bottom: 1px dashed var(--msg-border-bot);
+}
+.msg-step {
+  display: flex;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.msg-step .step-num {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 229, 255, 0.15);
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+}
+.msg-step .step-num.done { background: rgba(0, 230, 118, 0.15); border-color: var(--green); color: var(--green); }
+.msg-step .step-num.fail { background: rgba(255, 23, 68, 0.15); border-color: var(--red); color: var(--red); }
+.msg-step .step-text {
+  flex: 1;
+  line-height: 1.55;
+}
+
+/* 消息时间 */
+.msg-time {
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  padding: 0 2px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.chat-msg.user .msg-time { text-align: right; }
+
+/* mock 标记（离线降级回复） */
+.chat-msg.bot.mock .msg-body {
+  border-left-color: var(--amber);
+  background: rgba(255,171,0,0.06);
+  color: #e8d8b0;
+}
+.chat-msg.bot.mock .msg-body::before {
+  content: '⚠ 离线降级模式';
+  display: block;
+  font-size: 10px;
+  color: var(--amber);
+  margin-bottom: 6px;
+  letter-spacing: 0.1em;
+}
+
 /* ── 滚动条 ── */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -474,7 +636,6 @@ body {
 
 <div id="grid-bg"></div>
 <div id="scanline"></div>
-<div id="crt-overlay"></div>
 
 <div class="app">
   <!-- 顶部HUD -->
@@ -564,7 +725,7 @@ body {
       </div>
     </div>
     <div class="ctx-log" id="ctxLog">
-      <div class="chat-msg bot">系统初始化完成。等待神经连接...</div>
+      <div class="chat-msg bot"><div class="msg-body">系统初始化完成。等待神经连接...</div></div>
     </div>
   </main>
 
@@ -606,8 +767,7 @@ body {
   </footer>
 </div>
 
-<!-- Token 连接面板（prompt() 替代 — 2026-09-07：headless/受控浏览器不支持
-     prompt 且连续弹窗会被拦截，导致页面整体不可用） -->
+<!-- Token 连接面板 -->
 <div id="tokenGate" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(1,3,8,0.85);backdrop-filter:blur(6px);align-items:center;justify-content:center">
   <div style="width:360px;max-width:90vw;background:var(--panel);border:1px solid var(--panel-border);border-radius:12px;padding:28px;box-shadow:0 0 40px rgba(0,229,255,0.15)">
     <div style="font-size:13px;color:var(--cyan);letter-spacing:2px;margin-bottom:14px">◈ NEURAL LINK REQUIRED</div>
@@ -624,103 +784,69 @@ body {
 </div>
 
 <script>
-// ═══════════════════════════════════════════════════════
-// API 认证（S1.2 Bearer Token — D-UI 修复 2026-09-07）
-// 页面本身豁免鉴权，但 /ocos/* 数据接口需要 Bearer token。
-// token 来源优先级: URL ?token= → localStorage → 页面内 Token 面板
-// （不使用 prompt(): headless/受控浏览器不支持且连续弹窗被拦截）。
-// ═══════════════════════════════════════════════════════
-let authToken = localStorage.getItem('ocos_token') || '';
-let tokenGateVisible = false;
+// ═══════════════════════════════════════════════════════════════
+// Markdown 渲染器（轻量 regex，覆盖常用语法）
+// ═══════════════════════════════════════════════════════════════
+function renderMarkdown(md) {
+  if (!md) return '';
+  let text = md.replace(/\r\n?/g, '\n');
 
-// URL ?token= 直连（个人使用便利）：存入后清理地址栏，不留敏感参数
-(function () {
-  const m = location.search.match(/[?&]token=([^&]+)/);
-  if (m) {
-    authToken = decodeURIComponent(m[1]).trim();
-    localStorage.setItem('ocos_token', authToken);
-    history.replaceState(null, '', location.pathname);
-  }
-})();
+  // 代码块 ```lang\n...\n```
+  text = text.replace(/```([\w]*)\n([\s\S]*?)```/g, (_, lang, code) =>
+    `<pre><code>${escapeHtml(code.trim())}</code></pre>`);
 
-function showTokenGate(msg) {
-  if (tokenGateVisible) return;
-  tokenGateVisible = true;
-  document.getElementById('tokenGate').style.display = 'flex';
-  const err = document.getElementById('tokenErr');
-  err.textContent = msg || '';
-  err.style.display = msg ? 'block' : 'none';
-  const input = document.getElementById('tokenInput');
-  input.value = '';
-  setTimeout(() => input.focus(), 50);
+  // 标题 ### / ## / #
+  text = text.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  text = text.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  text = text.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // 分割线
+  text = text.replace(/^---+$/gm, '<hr>');
+
+  // 行内 code
+  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // 加粗 **...**
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+
+  // 斜体 *...*
+  text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+
+  // 引用块（连续 >）
+  text = text.replace(/^&gt;\s*(.+)$/gm, '<blockquote>$1</blockquote>');
+  text = text.replace(/^>\s*(.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // 无序列表
+  text = text.replace(/^[-•]\s+(.+)$/gm, '<li>$1</li>');
+  text = text.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+  // 有序列表
+  text = text.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+
+  // 段落
+  text = text.replace(/\n\n+/g, '</p><p>');
+  text = text.replace(/\n/g, '<br>');
+  text = '<p>' + text + '</p>';
+
+  // 清理空段落
+  text = text.replace(/<p><\/p>/g, '');
+  text = text.replace(/<p>\s*<br>\s*<\/p>/g, '');
+
+  return text;
 }
 
-function hideTokenGate() {
-  tokenGateVisible = false;
-  document.getElementById('tokenGate').style.display = 'none';
+function escapeHtml(t) {
+  const d = document.createElement('div');
+  d.textContent = t;
+  return d.innerHTML;
 }
 
-// 面板「建立连接」: 先验证再落地，避免坏 token 污染 localStorage
-async function connectToken() {
-  const input = document.getElementById('tokenInput');
-  const t = input.value.trim();
-  if (!t) { input.focus(); return; }
-  try {
-    const resp = await fetch('/ocos/introspect',
-      { headers: { 'Authorization': 'Bearer ' + t } });
-    if (resp.ok) {
-      authToken = t;
-      localStorage.setItem('ocos_token', t);
-      hideTokenGate();
-      addMessage('神经连接已建立 ✓', false);
-      refreshAll();
-      return;
-    }
-    showTokenGate('Token 无效（HTTP ' + resp.status + '），请核对 api.token');
-  } catch (e) {
-    showTokenGate('连接失败: ' + e.message);
-  }
-  input.select();
-}
-
-function authHeaders(extra) {
-  const h = Object.assign({}, extra || {});
-  if (authToken) h['Authorization'] = 'Bearer ' + authToken;
-  return h;
-}
-
-// 统一 fetch 包装: 自动带 token；401/403 清 token 唤起连接面板并抛
-// unauthorized（调用方 catch 静默跳过本轮，避免解析 401 body 报错）
-async function authFetch(url, opts = {}) {
-  opts.headers = authHeaders(opts.headers);
-  const resp = await fetch(url, opts);
-  if (resp.status === 401 || resp.status === 403) {
-    if (!tokenGateVisible) {
-      localStorage.removeItem('ocos_token');
-      authToken = '';
-      showTokenGate('连接已失效，请重新输入 API Token');
-    }
-    throw new Error('unauthorized');
-  }
-  return resp;
-}
-
-// ═══════════════════════════════════════════════════════
-// （原大脑 canvas 动画已移除，2026-09-07 — 中央区域改为
-//  OCOS 上下文窗口：ctx-header 状态条 + ctxLog 对话流）
-// ═══════════════════════════════════════════════════════
-
-// ═══════════════════════════════════════════════════════
-// 时钟
-// ═══════════════════════════════════════════════════════
-setInterval(() => {
-  document.getElementById('clock').textContent =
-    new Date().toLocaleTimeString('zh-CN', { hour12: false });
-}, 1000);
-
-// ═══════════════════════════════════════════════════════
-// 对话系统（消息流渲染在中央上下文窗口 #ctxLog）
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// addMessage — 统一消息卡片构造
+// 支持:
+//   简单字符串 → 纯消息体
+//   { reply, thinking_trace, steps, isUser, isMock, source } → 结构化卡片
+// ═══════════════════════════════════════════════════════════════
 const chatMessages = document.getElementById('ctxLog');
 const chatInput = document.getElementById('chatInput');
 const sendBtn = document.getElementById('sendBtn');
@@ -730,20 +856,70 @@ function _autosizeInput() {
   chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
 }
 
-function addMessage(text, isUser, isMock) {
+function addMessage(textOrStruct, isUser, isMock) {
+  let reply, thinking, steps, source;
+
+  // 结构化输入: { reply, thinking_trace?, steps? }
+  if (textOrStruct && typeof textOrStruct === 'object' && !Array.isArray(textOrStruct)) {
+    reply = textOrStruct.reply || textOrStruct.body || '';
+    thinking = textOrStruct.thinking_trace || textOrStruct.thinking || null;
+    steps = textOrStruct.steps || null;
+    source = textOrStruct.source || textOrStruct.kind || null;
+    isUser = textOrStruct.isUser || isUser;
+    isMock = textOrStruct.isMock || isMock;
+  } else {
+    reply = String(textOrStruct || '');
+  }
+
   const div = document.createElement('div');
   div.className = 'chat-msg ' + (isUser ? 'user' : 'bot' + (isMock ? ' mock' : ''));
+
+  // 时间戳
   const time = document.createElement('span');
   time.className = 'msg-time';
-  time.textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-  const body = document.createElement('span');
-  body.textContent = text;
+  const now = new Date();
+  time.textContent = now.toLocaleTimeString('zh-CN', { hour12: false });
+  time.title = now.toLocaleString('zh-CN');
   div.appendChild(time);
+
+  // 思考折叠块（只给 bot 展示）
+  if (!isUser && thinking) {
+    const tb = document.createElement('div');
+    tb.className = 'thinking-block collapsed';
+    tb.innerHTML = `
+      <div class="thinking-header" onclick="this.parentElement.classList.toggle('collapsed');this.parentElement.classList.toggle('open')">
+        <span class="arrow">▶</span>
+        <span>💭 思考过程</span>
+      </div>
+      <div class="thinking-content">${escapeHtml(thinking)}</div>
+    `;
+    div.appendChild(tb);
+  }
+
+  // 步骤列表
+  if (!isUser && steps && Array.isArray(steps) && steps.length) {
+    const stepsEl = document.createElement('div');
+    stepsEl.className = 'msg-steps';
+    steps.forEach((s, i) => {
+      const step = document.createElement('div');
+      step.className = 'msg-step';
+      const status = s.status === 'success' ? 'done' : (s.status === 'fail' || s.status === 'error' ? 'fail' : '');
+      step.innerHTML = `<span class="step-num ${status}">${i + 1}</span><span class="step-text">${escapeHtml(s.text || s.content || String(s))}</span>`;
+      stepsEl.appendChild(step);
+    });
+    div.appendChild(stepsEl);
+  }
+
+  // 消息体（markdown 渲染）
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+  body.innerHTML = renderMarkdown(reply);
   div.appendChild(body);
+
   chatMessages.appendChild(div);
   chatMessages.scrollTop = chatMessages.scrollHeight;
-  // 保留更多上下文历史
-  while (chatMessages.children.length > 50) chatMessages.firstChild.remove();
+  // 限制历史消息数（OCOS 消息最多 80 条，用户消息保留）
+  while (chatMessages.children.length > 80) chatMessages.firstChild.remove();
 }
 
 async function sendMessage() {
@@ -770,14 +946,21 @@ async function sendMessage() {
     document.getElementById('brainSub').textContent = '生成神经响应...';
 
     if (j.success) {
-      addMessage(j.data.reply, false, j.data.mock);
-      updateLLMStatus(j.data.provider, j.data.mock);
+      const d = j.data;
+      addMessage({
+        reply: d.reply,
+        thinking_trace: d.thinking_trace || null,
+        steps: d.steps || null,
+        source: d.kind,
+        isMock: d.mock
+      }, false, d.mock);
+      updateLLMStatus(d.provider, d.mock);
     } else {
-      addMessage('错误: ' + j.message, false, false);
+      addMessage({ reply: '错误: ' + j.message }, false, false);
     }
   } catch (e) {
     if (e.message !== 'unauthorized') {
-      addMessage('连接失败（ocos-server 在跑吗？）', false, false);
+      addMessage({ reply: '连接失败（ocos-server 在跑吗？）' }, false, false);
     }
   }
 
@@ -788,7 +971,6 @@ async function sendMessage() {
 }
 
 sendBtn.onclick = sendMessage;
-// Enter 发送 · Shift+Enter 换行（多行输入）
 chatInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -796,6 +978,80 @@ chatInput.addEventListener('keydown', e => {
   }
 });
 chatInput.addEventListener('input', _autosizeInput);
+
+// ═══════════════════════════════════════════════════════════════
+// API 认证
+// ═══════════════════════════════════════════════════════════════
+let authToken = localStorage.getItem('ocos_token') || '';
+let tokenGateVisible = false;
+
+(function () {
+  const m = location.search.match(/[?&]token=([^&]+)/);
+  if (m) {
+    authToken = decodeURIComponent(m[1]).trim();
+    localStorage.setItem('ocos_token', authToken);
+    history.replaceState(null, '', location.pathname);
+  }
+})();
+
+function showTokenGate(msg) {
+  if (tokenGateVisible) return;
+  tokenGateVisible = true;
+  document.getElementById('tokenGate').style.display = 'flex';
+  const err = document.getElementById('tokenErr');
+  err.textContent = msg || '';
+  err.style.display = msg ? 'block' : 'none';
+  const input = document.getElementById('tokenInput');
+  input.value = '';
+  setTimeout(() => input.focus(), 50);
+}
+
+function hideTokenGate() {
+  tokenGateVisible = false;
+  document.getElementById('tokenGate').style.display = 'none';
+}
+
+async function connectToken() {
+  const input = document.getElementById('tokenInput');
+  const t = input.value.trim();
+  if (!t) { input.focus(); return; }
+  try {
+    const resp = await fetch('/ocos/introspect',
+      { headers: { 'Authorization': 'Bearer ' + t } });
+    if (resp.ok) {
+      authToken = t;
+      localStorage.setItem('ocos_token', t);
+      hideTokenGate();
+      addMessage({ reply: '神经连接已建立 ✓' }, false, false);
+      refreshAll();
+      return;
+    }
+    showTokenGate('Token 无效（HTTP ' + resp.status + '），请核对 api.token');
+  } catch (e) {
+    showTokenGate('连接失败: ' + e.message);
+  }
+  input.select();
+}
+
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+  return h;
+}
+
+async function authFetch(url, opts = {}) {
+  opts.headers = authHeaders(opts.headers);
+  const resp = await fetch(url, opts);
+  if (resp.status === 401 || resp.status === 403) {
+    if (!tokenGateVisible) {
+      localStorage.removeItem('ocos_token');
+      authToken = '';
+      showTokenGate('连接已失效，请重新输入 API Token');
+    }
+    throw new Error('unauthorized');
+  }
+  return resp;
+}
 
 function updateLLMStatus(provider, mock) {
   const pill = document.getElementById('llmPill');
@@ -809,30 +1065,37 @@ function updateLLMStatus(provider, mock) {
   }
 }
 
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// 时钟
+// ═══════════════════════════════════════════════════════════════
+setInterval(() => {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('zh-CN', { hour12: false });
+}, 1000);
+
+// ═══════════════════════════════════════════════════════════════
 // 状态刷新
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 async function refreshAll() {
   try {
     const introResp = await authFetch('/ocos/introspect');
     const intro = await introResp.json();
     const d = intro.data;
-    
+
     const mem = d.memory_stats || {};
     document.getElementById('episodeCount').textContent = mem.episode_count || 0;
     document.getElementById('beliefCount').textContent = mem.belief_count || 0;
     document.getElementById('patternCount').textContent = mem.pattern_count || 0;
     document.getElementById('episodeBar').style.width = Math.min(100, (mem.episode_count || 0) / 5) + '%';
-    // 上下文窗口头部徽章
     document.getElementById('ctxEpisodes').textContent = 'EPI ' + (mem.episode_count || 0);
     document.getElementById('ctxBeliefs').textContent = 'BEL ' + (mem.belief_count || 0);
-    
+
     const sk = d.self_knowledge || '';
     const lines = sk.split('\n').filter(l => l.trim()).slice(0, 3);
     document.getElementById('selfKnowledge').innerHTML =
       lines.length ? lines.map(l => `<div style="margin-bottom:4px">${l.replace(/^- /, '▸')}</div>`).join('')
                   : '<div style="color:var(--muted)">暂无</div>';
-    
+
     const recent = d.recent_episodes || [];
     const recentHtml = recent.slice(0, 6).map(e => {
       const time = e.created_at?.slice(11, 16) || '--:--';
@@ -843,18 +1106,18 @@ async function refreshAll() {
       return `<div class="episode-item"><span class="time">${time}</span><span class="status ${statusClass}">${icon}</span><span>${text}...</span></div>`;
     }).join('');
     document.getElementById('recentEpisodes').innerHTML = recentHtml || '<div style="color:var(--muted);font-size:10px">暂无</div>';
-    
+
     if (d.llm) {
       updateLLMStatus('openai', !String(d.llm).includes('configured'));
     }
-    
+
     const [goalsResp, pendingResp] = await Promise.all([
       authFetch('/ocos/summary'),
       authFetch('/ocos/approvals')
     ]);
     const goals = await goalsResp.json();
     const pending = await pendingResp.json();
-    
+
     const goalList = goals.data?.goals || {};
     document.getElementById('ctxGoals').textContent =
       'GOAL ' + ((goalList.ACTIVE || 0) + (goalList.PENDING || 0));
@@ -867,11 +1130,10 @@ async function refreshAll() {
         </div>
       `;
     }
-    
+
     const pendList = pending.data?.pending || [];
     const pendMode = pending.data?.mode || 'ask';
     const pendTitle = document.querySelector('#pendingContainer').previousElementSibling;
-    // P2-UX: auto 模式徽章 — 让用户知道待批项会秒级自动通过，无需手动点
     if (pendTitle && pendTitle.classList.contains('section-title')) {
       pendTitle.innerHTML = '待批请求' + (pendMode === 'auto'
         ? ' <span style="font-size:9px;color:var(--amber);border:1px solid rgba(255,171,0,.3);border-radius:3px;padding:1px 5px">自动审批中</span>'
@@ -899,7 +1161,7 @@ async function refreshAll() {
       document.getElementById('pendingContainer').innerHTML =
         '<div style="color:var(--muted);font-size:10px;text-align:center;padding:16px">无待批项</div>';
     }
-    
+
     const daemon = goals.data?.daemon || {};
     const daemonPill = document.getElementById('daemonPill');
     const daemonText = document.getElementById('daemonText');
@@ -910,9 +1172,8 @@ async function refreshAll() {
       daemonPill.classList.add('warn');
       daemonText.textContent = '离线';
     }
-    
-    // 检查代理错误
-    const recentErrors = (d.recent_episodes || []).filter(e => 
+
+    const recentErrors = (d.recent_episodes || []).filter(e =>
       e.decision?.includes('proxy') || e.decision?.includes('失败')
     );
     const warningEl = document.getElementById('brainWarning');
@@ -921,20 +1182,16 @@ async function refreshAll() {
     } else {
       warningEl.style.display = 'none';
     }
-    
+
   } catch (e) {
     if (e.message !== 'unauthorized') console.error('Refresh failed:', e);
   }
 }
 
-// ═══════════════════════════════════════════════════════
-// 目标执行结果回推（CHAT-ROUTE FIX 2026-09-07）—
-// 轮询 goal_result 增量流，新结果以 bot 消息追加对话流，
-// 兑现"结果自动出现在本对话"。
-// 2026-09-08 执行可见性: feed.activity 驱动常驻状态徽章 —
-// 区分"执行中 / 待命 / 后台离线"，空闲与断连不再混淆。
-// ═══════════════════════════════════════════════════════
-let _feedSince = null;      // null = 首刷只校准时间不回放历史
+// ═══════════════════════════════════════════════════════════════
+// 目标执行结果回推 feed — 结构化卡片渲染
+// ═══════════════════════════════════════════════════════════════
+let _feedSince = null;
 let _feedPolling = false;
 let _lastActiveGoalId = null;
 
@@ -947,10 +1204,13 @@ function updateActivityBadge(act) {
     chip.textContent = `⟳ 执行中·${Math.round(g.elapsed_s || 0)}s`;
     chip.title = `目标 ${g.id}（${g.origin || 'SELF'}）：${g.description}`;
     chip.className = 'ctx-badge executing';
-    // 认领转换提示（执行窗口短于轮询时后端 progress 消息兜底）
     if (_lastActiveGoalId !== g.id) {
       _lastActiveGoalId = g.id;
-      addMessage(`⟳ 目标执行中（${g.origin || 'SELF'}）：${g.description}\n完成后结果自动回推本对话。`, false, false);
+      addMessage({
+        reply: `**目标已认领，开始执行**\n\n📋 ${g.description}\n\n完成后结果自动出现在本对话里。`,
+        thinking_trace: null,
+        isMock: false
+      }, false, false);
     }
   } else {
     _lastActiveGoalId = null;
@@ -962,7 +1222,7 @@ function updateActivityBadge(act) {
     } else {
       const age = d.age_s != null ? `·心跳 ${d.age_s}s 前` : '';
       chip.textContent = `⚠ 后台离线${age}`;
-      chip.title = 'daemon 心跳超时 — 服务可能已停止，执行将不可见';
+      chip.title = 'daemon 心跳超时 — 服务可能已停止';
       chip.className = 'ctx-badge offline';
     }
   }
@@ -980,8 +1240,19 @@ async function pollGoalFeed() {
       _feedSince = (d.data && d.data.server_time) || new Date().toISOString();
     } else if (items.length > 0) {
       for (const it of items) {
-        const mark = it.success ? '⚙' : '✗';
-        addMessage(`${mark} 目标执行结果\n${it.decision}`, false, !it.success);
+        // 把原始 decision 拆成结构化: 首行当标题，剩余正文
+        const lines = (it.decision || '').split('\n').filter(l => l.trim());
+        const title = lines[0] || (it.success ? '目标执行完成' : '目标执行异常');
+        const body = lines.slice(1).join('\n').slice(0, 800);
+        const icon = it.success ? '✅' : '❌';
+        const steps = lines.length > 1 ? lines.slice(1, 6).map(l => ({ text: l.slice(0, 120), status: it.success ? 'success' : 'fail' })) : null;
+
+        addMessage({
+          reply: `**${icon} ${title}**\n${body ? ('\n' + body) : ''}`,
+          thinking_trace: null,
+          steps: steps,
+          isMock: !it.success
+        }, false, !it.success);
       }
       _feedSince = (d.data.server_time) || _feedSince;
     } else {
@@ -997,23 +1268,20 @@ async function pollGoalFeed() {
 setInterval(pollGoalFeed, 6000);
 
 async function decide(pid, action) {
-  // P2-UX (2026-09-08「无法选中」): auto 审批模式下待批项秒级被 daemon
-  // 自动通过，点击时 404 属预期 — 必须给用户可见反馈，不能静默吞掉
   try {
     const resp = await authFetch(`/ocos/approvals/${pid}/${action}`, { method: 'POST' });
     if (!resp.ok) {
-      // 404 = not found or already decided（auto 模式数秒内自动通过）
-      addMessage(`ℹ ${pid} 已被处理，无需手动决策（自动审批模式下待批项通常数秒内自动通过，属正常现象）`, false, false);
+      addMessage({ reply: `ℹ ${pid} 已被处理，无需手动决策（自动审批模式下待批项通常数秒内自动通过）` }, false, false);
       refreshAll();
       return;
     }
-    addMessage(`${action === 'approve' ? '✓ 已批准' : '✗ 已拒绝'} ${pid}`, false, false);
+    addMessage({ reply: `${action === 'approve' ? '✓ 已批准' : '✗ 已拒绝'} ${pid}` }, false, false);
     refreshAll();
   } catch (e) {
     if (String(e.message || e).includes('unauthorized')) {
-      addMessage('⚠ 审批失败：连接已失效，请重新输入 Token', false, false);
+      addMessage({ reply: '⚠ 审批失败：连接已失效，请重新输入 Token' }, false, false);
     } else {
-      addMessage(`⚠ 审批请求失败: ${e}`, false, false);
+      addMessage({ reply: `⚠ 审批请求失败: ${e}` }, false, false);
       refreshAll();
     }
   }
@@ -1023,55 +1291,66 @@ async function runSelfImprove() {
   const btn = event.target;
   btn.disabled = true;
   btn.textContent = '自省中...';
-  
+
   try {
     const j = await (await authFetch('/ocos/self-improve', { method: 'POST' })).json();
     const d = j.data;
     if (d.proposals?.length) {
-      addMessage(`自省完成，${d.proposals.length} 条提案进入待批队列`, false, d.mock);
+      addMessage({ reply: `**自省完成** — ${d.proposals.length} 条提案进入待批队列` }, false, d.mock);
       refreshAll();
     } else {
-      addMessage(d.note || '本轮没有值得记录的改进点', false, d.mock);
+      addMessage({ reply: d.note || '本轮没有值得记录的改进点' }, false, d.mock);
     }
   } catch (e) {
-    addMessage('自省失败: ' + e, false, false);
+    addMessage({ reply: '自省失败: ' + e }, false, false);
   }
-  
+
   btn.disabled = false;
   btn.textContent = '⟳ 自省升级';
 }
 
-// 出站消息轮询 — result/proposal/report 进右侧"最近突触"，
-// progress（目标认领/执行起点，2026-09-08）进中央对话流
+// ═══════════════════════════════════════════════════════════════
+// 出站消息轮询（OCOS 主动说的话）— 结构化渲染
+// ═══════════════════════════════════════════════════════════════
 let outboxCursor = 0;
 async function pollOutbox() {
   try {
     const j = await (await authFetch(`/ocos/outbox?after=${outboxCursor}`)).json();
     for (const m of j.data.messages) {
-      // 过滤错误日志，只添加成功或用户友好的消息
       const content = m.content || '';
-      if (content && !content.includes('LLM 规划失败') && !content.includes('proxy') && !content.includes("'status': 'failed'") && !content.includes('"status": "failed"')) {
-        if (m.kind === 'progress') {
-          addMessage(content, false, false);       // 执行起点 → 对话流
+      if (!content || content.includes('LLM 规划失败') || content.includes('proxy')) continue;
+
+      // 把 OCOS 主动说的话也结构化: 标题\n正文\n建议
+      const lines = content.split('\n');
+      let title = lines[0] || '', body = '', suggestion = '';
+      for (let i = 1; i < lines.length; i++) {
+        const l = lines[i];
+        if (l.startsWith('建议：') || l.startsWith('建议:')) {
+          suggestion = l.replace(/^建议[:：]\s*/, '');
+        } else {
+          body += (body ? '\n' : '') + l;
         }
-        const recentEl = document.getElementById('recentEpisodes');
-        if (recentEl) {
-          const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-          const mark = m.kind === 'progress' ? '⟳' : '✓';
-          const div = document.createElement('div');
-          div.className = 'episode-item';
-          div.innerHTML = `<span class="time">${time}</span><span class="status ok">${mark}</span><span>${content.slice(0, 40)}...</span>`;
-          recentEl.prepend(div);
-          // 限制显示数量
-          while (recentEl.children.length > 10) recentEl.lastChild.remove();
-        }
+      }
+      let reply = `**${title}**`;
+      if (body) reply += `\n\n${body}`;
+      if (suggestion) reply += `\n\n💡 *建议：${suggestion}*`;
+
+      addMessage({ reply: reply }, false, false);
+
+      const recentEl = document.getElementById('recentEpisodes');
+      if (recentEl) {
+        const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        const div = document.createElement('div');
+        div.className = 'episode-item';
+        div.innerHTML = `<span class="time">${time}</span><span class="status ok">✓</span><span>${content.slice(0, 40)}...</span>`;
+        recentEl.prepend(div);
+        while (recentEl.children.length > 10) recentEl.lastChild.remove();
       }
       outboxCursor = Math.max(outboxCursor, m.rid);
     }
   } catch (e) {}
 }
 setInterval(pollOutbox, 5000);
-// 首刷校准游标（after=-1 只取 max rowid，不回放存量）再开始增量轮询
 (async () => {
   try {
     const j = await (await authFetch('/ocos/outbox?after=-1')).json();
@@ -1080,7 +1359,7 @@ setInterval(pollOutbox, 5000);
   pollOutbox();
 })();
 
-// 启动: 无 token → 直接唤起连接面板（不依赖 prompt）
+// 启动
 if (!authToken) showTokenGate();
 refreshAll();
 setInterval(refreshAll, 5000);

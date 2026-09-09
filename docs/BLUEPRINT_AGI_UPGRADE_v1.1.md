@@ -1,5 +1,8 @@
 # OCOS AGI Upgrade Blueprint v1.1 — Architecture Correction
 
+> ✅ **CURRENT（现行路线）**：Behavioral Delta（ER-2）为学习链唯一判定标准。
+> 前置收敛（P0-P4）已于 2026-09-08 完成（commit a7af073），当前处于 Behavioral Delta 验证阶段。
+
 **版本**: v1.1  
 **日期**: 2026-09-03  
 **性质**: 架构裁决修正（Architecture Correction）— 对 v1.0 的 10 点收紧  

@@ -91,7 +91,11 @@ class TestS2FailureSelfHealing:
         # 第三次: 行为改变 — 规划侧注入矫正程序
         hint = b._failure_prior_hint("部署生产服务到新机器")
         assert "执行程序提示" in hint
-        assert "校验输入" in hint               # execution_error 矫正程序
+        # PHASE-LIFE: execution_error 现在有 C 类模板 cause_to_procedure 动态生成
+        # 关键词对齐: "先检查前置条件"（动态模板）或 "校验输入"（旧静态 fallback）
+        assert ("先检查前置条件" in hint
+                or "校验输入" in hint
+                or "【" in hint and "程序】" in hint), f"expected procedure hint, got: {hint}"
         marks = [m for m in learning_marks(tmp_path)
                  if m["type"] == "lesson_prior_injected"]
         assert marks and marks[0]["mode"] == "pattern"
@@ -105,7 +109,9 @@ class TestS2FailureSelfHealing:
         conn.close()
         b = _bridge_with_db(tmp_path)
         hint = b._failure_prior_hint("完全无关的任务: 写周报")
-        assert "timeout" in hint and "中间检查点" in hint
+        # Phase A0+: bridge 动态调用 cause_to_procedure(cause, goal_pattern)
+        # goal_pattern 含"批量"关键词 → 命中批量操作程序模板（含"每批"/"分批"）
+        assert "timeout" in hint and ("每批" in hint or "分批" in hint)
 
 
 def _bridge_with_db(tmp_path):

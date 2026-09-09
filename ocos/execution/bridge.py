@@ -1009,6 +1009,40 @@ class DecisionBridge:
         return self._handle_install_action(
             name, payload.get("approval_id"), already_approved=True)
 
+    def _probe_host_capabilities(self) -> dict:
+        """P1-SELFBOOT: 探测宿主机真实能力（不依赖 LLM 判断）。
+
+        返回 {"curl": bool, "python3": bool, "wget": bool, "internet": bool}
+        — 用于 NONE 自举重试时给 LLM 注入真实硬件事实，
+        防止它凭空假设"没有联网能力"。
+        """
+        import shutil
+        result = {
+            "curl": shutil.which("curl") is not None,
+            "wget": shutil.which("wget") is not None,
+            "python3": shutil.which("python3") is not None,
+            "git": shutil.which("git") is not None,
+            "internet": False,
+        }
+        # 外网连通性探测（单次请求，1s 超时）
+        try:
+            import urllib.request
+            import urllib.error
+            req = urllib.request.Request(
+                "https://api.github.com", method="HEAD")
+            urllib.request.urlopen(req, timeout=1).read(0)
+            result["internet"] = True
+        except Exception:
+            try:
+                # 回退: DNS 解析
+                import socket
+                socket.setdefaulttimeout(2)
+                socket.create_connection(("1.1.1.1", 53))
+                result["internet"] = True
+            except Exception:
+                result["internet"] = False
+        return result
+
     def _handle_install_action(self, name: str, approval_id: Any,
                                already_approved: bool = False) -> dict:
         """AGI 自我增强: 安装动作统一入口 — 无审批 → 入待批；已审批 → 执行。
@@ -1107,22 +1141,33 @@ class DecisionBridge:
                 _rules = (
                     "把上述任务转换为可直接执行的动作。每行一个动作、最多 4 行，格式严格为：\n"
                     "RUN|<命令>（本地只读优先: uname/df/free/uptime/ls/cat/head/"
-                    "tail/grep/find/ps/whoami/date/env/hostname/id；任务要求联网"
+                    "tail/grep/find/ps/whoami/date/env/hostname/id/sqlite3；任务要求联网"
                     "访问/抓取/调研外部内容（GitHub/网页/API）时必须用 "
                     "RUN|curl -s <url> 真实抓取，禁止省略联网部分只用本地命令"
                     "应付。所有 curl 都加 --max-time 15（防止挂起耗尽执行"
-                    "超时）。GitHub 调研配方: 先"
+                    "超时）。\n"
+                    "⚠️ Python 解析 JSON 必须防御性：先检查 key 存在再访问。"
+                    "错误示范: python3 -c \"...json.load(sys.stdin)['items']...\" "
+                    "（当 API 返回非预期结构时直接 KeyError 崩溃）。"
+                    "正确示范: python3 -c \"import json,sys; d=json.load(sys.stdin); "
+                    "items=d.get('items') or d.get('results') or []; "
+                    "[print(r.get('full_name','')) for r in items[:5]]\" \n"
+                    "GitHub 调研配方: 先"
                     "RUN|curl -s --max-time 15 \"https://api.github.com/search/repositories?"
                     "q=关键词&per_page=5&sort=stars\" | python3 -c \"import json,"
-                    "sys; [print(r['full_name'],'|',r['stargazers_count'],'|',"
-                    "(r.get('description') or '')[:150]) for r in "
-                    "json.load(sys.stdin)['items']]\" 提取精简字段（原始 JSON "
-                    "字段冗长会撑爆输出窗口致信息丢失），再对代表性项目用 "
+                    "sys; d=json.load(sys.stdin); items=d.get('items',[]); "
+                    "[print(r['full_name'],'|',r['stargazers_count'],'|',"
+                    "(r.get('description') or '')[:150]) for r in items]\" "
+                    "提取精简字段（必须用 d.get() 防御），再对代表性项目用 "
                     "RUN|curl -s --max-time 15 -H \"Accept: "
                     "application/vnd.github.raw\" "
                     "\"https://api.github.com/repos/<owner>/<repo>/readme\" "
                     "抓取 README（注意: raw.githubusercontent.com 在部分网络"
-                    "不可达，一律走 api.github.com））\n"
+                    "不可达，一律走 api.github.com）\n"
+                    "查对话历史/成长叙事/记忆 → 不要尝试读 markdown/jsonl 文件，"
+                    "直接用: RUN|sqlite3 /home/laogao/.ocos/ocos.db \"SELECT rowid,"
+                    "action, substr(decision,1,100), created_at FROM episodes "
+                    "ORDER BY rowid DESC LIMIT 20\" \n"
                     "宿主机环境探查标准命令集（任务含'检查/分析宿主机/系统环境/"
                     "硬件/部署可行性'时必须覆盖，尤其 GPU——漏查 GPU 会使部署"
                     "方案的显存估算失真）: RUN|uname -a  RUN|df -h  RUN|free -h"
@@ -1137,6 +1182,7 @@ class DecisionBridge:
                     "单一操作只输出一行；复合任务（如同时查看系统版本/磁盘/内存）"
                     "输出多条 RUN 行，且必须覆盖任务描述的全部关键部分"
                     "（联网调研与本地检查都要有对应动作，不可只做其中一半）。"
+                    "curl 优先于 Python 脚本——能用一行 curl 解决的就不用 Python。"
                     "不要输出任何解释。"
                 )
                 prompt = f"任务描述：{description}\n\n{_rules}"
@@ -1456,10 +1502,39 @@ class DecisionBridge:
         # FIX-5b: planning LLM 偶发输出 "NONE|"（判定无法执行）→ 带反馈重规划一次。
         # 弱模型较易对中文多命令任务误判不可执行；复用它已输出的理由让模型
         # 再给一次具体的 RUN 指令，显著降低偶发失败率。仍 NONE 则诚实失败。
+        #
+        # P1-SELFBOOT (2026-09-09): 自举重试 — 先探测宿主机真实能力
+        # （curl/wget/python 是否可用、网络是否通），把事实注入重试 prompt
+        # 让 LLM 基于硬件重规划，而不是凭空假设"没有联网能力"。
         if raw.startswith("NONE|") and not _retried_none:
             _retried_none = True
             _no = raw[5:].strip()
-            raw2 = _first_line(_convert(f"规划器判定：{_no}"))
+            # ── P1-SELFBOOT: 宿主机能力快扫（零依赖子进程） ──
+            _cap_probe = self._probe_host_capabilities()
+            # 联网类任务（搜索/调研/查）失败时，特别强调 curl + 网络通
+            _internet_hint = ""
+            if re.search(r"搜索|调研|联网|外网|抓取|最新|GitHub|www|http",
+                        description, re.IGNORECASE):
+                curl_ok = _cap_probe.get("curl", False)
+                net_ok = _cap_probe.get("internet", False)
+                py_ok = _cap_probe.get("python3", False)
+                _internet_hint = (
+                    f"【宿主机真实能力探测】curl={'✓' if curl_ok else '✗'} "
+                    f"python3={'✓' if py_ok else '✗'} 外网连通={'✓' if net_ok else '✗'}\n"
+                )
+                if curl_ok and net_ok:
+                    _internet_hint += (
+                        "→ curl 和网络都可用，完全可以用 RUN|curl -s --max-time 15 "
+                        "真正抓取外部内容。请输出具体的 curl 命令行，不要再说无法联网。\n")
+                elif curl_ok and not net_ok:
+                    _internet_hint += "→ curl 可用但外网不通（可能是代理/DNS问题）。"
+                elif not curl_ok and py_ok:
+                    _internet_hint += "→ curl 不可用但 python3 可用，可考虑"
+                    _internet_hint += "用 python3 -c 或 python 脚本加 requests/urllib 抓取。"
+
+            raw2 = _first_line(_convert(
+                f"规划器判定：{_no}\n{_internet_hint}"
+                "请基于以上真实能力重新规划，输出具体 RUN| 或 ANSWER| 动作行。"))
             if raw2.startswith("RUN|"):
                 _rr2 = _run_one(raw2[4:].strip(), _auto_ro)
                 if _rr2.get("ok"):
@@ -2036,7 +2111,9 @@ class DecisionBridge:
         "ambiguous_task": "先澄清目标边界与成功标准（拆解为明确子步骤），再逐步执行",
         "execution_error": "先校验输入与工具可用性，分小步执行并在每步后核对结果再继续",
         "permission_denied": "先核验所需权限/审批是否具备，缺失则先走审批提案，不要直接执行",
-        "timeout": "拆分为短步骤并设中间检查点，单步超时前先输出部分结果",
+        # Phase A0+: timeout 升级为 C 类五要素模板（cause_to_procedure 自动生成的 timeout 通用退化模板）
+        # 格式对齐: 【<任务域>程序】先<正向步骤>；每批<批量上限>；<等待条件>。禁止<失败签名>。成功=<条件>
+        "timeout": "【超时规避程序】先检查当前操作规模；分批执行；等每批完成。禁止单次执行过多。成功=不超时",
         "tool_unavailable": "先探测所需工具/命令是否可用，不可用时改用替代方案或诚实说明",
         "llm_conversion_failed": "输出严格遵循要求的动作行格式（每行一条，不附加解释）",
     }
@@ -2116,8 +2193,21 @@ class DecisionBridge:
         cause, mode = chosen[0]
         self._audit_learning_mark("lesson_prior_injected", cause=cause,
                                   mode=mode)
+        # Phase A0+: 优先用 cause_to_procedure(cause, goal_pattern) 动态生成，
+        # fallback 静态 _CAUSE_PROCEDURES[cause]（确保非 timeout cause 也有退化）
+        gp = registry.get(cause, {}).get("goal_pattern", "")
+        procedure_text = ""
+        try:
+            from ocos.learning.experience_learning import cause_to_procedure
+            procedure_text = cause_to_procedure(cause, gp)
+        except Exception:
+            pass
+        if not procedure_text and cause in self._CAUSE_PROCEDURES:
+            procedure_text = self._CAUSE_PROCEDURES[cause]
+        elif not procedure_text:
+            return ""
         return (f"【执行程序提示】针对{cause}类任务，请按以下程序执行：\n"
-                f"{self._CAUSE_PROCEDURES[cause]}")
+                f"{procedure_text}")
 
     def _skill_registry(self):
         """技能注册表（主库同目录 capability.db；无库返回 None）。"""

@@ -1,5 +1,8 @@
 # OCOS 全模块功能与接线审计报告（2026-08-30）
 
+> 📜 **HISTORICAL（2026-08-30 时点基线）**：测试基线当时为 5245 passed，当前为 7034 passed；
+> 接线/激活状态以白皮书 v1.3.1 与 CONVERGENCE_DECISION_v1.0 为准。
+
 > **方法**: ① AST 生产导入图 + 入口可达性扫描（CLI/API/REPL/daemon 四入口 BFS）；
 > ② 三个并行代理逐模块代码核实（对照扫描分类，file:line 证据）；
 > ③ 每模块测试覆盖统计（import 该包的测试文件中的 test 函数数）；

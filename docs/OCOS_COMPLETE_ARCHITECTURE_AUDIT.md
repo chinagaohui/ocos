@@ -1,5 +1,8 @@
 # OCOS Complete Independent Architecture Audit
 
+> ⚠️ **MISPLACED / HISTORICAL**：本报告的 Audit Scope 指向 `novel_writing_system` 项目（2026-07-23），
+> **与 OCOS 无关**，疑似归档错位放入本仓库。保留仅作历史参考，不得作为 OCOS 现状依据。
+
 **Audit Version**: 1.0
 **Audit Date**: 2026-07-23
 **Audit Team**: Independent Third-Party Architecture Audit Team

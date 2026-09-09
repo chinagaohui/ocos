@@ -1565,8 +1565,16 @@ class MasterAgent:
             EpisodeExampleConverter,
             RuleBasedLearner,
             build_lesson_artifact,
+            build_lesson_artifact_c,  # Phase A0+: C 类 procedure 增强版
         )
         from ocos.models.learning import LearningStrategy
+
+        # Phase A0+: Lesson 产出优先用 C 类（带 procedure），fallback 原版
+        def _build_lesson(diag, goal):
+            try:
+                return build_lesson_artifact_c(diag, goal)
+            except Exception:
+                return build_lesson_artifact(diag, goal)
 
         try:
             # 1. 重放今日 ACTIVE Episodes（与慢通路同源，幂等由 CONSOLIDATED 保证）
@@ -1607,13 +1615,12 @@ class MasterAgent:
             # 4. LESSON artifacts（失败诊断 → 统一语义）
             for diag in diagnoses[:10]:
                 try:
-                    artifact = build_lesson_artifact(
-                        diag, diag.episode_id or "unknown"
-                    )
+                    artifact = _build_lesson(diag, diag.episode_id or "unknown")
                     stats.setdefault("artifacts", []).append({
                         "id": artifact.id,
                         "type": artifact.artifact_type.value,
                         "cause": artifact.learned_rule.get("cause", ""),
+                        "procedure": artifact.learned_rule.get("procedure", ""),
                         "delta": artifact.behavioral_delta,
                     })
                 except Exception:

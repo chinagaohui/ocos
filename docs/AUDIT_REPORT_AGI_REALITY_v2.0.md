@@ -1,5 +1,11 @@
 # OCOS → AGI 二次 Reality Audit Report v2.0
 
+> 📜 **HISTORICAL（2026-09-03 时点审计）**：本报告发现的问题已于 2026-09-06~08 迭代修复
+> （recall 链激活、学习规则注入、失败诊断/重规划、USE| act→observe→answer 循环等），
+> 行为级证据见 `tests/test_behavioral_acceptance_20260908.py`（9 项单测）+
+> `tests/e2e_behavior_t7t10_20260908.py`（T7-T10 E2E 全绿）。
+> 现行路线以 BLUEPRINT_AGI_UPGRADE_v1.1 + CONVERGENCE_DECISION_v1.0 为准，请勿以本报告作为现状依据。
+
 **Audit Date**: 2026-09-03  
 **Auditor**: Independent AGI Runtime Architecture Auditor  
 **Method**: Definition → Construction → Registration → Wiring → Reachability → Activation → Production → Consumption → Persistence → Reuse  

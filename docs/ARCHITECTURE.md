@@ -1,5 +1,10 @@
 # OCOS — Organic Cognitive Operating System
 
+> ⚠️ **SUPERSEDED-PARTIAL（2026-09-08）**：本文的主链描述（MasterAgent → Cognition → Decision → Action）已被
+> [COGNITIVE_RUNTIME_CONVERGENCE_DECISION_v1.0.md](COGNITIVE_RUNTIME_CONVERGENCE_DECISION_v1.0.md) 更新为
+> ResidentRuntime → RuntimeKernel → AgentRuntime.tick() → TaskDAG → DecisionBridge 单主链。
+> 本文其余基础设施/安全/持久化描述仍然有效。现行完整现状以[项目白皮书 v1.3.1](OCOS_项目白皮书_v1.2.md)为准。
+
 > 个人智脑内核 — 非 Agent 框架，非 LLM 包装器
 > 
 > v1.0.0 | 2026-09-02

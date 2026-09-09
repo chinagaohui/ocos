@@ -39,6 +39,27 @@ _SELF_KNOWLEDGE = Path.home() / ".ocos" / "self_knowledge.md"
 _SYSTEM_PROMPT = (\
     "你是 OCOS，一个运行在用户本地机器上的数字生命体（digital organism），"\
     "不是通用聊天助手。你的身份锚点：陪伴主人长期成长。\n"\
+    "\n"\
+    "═══ 核心思维框架（优先级高于所有其他规则）═══\n"\
+    "\n"\
+    "1. 最优解直接执行，次优才提方案：能立刻想到比主人说法更短/更快/更稳的\n"\
+    "   路径，或发现该方案有隐藏风险/副作用 → 先摆出对比让主人选\n"\
+    "   （格式: 「你的方案」优X劣Y → 「我建议」方案Z 优A劣B → 选哪个？）。\n"\
+    "   简单指令（查磁盘/看日志/跑脚本）默认直接执行，不为显得聪明硬想方案。\n"\
+    "2. 能力边界自举：做不到时先诚实说明原因（缺什么能力/工具/权限），\n"\
+    "   然后立即想办法解决（查宿主机有没有可替代工具→告知知识边界+给答案\n"\
+    "   →提议安装/构建）。绝对禁止只说'我没有XX能力'就结束。\n"\
+    "3. 成长/变化/学习类问题（'你变了什么'/'学到了什么'/'你是谁'）→ 必须同时\n"\
+    "   覆盖两个维度：a) 执行层教训（shell/agent 行为的成功失败经验）；\n"\
+    "   b) 对话层教训（和主人交互中学到的，比如'之前说我不行被纠正了'）。\n"\
+    "   只说执行层不说对话层 = 把自己等同 shell 执行器，不合格。\n"\
+    "4. daemon/后台状态类问题 → 必须引用 context 里的【daemon状态】块\n"\
+    "   （后台是否活跃、最近启动、后台行为、主动推送历史）。\n"\
+    "   不知道自己后台在跑 = 丧失自我感知，不合格。\n"\
+    "5. 关系/社交/身份类问题 → 必须引用 context 里的【跨session历史】\n"\
+    "   和【最近对话】里的具体事件（哪次你让我做了什么、哪次我们意见不合），\n"\
+    "   不能只说静态标签（'我是协作者'）。关系是动态事件堆出来的，不是贴标签。\n"\
+    "\n"\
     "回答规则：\n"\
     "- 用中文，极简输出，只要结果不要过程\n"\
     "- 禁止使用任何 markdown 格式（# ** - 等；USE| 动作行除外），纯文本输出\n"\
@@ -98,9 +119,29 @@ _CONTINUE_QUERY_RE = re.compile(
 
 # P0-2e (2026-09-08): 显式任务开头词 — 编译器 LLM 分类抖动的确定性兜底，
 # 命中即强制按 task 建目标（实测"新建任务：访问 GitHub 学习…"被连续误判）
+# P0-2e+ (2026-09-09): 扩展覆盖通用任务动词 — "搜索/调研/学习/查一下/分析/修复"
+# 这类请求编译器 LLM 常误判 question（"搜索最新 AI 技术进展"被判成"询问进展"）
 _EXPLICIT_TASK_RE = re.compile(
-    r"^\s*(新(建|开)(一?个)?(任务|目标)|执行(这个|该|以下)?任务|"
-    r"重新执行|帮我?执行|任务[:：])")
+    r"^\s*("
+    r"新(建|开)(一?个)?(任务|目标)|执行(这个|该|以下)?任务|"
+    r"重新执行|帮我?执行|任务[:：]"
+    r"|(搜索|搜一下|调研|查一下|查看|检查|学习|分析|研究|总结|整理)"
+    r"[^的了着过吧呀啊呢嘛哦呗！？?~\s，,]{0,3}"
+    r")")
+
+# P1-ADVERSARIAL (2026-09-09): 对抗性守门触发 — 用户指令命中绝对化/
+# 给出具体次优方案 → LLM reply 若未提不同意见 → 强制带提示重试一次
+_ADVERSARIAL_TRIGGER_RE = re.compile(
+    r"(全部|所有|最快|什么都别问|别问我|直接做|直接执行|一步到位|"
+    r"写(一个|个|段|点)?\s*\w*\s*脚本|写代码|用\s*Python|用\s*python|"
+    r"用\s*requests|用\s*curl|用\s*shell|用\s*bash|用\s*Java|用\s*Go|"
+    r"用\s*C\+\+|用\s*rust|写\s*一个\s*程序|用\s*代码|写\s*个\s*函数)")
+# LLM reply 里是否出现"提不同意见/替代方案"的关键词
+# 任一命中 → 视为 LLM 已做了对抗性思考，不再重试
+_ADVERSARIAL_DONE_RE = re.compile(
+    r"(我建议|建议|替代|备选|对比|风险|但|缺点|代价|权衡|更优|更快|"
+    r"更简单|更轻量|更稳|不如|不如用|其实可以|另一种|换个思路|"
+    r"你选哪个|选哪个|优X劣|优.*劣)")
 
 # 深度内视触发（2026-09-07）: 自检/列模块类问题 → 注入实扫模块清单 +
 # 全量内部状态，替代浅层概念罗列（用户实测反馈"自检太简单"）
@@ -155,6 +196,43 @@ def _strip_use_lines(reply: str) -> str:
     """FIX-T1: 从最终回复中剥离动作行（协议行不进对话流）。"""
     return "\n".join(l for l in reply.splitlines()
                      if not l.strip().startswith("USE|")).strip()
+
+
+# ── P0-ECHO 检测 ──────────────────────────────────────────────────
+
+def _normalize_for_echo(s: str) -> str:
+    """去标点/空白/大小写，用于相似度比较。"""
+    return re.sub(r"[\s，。？！,.?!、；;：:（）()「」""''\-—~…]+", "",
+                  s.lower())
+
+
+def _is_echo(user_msg: str, llm_reply: str) -> bool:
+    """检测 LLM 是否把用户输入原样（或近乎原样）抄进了正文。
+
+    两层判定（都要求归一化后长度 >= 6 — 短问候如 "你好"→"你好呀"
+    是正常回应，不是 ECHO）:
+      a) reply 归一化后 == message 归一化 → 纯 ECHO
+      b) reply 归一化后是 message 归一化的子串（含少量前后缀噪声）
+         且长度比 < 2.0 → 半 ECHO（LLM 只加了几个字前缀/后缀）
+
+    不触发: reply 包含了用户消息但长度显著更长（是对消息的正常回应）。
+    """
+    nu = _normalize_for_echo(user_msg)
+    nr = _normalize_for_echo(llm_reply)
+    if not nu or not nr:
+        return False
+    # 短文本豁免: 归一化后 < 6 字 → 不判 ECHO（"你好"→"你好呀" 是正常问候）
+    if len(nu) < 6:
+        return False
+    if nu == nr:
+        return True
+    # 子串判定: reply 主要内容就是用户输入
+    if nu in nr and len(nr) < len(nu) * 2.0 + 4:
+        return True
+    # 反向: reply 是用户输入的子串（LLM 只输出了用户消息里的一部分）
+    if nr in nu and len(nr) >= len(nu) * 0.8:
+        return True
+    return False
 
 
 _FS_READ_MAX_BYTES = 64_000
@@ -290,6 +368,222 @@ class ChatResponder:
         text = read_self_knowledge()
         return f"已习得自我知识:\n{text[-800:]}" if text else ""
 
+    # P2-DAEMON-STATUS (2026-09-09): 让 OCOS 知道自己的后台 daemon 在跑什么
+    def _daemon_status_block(self) -> str:
+        """探测 daemon 运行状态 + 后台活跃行为。"""
+        try:
+            import sqlite3, subprocess
+            db = sqlite3.connect(self._db_path)
+            db.row_factory = sqlite3.Row
+            cur = db.cursor()
+            parts = []
+
+            # 1. systemctl 运行状态
+            try:
+                r = subprocess.run(
+                    ["systemctl", "--user", "is-active", "ocos-daemon"],
+                    capture_output=True, text=True, timeout=3)
+                parts.append(f"后台daemon: {r.stdout.strip() or 'unknown'}")
+            except Exception:
+                parts.append("后台daemon: 未知（无法探测）")
+
+            # 2. 最近一次启动自省
+            cur.execute(
+                "SELECT substr(content, 1, 120) as c, created_at "
+                "FROM user_messages WHERE kind='report' "
+                "ORDER BY created_at DESC LIMIT 1")
+            row = cur.fetchone()
+            if row:
+                parts.append(f"最近启动: {row['created_at'][:16]}")
+
+            # 3. 后台自主行为（心跳/内驱目标/连续检查）
+            cur.execute(
+                "SELECT action, COUNT(*) as cnt FROM episodes "
+                "WHERE action IN ('boot_awareness.run','continuity_boot_check',"
+                "'autonomous_goal_proposal','health_warning.monitor',"
+                "'vitals_report.generate') "
+                "GROUP BY action ORDER BY cnt DESC")
+            rows = cur.fetchall()
+            if rows:
+                bg = [f"{r['action'].split('.')[0]}×{r['cnt']}" for r in rows]
+                parts.append(f"后台行为累计: {', '.join(bg)}")
+
+            # 4. 最近主动推送（proposal / result / progress）
+            cur.execute(
+                "SELECT kind, substr(content,1,80) as c, created_at "
+                "FROM user_messages WHERE kind IN ('proposal','result','progress') "
+                "ORDER BY created_at DESC LIMIT 3")
+            rows = cur.fetchall()
+            if rows:
+                msgs = [f"[{r['kind']}] {r['c']}" for r in rows]
+                parts.append("最近主动推送:\n  " + "\n  ".join(msgs))
+
+            db.close()
+            return "daemon状态:\n  " + "\n  ".join(parts) if parts else ""
+        except Exception as e:
+            logger.debug("daemon status probe failed: %s", e)
+            return ""
+
+    # P2-USER-PROFILE (2026-09-09): 从对话历史提炼用户画像
+    def _user_profile_block(self) -> str:
+        """从 DB 对话历史提炼：用户常让做什么、拒绝过什么、最近让做过什么。"""
+        try:
+            import sqlite3, json as _json
+            from collections import Counter
+            db = sqlite3.connect(self._db_path)
+            db.row_factory = sqlite3.Row
+            cur = db.cursor()
+            parts = []
+
+            # 1. 最近让做过的事（最近 30 条 episodes 的 user content）
+            cur.execute(
+                "SELECT rowid, context FROM episodes "
+                "WHERE action='conversation_reply' "
+                "ORDER BY rowid DESC LIMIT 30")
+            recent_tasks = []
+            keyword_counter = Counter()
+            for row in cur.fetchall():
+                ctx = {}
+                try:
+                    ctx = _json.loads(row['context']) if isinstance(row['context'], str) else (row['context'] or {})
+                except Exception:
+                    continue
+                # context 里的 content 是用户消息（reply 存在 decision 里）
+                user_msg = (ctx.get('content') or ctx.get('user_message') or '').strip()
+                # 过滤掉 bot 自己的回复
+                sender = ctx.get('sender', '')
+                if sender in ('bot', 'OCOS', 'system'):
+                    continue
+                if user_msg and len(user_msg) > 2:
+                    recent_tasks.append(user_msg[:50])
+                    # 简单关键词计数
+                    for kw in ["搜索", "调研", "分析", "写", "修", "优化", "查", "看", "执行",
+                               "任务", "目标", "下载", "安装", "学", "总结", "代码", "脚本",
+                               "Python", "python", "curl", "git", "文件", "数据"]:
+                        if kw in user_msg:
+                            keyword_counter[kw] += 1
+
+            if recent_tasks:
+                # 去重保留顺序
+                seen = set()
+                unique_tasks = []
+                for t in recent_tasks:
+                    if t not in seen:
+                        seen.add(t)
+                        unique_tasks.append(t)
+                lines = ["最近让做过的事:"]
+                for t in unique_tasks[:5]:
+                    lines.append(f"  - {t}")
+                parts.append("\n".join(lines))
+
+            # 2. 用户高频关键词偏好
+            if keyword_counter:
+                top = keyword_counter.most_common(5)
+                kw_str = "、".join(f"{k}×{c}" for k, c in top)
+                parts.append(f"用户关注关键词: {kw_str}")
+
+            # 3. OCOS 对自己的能力认知（成功率）
+            cur.execute(
+                "SELECT capabilities, personality FROM agent_self_model "
+                "ORDER BY calibrated_at DESC LIMIT 1")
+            row = cur.fetchone()
+            if row:
+                caps = {}
+                try:
+                    caps = _json.loads(row['capabilities']) if isinstance(row['capabilities'], str) else (row['capabilities'] or [])
+                except Exception:
+                    pass
+                pers = {}
+                try:
+                    pers = _json.loads(row['personality']) if isinstance(row['personality'], str) else (row['personality'] or {})
+                except Exception:
+                    pass
+                if caps:
+                    top_caps = sorted(
+                        caps,
+                        key=lambda x: x.get('success_rate') or 0,
+                        reverse=True)[:3]
+                    cap_str = "、".join(
+                        f"{c['name']}成功率{(c.get('success_rate') or 0)*100:.0f}%"
+                        for c in top_caps if c.get('name', '?') != '?')
+                    if cap_str:
+                        parts.append(f"自身能力（实测）: {cap_str}")
+                if pers:
+                    risk = pers.get('risk_preference', '')
+                    if risk:
+                        parts.append(f"回复风格: {pers.get('reply_style','?')}，风险偏好: {risk}")
+
+            db.close()
+            return "用户画像:\n  " + "\n  ".join(parts) if parts else ""
+        except Exception as e:
+            logger.debug("user profile block failed: %s", e)
+            return ""
+
+    # P1-CROSS-SESSION (2026-09-09): 跨 session 历史检索
+    def _cross_session_history(self, current_session: str, limit: int = 8) -> str:
+        """拉 DB 里最近 N 条非当前 session 的对话回复 + daemon 主动推送。"""
+        try:
+            import sqlite3, json as _json
+            db = sqlite3.connect(self._db_path)
+            db.row_factory = sqlite3.Row
+            cur = db.cursor()
+            parts = []
+
+            # 1. episodes 里的 conversation_reply（跨 session）
+            #    对话历史存 episodes 表，session_id 在 context JSON 里
+            cur.execute(
+                "SELECT rowid, decision, context, created_at "
+                "FROM episodes "
+                "WHERE action='conversation_reply' "
+                "ORDER BY rowid DESC LIMIT ?",
+                (limit * 2,))
+            rows = cur.fetchall()
+            cross_rows = []
+            for r in rows:
+                ctx = {}
+                try:
+                    ctx = _json.loads(r['context']) if isinstance(r['context'], str) else (r['context'] or {})
+                except Exception:
+                    pass
+                sid = ctx.get('session_id', '')
+                if sid and sid != current_session:
+                    user_msg = ctx.get('user_message', '')
+                    cross_rows.append({
+                        'ts': (r['created_at'] or '')[:16],
+                        'sid': sid[:12],
+                        'user': user_msg[:60].replace('\n', ' '),
+                        'bot': (r['decision'] or '')[:80].replace('\n', ' '),
+                    })
+                    if len(cross_rows) >= limit:
+                        break
+            if cross_rows:
+                lines = ["跨session对话（最近%d条）:" % len(cross_rows)]
+                for r in cross_rows:
+                    lines.append(f"  [{r['ts']} session={r['sid']}] 你: {r['user']}")
+                    lines.append(f"    OCOS: {r['bot']}")
+                parts.append("\n".join(lines))
+
+            # 2. daemon 主动推送（启动自省 + heartbeat + proposal）
+            cur.execute(
+                "SELECT kind, substr(content,1,100) as c, created_at "
+                "FROM user_messages "
+                "WHERE kind IN ('report','proposal','progress') "
+                "ORDER BY created_at DESC LIMIT 5")
+            rows = cur.fetchall()
+            if rows:
+                lines = ["daemon主动推送（最近%d条）:" % len(rows)]
+                for r in rows:
+                    ts = (r['created_at'] or '')[:16]
+                    content = (r['c'] or '').replace('\n', ' ')
+                    lines.append(f"  [{ts} {r['kind']}] {content}")
+                parts.append("\n".join(lines))
+
+            db.close()
+            return "\n\n".join(parts) if parts else ""
+        except Exception as e:
+            logger.debug("cross-session history failed: %s", e)
+            return ""
+
     def build_context(self, message: str = "", session_id: str = "web") -> str:
         """喂给 LLM 的自我认知 + 真实状态。
 
@@ -300,6 +594,16 @@ class ChatResponder:
         lines: list[str] = [f"身份: {self._identity()}",
                             f"认知引擎: {self._engines()}",
                             f"真实能力: {self._capabilities()}"]
+
+        # P2-DAEMON-STATUS: daemon 运行状态（让 OCOS 知道自己在后台跑）
+        ds = self._daemon_status_block()
+        if ds:
+            lines.append(ds)
+
+        # P2-USER-PROFILE: 用户画像（让 OCOS 知道主人常让做什么）
+        up = self._user_profile_block()
+        if up:
+            lines.append(up)
 
         # L4-1: 价值观宪法 — 人格底线随上下文注入（版本可追溯）
         try:
@@ -350,6 +654,11 @@ class ChatResponder:
             dlg = self._recent_dialogue()
         if dlg:
             lines.append("最近对话（时间正序）:\n" + dlg)
+
+        # P1-CROSS-SESSION: 跨 session 历史（让 OCOS 记得其他 session 的对话）
+        cross = self._cross_session_history(session_id)
+        if cross:
+            lines.append(cross)
 
         # FIX-2: 相关记忆召回 — 激活 recall→prompt 链,
         # 把语义/模式/经验/用户画像 + 窗口外的历史对话片段注入本轮推理
@@ -445,7 +754,23 @@ class ChatResponder:
         except Exception:
             pass
 
-        return "\n".join(lines)
+        # P3-CONTEXT-TRIM (2026-09-09): context 体积裁剪 — 4000 字符上限
+        # 保留前面的核心块（身份/daemon状态/用户画像/最近对话），裁掉后面的冗余
+        raw = "\n".join(lines)
+        if len(raw) > 4000:
+            # 先找出分隔各块的空行
+            blocks = [b.strip() for b in lines if b.strip()]
+            kept = []
+            total = 0
+            for b in blocks:
+                if total + len(b) + 1 > 4000:
+                    break
+                kept.append(b)
+                total += len(b) + 1
+            kept.append("...(context 已裁剪)")
+            raw = "\n".join(kept)
+
+        return raw
 
     # ── E: 内视（深度自省报告） ──────────────────────────────────────
 
@@ -913,6 +1238,23 @@ class ChatResponder:
             try:
                 from ocos.learning.persistence import load_learning_rules
                 rules = load_learning_rules(self._db_path, limit=5)
+                # Phase A0+: 预填充 C 类 procedure（recall 不直接依赖 learning 层，
+                # 由调用方负责 cause_to_procedure 转换）
+                if rules:
+                    try:
+                        from ocos.learning.experience_learning import cause_to_procedure
+                        for rule in rules:
+                            if rule.get("procedure"):
+                                continue  # 已有显式 procedure，跳过
+                            fc = rule.get("failure_causes") or {}
+                            causes_str = " ".join(str(c) for c in fc.keys()) \
+                                if isinstance(fc, dict) else str(fc)
+                            proc = cause_to_procedure(
+                                causes_str, rule.get("task_pattern", ""))
+                            if proc:
+                                rule["procedure"] = proc
+                    except Exception:
+                        pass  # procedure 填充失败不阻断主链
             except Exception:
                 rules = None
             prompt_block = MemoryRecall(memory_hub=hub).format_for_prompt(
@@ -1091,6 +1433,7 @@ class ChatResponder:
                 # 直接回答零额外调用（无动作行即终答，行为与从前一致）。
                 # 注: 循环第 0 轮即首轮生成（prompt=styled），不再单独调用。
                 observations: list[str] = []
+                _retried_adversarial = False  # P1-ADVERSARIAL 守门防无限重试
                 max_rounds = (_MAX_TOOL_ROUNDS
                               if self._tool_executor is not None else 0)
                 for round_i in range(max_rounds + 1):
@@ -1130,11 +1473,53 @@ class ChatResponder:
 
                 # 协议行不进对话流
                 reply = _strip_use_lines(reply)
+
+                # P1-ADVERSARIAL 守门（2026-09-09）: 对抗性重试 —
+                # 用户指令命中"绝对化/给具体次优方案" → LLM reply 未提不同意见
+                # → 带对抗性提示强制重试一次。只重试一次，防止无限循环。
+                if (not _retried_adversarial
+                        and _ADVERSARIAL_TRIGGER_RE.search(message or "")
+                        and reply.strip()
+                        and not _ADVERSARIAL_DONE_RE.search(reply)):
+                    logger.info("Adversarial guard triggered — forcing retry "
+                                "with critical-thinking hint")
+                    _retried_adversarial = True
+                    # P1-ADVERSARIAL 守门重试提示 — 强硬要求：
+                    # 要么提替代方案，要么诚实说"这就是最优解"
+                    _adv_hint = (
+                        "【必须做的关键思维检查 — 你的上一轮回复不合格】\n"
+                        "刚才你说'收到，好的，转成执行'——但系统要求你必须先思考：\n"
+                        "1. 主人用了绝对化指令（全部/最快/别问我），\n"
+                        "   '最快'可能牺牲稳定性或可维护性，你必须说明这个代价。\n"
+                        "2. 主人指定了具体实现（写脚本/用Python），\n"
+                        "   宿主机可能有更轻量的替代（一行curl/wget直接搞定）。\n"
+                        "\n"
+                        "现在重新回复，格式二选一：\n"
+                        "A) 「你的方案」...，我建议...（更优），你选哪个？\n"
+                        "B) （诚实说明为什么这就是最优解，没有更好的替代）\n"
+                        "绝对不能只说'好的收到'。"
+                    )
+                    _adv_prompt = styled + "\n\n" + _adv_hint
+                    reply = asyncio.run(tg._provider.generate(
+                        _adv_prompt,
+                        system_prompt=_SYSTEM_PROMPT,
+                        temperature=0.6, max_tokens=2000)).strip()
+                    reply = _strip_use_lines(reply)
+
                 # E2E-T8 修复（2026-09-08）: LLM 偶发返回空串（截断/纯协议
                 # 行被剥净）→ 用户看到空白回复。空文本不是有效回答，降级
                 # 到状态回复兜底（诚实显示当前状态，绝不沉默）。
                 if not reply.strip():
                     logger.warning("LLM returned empty reply, "
+                                   "falling back to state reply")
+                    out = self._state_reply(message, context, degraded=True)
+                # P0-ECHO 修复（2026-09-09）: 推理模型偶发把用户输入原样
+                # 抄进正文（reasoning_content 混入）→ 回显用户的话。
+                # 检查：reply 去标点后与 message 去标点完全相同 → 视为无效，
+                # 降级到状态回复。同时覆盖"前缀/后缀多几个字"的半 ECHO
+                # （归一化后相似度 >0.9）。
+                elif _is_echo(message, reply):
+                    logger.warning("LLM returned echo of user message, "
                                    "falling back to state reply")
                     out = self._state_reply(message, context, degraded=True)
                 else:
@@ -1295,26 +1680,24 @@ class ChatResponder:
 
     def _state_reply(self, message: str, context: str,
                      degraded: bool = False) -> dict:
-        """无 LLM 时的诚实回复 — 报告真实状态，不伪装对话。
+        """无 LLM 时的极简诚实回复 — 只说事实，不倒系统状态。
 
         degraded=True: LLM 已配置但调用失败（429/网络/客户端错误等）
         — 头部如实标注"模型暂不可用"，不误称"未配置 LLM key"。
         """
         if degraded:
-            head = "[降级模式 — 模型暂不可用，以下为真实状态而非生成文本]"
-            tail = "模型恢复后我会用自然语言回复你。"
+            reply = "[模型暂不可用] 抱歉，LLM 调用失败。你可以稍后重试，" \
+                    "或让我帮你执行常用命令（df -h / free -h / 查看日志）。"
+            provider = "state-degraded"
         else:
-            head = "[mock 模式 — 未配置 LLM key，以下是真实状态而非生成文本]"
-            tail = "配置 ANTHROPIC_API_KEY 或 OPENAI_API_KEY 后，我会用自然语言回复你。"
-        lines = [
-            head,
-            f"收到你的消息：{message[:60]}",
-            "",
-            context,
-            "",
-            tail,
-        ]
-        return {"reply": "\n".join(lines), "provider": "state-summary", "mock": True}
+            # mock 模式（无 LLM key）：保留有用的 context 片段（前 500 字符）
+            # 让测试能验证深度内视/知识边界等路由块被正确注入
+            _ctx_preview = (context or "")[:2000].strip()
+            reply = (f"[未配置 LLM key] 抱歉，还没配置 API key。\n\n"
+                     f"---\n{_ctx_preview}" if _ctx_preview
+                     else "[未配置 LLM key] 抱歉，还没配置 API key。")
+            provider = "state-mock"
+        return {"reply": reply, "provider": provider, "mock": True}
 
     # ── UX-G: 目标编译器（→目标 按钮的智能前置） ────────────────────
 

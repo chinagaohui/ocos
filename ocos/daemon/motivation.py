@@ -154,6 +154,15 @@ class MotivationHub:
                 break                          # 排序后后面的只会更低
             if c.novelty <= 0 or self._is_duplicate(c):
                 continue                       # 与近期提案/在途重复
+            # PHASE-LIFE: 熔断 — 同一个 goal 描述在最近 7 天内
+            # 连续失败 ≥ 3 次 → 停止 propose，写熔断 episode
+            if self._is_goal_fused(c.description):
+                logger.info(
+                    "MotivationHub: goal fused (consecutive failures ≥3): %s",
+                    c.description[:80],
+                )
+                self._record_fuse_episode(c.description)
+                continue
             self._propose(c, level, stats)
         return stats
 
@@ -276,13 +285,38 @@ class MotivationHub:
         return out
 
     def _from_self_exploration(self) -> list[GoalCandidate]:
-        """自我探查（好奇心·第二源）— 从未在经历中出现过的自身模块。
+        """自我探查（好奇心·第二源）。
 
-        数字生命的好奇心不止对信念边界，也包括对自身未知疆域：pkgutil
-        实扫 ocos 子包清单，对照 episodes 全文提及，从未被触及的模块
-        → 只读梳理候选（读源码/接口，产出结构化摘要，无写操作）。
-        轮换取样按日序推进（无随机数），单次 scan 至多 1 条。
+        PHASE-LIFE Phase 1: 先用 EpistemicDrive.suggest() 找"我最不确定的领域"
+        → 真正的好奇心（Nemori Predict-Calibrate Principle）。
+        没有数据时 fallback 到"从未被触及的模块"硬编码。
         """
+        # Step 1: EpistemicDrive（真正的好奇心）
+        try:
+            from ocos.reasoning.curiosity import PredictionGapTracker, EpistemicDrive
+
+            # 每次新建 tracker（进程内内存累积 + DB 持久化）
+            tracker = PredictionGapTracker(db_path=self._db_path)
+            drive = EpistemicDrive(tracker=tracker, db_path=self._db_path, top_n=1)
+            uncertainties = drive.suggest()
+            if uncertainties:
+                top = uncertainties[0]
+                return [GoalCandidate(
+                    kind="PROBE",
+                    description=top.suggested_goal,
+                    domain="research",
+                    value=0.7 + top.uncertainty_score,
+                    novelty=min(1.0, 0.5 + top.uncertainty_score),
+                    feasibility=0.7,
+                    evidence=(
+                        f"epistemic drive: mean_gap={top.mean_gap:.2f} "
+                        f"n={top.sample_count} uncertainty={top.uncertainty_score:.2f}"
+                    ),
+                )]
+        except Exception as e:
+            logger.debug("EpistemicDrive unavailable, falling back to module inventory: %s", e)
+
+        # Step 2: Fallback — 从未被触及的模块（原有逻辑保留）
         try:
             import pkgutil
             import ocos as _pkg
@@ -292,7 +326,6 @@ class MotivationHub:
             return []
         if not names:
             return []
-        # 按年积日轮换窗口，覆盖全部模块而非每次同头部
         offset = datetime.now(timezone.utc).timetuple().tm_yday % len(names)
         window = [names[(offset + i) % len(names)] for i in range(min(8, len(names)))]
         unexplored: list[str] = []
@@ -317,9 +350,9 @@ class MotivationHub:
                              f"——只读梳理其职责、接口与被设计意图，"
                              f"产出一段结构化摘要沉淀为知识"),
                 domain="research",
-                value=0.6,                     # 未知疆域信息增益高
+                value=0.6,
                 novelty=1.0,
-                feasibility=0.95,              # 读自身源码天然可行
+                feasibility=0.95,
                 evidence=f"pkgutil inventory: ocos.{name} 无 episode 提及",
             )]
         return []
@@ -725,6 +758,76 @@ class MotivationHub:
             except Exception:
                 pass
         return False
+
+    def _is_goal_fused(self, description: str, threshold: int = 3) -> bool:
+        """PHASE-LIFE 熔断: 同一个 goal 描述在近 7 天内连续失败 ≥ threshold 次。
+
+        查询 goal_result episodes（source='goal_result'）的 outcome.success
+        真值；匹配 goal 字段包含 description 前 30 字的结果。
+
+        Returns:
+            True = 熔断（连续失败 ≥ threshold）
+        """
+        key = (description or "")[:30]
+        since = (datetime.now(timezone.utc)
+                 - timedelta(days=LOOKBACK_DAYS)).isoformat()
+        try:
+            conn = _open_ro(self._db_path)
+            try:
+                rows = conn.execute(
+                    "SELECT outcome FROM episodes "
+                    "WHERE source='goal_result' AND goal LIKE ? "
+                    "AND created_at >= ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (f"%{key}%", since, threshold + 2),
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return False
+
+        if len(rows) < threshold:
+            return False
+
+        consec_fail = 0
+        for (outcome_blob,) in rows:
+            try:
+                oc = json.loads(outcome_blob) if outcome_blob else {}
+            except Exception:
+                oc = {}
+            ok = oc.get("success", True)
+            if ok is False or ok == 0:
+                consec_fail += 1
+                if consec_fail >= threshold:
+                    return True
+            else:
+                break  # 成功打断连续
+
+        return False
+
+    def _record_fuse_episode(self, description: str) -> None:
+        """写熔断 episode — 防止同一 goal 再次 propose。"""
+        try:
+            from ocos.memory.episode.store import EpisodeStore
+            from ocos.memory.episode.models import Episode
+            store = EpisodeStore(db_path=self._db_path)
+            store.initialize()
+            ep = Episode(
+                id=f"EP-FUSE-{uuid.uuid4().hex[:10]}",
+                experience_id=f"FUSE-{uuid.uuid4().hex[:8]}",
+                source="lesson",
+                action="goal_fuse",
+                decision=(
+                    f"【熔断机制】goal={description[:80]} "
+                    f"连续失败 ≥3 次，暂停 propose"
+                ),
+                goal=description[:100],
+                outcome={"success": True, "action": "fused", "reason": "consecutive_failures"},
+                tags=["goal_fuse", "self_preservation"],
+            )
+            store.save(ep)
+        except Exception as e:
+            logger.debug("fuse episode record skipped: %s", e)
 
     def _domain_success_rate(self) -> float:
         """近 7 天 goal_result 平均成功率（OPPORTUNITY_COST 语义：可行

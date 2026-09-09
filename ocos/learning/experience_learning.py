@@ -489,6 +489,12 @@ def check_behavioral_delta(
     """ER-2: Behavioral Delta 描述 — 学习产物对未来行为的预期改变。"""
     if artifact.artifact_type == ArtifactType.LESSON:
         cause = artifact.learned_rule.get("cause", "unknown")
+        procedure = artifact.learned_rule.get("procedure", "")
+        if procedure:
+            return (
+                f"future tasks matching '{artifact.applicable_context[:40]}...' "
+                f"should follow procedure for cause={cause}: {procedure[:50]}"
+            )
         return (
             f"future tasks matching '{artifact.applicable_context[:40]}...' "
             f"should avoid cause={cause}"
@@ -501,9 +507,187 @@ def check_behavioral_delta(
     return "no behavioral change expected"
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase A0+: CauseToProcedure — cause → C 类 Executable Procedure 映射层
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# 设计原则（AdvisorTool 2026-09-09 评审通过）:
+#   输入签名 = (FailureCause, goal_pattern: str) — 仅 cause 粒度太粗，
+#   会退化为万能废话。必须结合 goal_pattern 中的关键词选择具体 procedure。
+#
+#   每条 procedure 模板 = C 类五要素:
+#     【<任务域>程序】先 <正向步骤>；每批 <批量上限>；<等待/观察条件>。
+#     禁止 <失败签名>。成功=<可验证条件>。
+#
+#   A0 阶段先实现 timeout 一个 cause + 2 个子场景（批量/通用），
+#   验证映射可行后再扩展其他 cause。
+
+# timeout 子场景关键词 → procedure 模板（gold standard 手写，来自 ER-2 实验结论）
+# dict 遍历顺序 = 匹配优先级（Python 3.7+ 保证插入序），更具体的模板放前面
+_TIMEOUT_PROCEDURE_MAP: list[tuple[tuple[str, ...], str]] = [
+    # 多文件展示场景（ER-2 C 类实验原版 — 具体，优先匹配）
+    (("文件", "files", "ls", "目录", "folder", "read them"), (
+        "【多文件展示程序】先 ls 列出文件清单；每批只读 2 个文件；"
+        "等观察结果再读下一批。禁止 cat 多个文件。成功=多轮读取"
+    )),
+    # 批量操作场景（泛化，后匹配）
+    (("批量", "batch", "多个", "全部", "批量图片", "批量转码"), (
+        "【批量操作程序】先清点任务总量；每批执行≤3个；"
+        "等每批完成再继续。禁止一次性执行全部。成功=分批完成无超时"
+    )),
+]
+
+# timeout 通用退化模板（无关键词命中时使用）
+_TIMEOUT_GENERIC_PROCEDURE = (
+    "【超时规避程序】先检查当前操作规模；分批执行；"
+    "等每批完成。禁止单次执行过多。成功=不超时"
+)
+
+# execution_error 子场景关键词 → procedure 模板（PHASE-LIFE 新增）
+_EXECUTION_ERROR_PROCEDURE_MAP: list[tuple[tuple[str, ...], str]] = [
+    # 模块/函数不存在 → 探查类失败
+    (("模块", "module", "从未", "从未被触及", "not found", "undefined",
+      "不存在", "undefined reference"), (
+        "【模块探查程序】先检查模块是否存在（import 测试）；分批探查函数签名；"
+        "等每个探查返回后再继续下一批。禁止一次性探查所有模块。"
+        "成功=找到可调用入口或确认模块不存在"
+    )),
+    # 命令/脚本执行失败
+    (("命令", "command", "shell", "脚本", "script", "exit",
+      "returncode", "non-zero", "command not found"), (
+        "【命令执行程序】先 dry-run 预览命令；分批执行短命令；"
+        "等每批成功再继续。禁止直接一次性执行所有命令。"
+        "成功=命令退出码为 0"
+    )),
+    # 文件/路径问题
+    (("文件", "file not found", "路径", "path", "permission denied",
+      "is a directory", "no such file"), (
+        "【文件操作程序】先检查文件/路径是否存在；分批读写；"
+        "等每个操作完成。禁止假设路径存在直接操作。"
+        "成功=文件读写无报错"
+    )),
+]
+
+# execution_error 通用退化模板
+_EXECUTION_ERROR_GENERIC_PROCEDURE = (
+    "【执行稳健程序】先检查前置条件是否满足；分批执行；"
+    "每步后检查返回值。禁止跳过错误检查。成功=每步返回正常"
+)
+
+# permission_denied 子场景关键词 → procedure 模板
+_PERMISSION_PROCEDURE_MAP: list[tuple[tuple[str, ...], str]] = [
+    (("待批", "pending", "approval", "ask", "需要审批", "需要授权"), (
+        "【审批等待程序】先提交待批请求；等审批结果；"
+        "审批通过后立即执行。禁止绕过审批直接执行。"
+        "成功=审批通过并执行"
+    )),
+    (("沙盒", "sandbox", "白名单", "blocked", "拦截", "intercepted"), (
+        "【沙盒内程序】先确认操作在白名单内；"
+        "使用沙盒允许的工具重写方案。禁止尝试沙盒外操作。"
+        "成功=操作在沙盒内完成"
+    )),
+]
+
+_PERMISSION_GENERIC_PROCEDURE = (
+    "【权限合规程序】先检查权限/沙盒限制；使用允许的工具重写方案；"
+    "必要时提交审批。禁止绕过权限检查。成功=操作合规完成"
+)
+
+
+def cause_to_procedure(
+    cause: FailureCause | str, goal_pattern: str
+) -> str:
+    """(cause, goal_pattern) → C 类 Executable Procedure 模板字符串。
+
+    PHASE-LIFE 扩展: 覆盖 TIMEOUT + EXECUTION_ERROR + PERMISSION_DENIED。
+    各 cause 支持子场景关键词匹配 + 通用退化模板。
+
+    Args:
+        cause: FailureCause 枚举值或其字符串值
+        goal_pattern: 任务描述（用于关键词匹配子场景）
+
+    Returns:
+        C 类五要素模板字符串；未匹配时返回空串""。
+    """
+    cause_val = cause.value if isinstance(cause, FailureCause) else str(cause)
+    gp_lower = (goal_pattern or "").lower()
+
+    if cause_val == FailureCause.TIMEOUT.value:
+        for keywords, template in _TIMEOUT_PROCEDURE_MAP:
+            for kw in keywords:
+                if kw.lower() in gp_lower:
+                    return template
+        return _TIMEOUT_GENERIC_PROCEDURE
+
+    if cause_val == FailureCause.EXECUTION_ERROR.value:
+        for keywords, template in _EXECUTION_ERROR_PROCEDURE_MAP:
+            for kw in keywords:
+                if kw.lower() in gp_lower:
+                    return template
+        return _EXECUTION_ERROR_GENERIC_PROCEDURE
+
+    if cause_val == FailureCause.PERMISSION_DENIED.value:
+        for keywords, template in _PERMISSION_PROCEDURE_MAP:
+            for kw in keywords:
+                if kw.lower() in gp_lower:
+                    return template
+        return _PERMISSION_GENERIC_PROCEDURE
+
+    # AMBIGUOUS / TOOL_UNAVAILABLE / LLM_CONVERSION / UNKNOWN → 暂时无模板
+    return ""
+
+
+def build_lesson_artifact_c(
+    diagnosis: FailureDiagnosis,
+    goal: str,
+    rule: dict[str, Any] | None = None,
+) -> LearningArtifact:
+    """build_lesson_artifact 的 C 类增强版 — learned_rule 同时存 C 类 procedure。
+
+    与 build_lesson_artifact() 并行存在，保证 A/B 测试可回退。
+    learned_rule 结构扩展:
+        旧字段（保持不变）: cause, goal_pattern, avoid, success_rate, fail_count
+        新增字段: procedure (C 类模板字符串)
+    """
+    # 先复用原版逻辑
+    artifact = build_lesson_artifact(diagnosis, goal, rule)
+
+    # 追加 C 类 procedure
+    procedure = cause_to_procedure(diagnosis.cause, goal)
+    if procedure:
+        new_rule = dict(artifact.learned_rule)
+        new_rule["procedure"] = procedure
+        # 用带 procedure 的 behavioral_delta 重建 artifact
+        return LearningArtifact(
+            id=artifact.id,
+            artifact_type=artifact.artifact_type,
+            hypothesis=artifact.hypothesis,
+            confidence=artifact.confidence,
+            status=artifact.status,
+            source_episodes=artifact.source_episodes,
+            applicable_context=artifact.applicable_context,
+            learned_rule=new_rule,
+            behavioral_delta=check_behavioral_delta(
+                LearningArtifact(
+                    id=artifact.id,
+                    artifact_type=artifact.artifact_type,
+                    hypothesis=artifact.hypothesis,
+                    confidence=artifact.confidence,
+                    learned_rule=new_rule,
+                ),
+                rule,
+            ),
+            approval_required=artifact.approval_required,
+            approval_id=artifact.approval_id,
+            created_at=artifact.created_at,
+        )
+    return artifact
+
+
 __all__ = [
     "FailureCause", "FailureDiagnosis", "FailureDiagnoser",
     "EpisodeExampleConverter", "RuleBasedLearner",
     "ArtifactType", "ArtifactStatus", "LearningArtifact",
-    "build_lesson_artifact", "check_behavioral_delta",
+    "build_lesson_artifact", "build_lesson_artifact_c",
+    "check_behavioral_delta", "cause_to_procedure",
 ]

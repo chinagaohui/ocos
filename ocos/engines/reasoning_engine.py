@@ -301,17 +301,86 @@ class ReasoningEngine:
         operation: InferenceOperation,
         premises: dict[str, Any] | None,
     ) -> tuple[str, list[str], bool]:
-        """真分支优先；任何依赖缺失/异常 → 确定性降级。
+        """符号推理优先 → LLM 推理 → 确定性降级。
 
-        Returns:
-            (conclusion, evidence_episode_ids, degraded)
+        PHASE-LIFE: 先跑 SymbolicReasoner（零 LLM），confidence 够高时
+        直接用其结论、**跳过 LLM 调用**。不够时把 symbolic prediction
+        作为 prior 上下文注入 LLM prompt。
         """
+        # Step 1: SymbolicReasoner（零 LLM）
+        sym_prior = self._symbolic_predict(operation, premises)
+        if sym_prior and sym_prior.verdict == "symbolic_skip_llm":
+            # OCOS 自己想清楚了 → 跳过 LLM
+            conclusion = self._format_symbolic_conclusion(sym_prior)
+            logger.info(
+                "PHASE-LIFE: symbolic-only reasoning "
+                "(conf=%.2f succ=%.2f, source_count=%d)",
+                sym_prior.confidence, sym_prior.expected_success,
+                sym_prior.source_count,
+            )
+            return (conclusion, [], False)
+
+        # Step 2: LLM（可能注入 symbolic prior）
         try:
+            if sym_prior:
+                # 把 symbolic prediction 作为 prior 上下文传给 _real_reason
+                enhanced_premises = dict(premises or {})
+                enhanced_premises["_symbolic_prior"] = sym_prior.to_dict()
+                return self._real_reason(operation, enhanced_premises)
             return self._real_reason(operation, premises)
         except Exception as e:
             logger.warning("real reasoning unavailable, degraded: %s", e)
             conclusion = self._fallback_reason(operation, premises)
             return (conclusion, [], True)
+
+    # ── PHASE-LIFE: SymbolicReasoner 接入 ─────────────────────────────────
+
+    def _symbolic_predict(
+        self,
+        operation: InferenceOperation,
+        premises: dict[str, Any] | None,
+    ):
+        """懒加载 SymbolicReasoner 做符号预测。失败返回 None（不阻塞 LLM 路径）。"""
+        try:
+            from ocos.reasoning.symbolic import SymbolicReasoner
+
+            # 任务描述：优先从 operation，退化到 premises
+            task_text = (
+                getattr(operation, "goal", None)
+                or getattr(operation, "input_text", None)
+                or (premises or {}).get("goal", "")
+                or (premises or {}).get("task", "")
+                or ""
+            )
+            if not task_text:
+                return None
+
+            agent_type = (
+                (premises or {}).get("agent_type")
+                or (premises or {}).get("agent")
+            )
+
+            sr = SymbolicReasoner()
+            return sr.predict(str(task_text), agent_type)
+        except Exception as e:
+            logger.debug("SymbolicReasoner unavailable: %s", e)
+            return None
+
+    @staticmethod
+    def _format_symbolic_conclusion(pred) -> str:
+        """SymbolicPrediction → 自然语言结论（零 LLM）。"""
+        succ_pct = round(pred.expected_success * 100)
+        lines = [
+            f"[符号推理] 预期成功率 {succ_pct}%（置信度 {round(pred.confidence * 100)}%）",
+        ]
+        if pred.suggested_procedure:
+            lines.append(f"💡 建议程序：{pred.suggested_procedure}")
+        if pred.similar_experiences:
+            lines.append("相似历史：")
+            for s in pred.similar_experiences[:3]:
+                succ_mark = "✓" if s.get("success") else "✗"
+                lines.append(f"  [{succ_mark}] {s.get('goal', '')[:60]}")
+        return "\n".join(lines)
 
     def _retrieve_evidence(
         self,

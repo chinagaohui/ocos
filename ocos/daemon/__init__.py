@@ -705,8 +705,9 @@ class ResidentRuntime:
                         # P5.2 (AGI 计划): Phase 53 主动交互唤醒 — 空闲期基于
                         # 目标状态（停滞/依赖数据过期）产出交互提议，走 outbox。
                         # L0-3: 提案属自主行为 — LEVEL>=1 才允许（0=零自主）
+                        # v2: 间隔从 60→6 tick（≈30s）——让 daemon 快速首次问候
                         if (self._active_interaction is not None
-                                and self._hb_ticks % 60 == 0
+                                and self._hb_ticks % 6 == 0
                                 and self._autonomy_level >= 1):
                             try:
                                 self._active_interaction.scan_and_interact()

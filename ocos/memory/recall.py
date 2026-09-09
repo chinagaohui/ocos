@@ -341,20 +341,33 @@ class MemoryRecall:
                 lines.append(f"{icon} [{r.source}] (relevance: {r.relevance:.2f})")
                 lines.append(f"   {r.content[:200]}")
 
-        # FIX-06/FIX-20: 注入学习规则（成功/失败冲突）；无召回时规则仍注入
+        # FIX-06/FIX-20 + Phase A0+: 注入学习规则
+        # Phase A0+ 新增: C 类 procedure 优先注入
+        #   procedure 字段由调用方在传入 learning_rules 前填充（via cause_to_procedure()），
+        #   recall 不 import learning 层（单向依赖原则: memory 不依赖 learning）
         if learning_rules:
-            conflict_lines = []
+            procedure_lines: list[str] = []  # C 类优先
+            conflict_lines: list[str] = []   # B 类退化（原有格式）
             for rule in learning_rules:
                 succ = int(rule.get("success_count", 0) or 0)
                 fail = int(rule.get("fail_count", 0) or 0)
                 rate = float(rule.get("success_rate", 0.0) or 0.0)
                 pattern = rule.get("task_pattern", "?")
-                if succ + fail >= 2:
+
+                # C 类 procedure 注入（由调用方预填充 rule["procedure"]）
+                procedure = rule.get("procedure", "")
+                if procedure:
+                    procedure_lines.append(f"💡 {pattern}: {procedure}")
+                elif succ + fail >= 2:
+                    # B 类退化（原有格式）
                     tag = "⚠️" if rate < 0.5 else "✅"
                     conflict_lines.append(f"{tag} {pattern}: 成功{succ}/失败{fail} (率={rate:.0%})")
-            if conflict_lines:
+
+            # C 类优先于 B 类
+            all_lines = procedure_lines[:3] + conflict_lines[:2]
+            if all_lines:
                 lines.append("\n## 学习规则（历史经验）")
-                lines.extend(conflict_lines[:5])
+                lines.extend(all_lines)
 
         return "\n".join(lines)
 

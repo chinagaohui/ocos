@@ -238,6 +238,147 @@ def _learning_metrics(conn: sqlite3.Connection) -> dict:
     return metrics
 
 
+def _self_evolution_metrics(conn: sqlite3.Connection) -> dict:
+    """Phase B 纵向自进化量化 — 5 项指标（路线图 §B1）。
+
+    指标定义:
+      1. failure_rate_trend_delta — 近 7d vs 前 7d outcome.success 比例变化
+         （正值 = 变好（success rate 上升）；负值 = 退化；None = 数据不足）
+      2. tool_utilization_rate   — fs_read/shell/read_file/run_command
+         类 action 中 outcome.success 占比（ER-2 C=6/10 指标借鉴）
+      3. c_lesson_production_per_day — 7d 内 C 类 Lesson 日均产出
+         （C 类判定 = source='lesson' 且 decision 含 '【'）
+      4. lesson_injection_intensity — 近 30d lesson_prior_injected 次数 /
+         近 30d source='lesson' episodes 数（可 > 1.0，高频注入）
+      5. cross_task_lesson_delta — failure_rate_trend_delta > 0 且
+         failure_recurrence_rate 下降 = 自进化生效信号
+
+    所有指标独立容错：缺表/缺列只影响自身（诚实标注 None/0），
+    其余继续聚合。不中断 compute_vitals 主流程。
+    """
+    metrics: dict = {
+        "failure_rate_trend_delta": None,
+        "recent_7d_success_rate": None,
+        "prev_7d_success_rate": None,
+        "tool_utilization_rate": None,
+        "tool_action_total_30d": 0,
+        "tool_action_success_30d": 0,
+        "c_lesson_production_per_day": None,
+        "c_lesson_count_7d": 0,
+        "lesson_injection_intensity": None,
+    }
+    if not _table_exists(conn, "episodes"):
+        return metrics
+
+    _NOW = datetime.now(timezone.utc).isoformat()
+
+    # ── 指标 1: 失败率趋势 ─────────────────────────────────────
+    # 两个窗口:
+    #   近 7d = [now-7d, now)
+    #   前 7d = [now-14d, now-7d)
+    prev_7d = _window_start(7)    # now - 7 days
+    prev_14d = _window_start(14)  # now - 14 days
+    try:
+        rows = conn.execute(
+            "SELECT outcome, created_at FROM episodes "
+            "WHERE created_at >= ? AND source != 'lesson' ORDER BY created_at",
+            (prev_14d,)).fetchall()
+    except sqlite3.Error:
+        rows = []
+    def _count(rows_list, start, end):
+        total = ok = 0
+        for outcome_raw, created_at in rows_list:
+            if not (start <= created_at < end):
+                continue
+            total += 1
+            try:
+                oc = json.loads(outcome_raw or "{}")
+                if oc.get("success"):
+                    ok += 1
+            except (ValueError, TypeError):
+                pass
+        return ok, total
+    now_ok, now_total = _count(rows, prev_7d, _NOW)
+    prev_ok, prev_total = _count(rows, prev_14d, prev_7d)
+    if now_total >= 5 and prev_total >= 5:
+        metrics["recent_7d_success_rate"] = round(now_ok / now_total, 4)
+        metrics["prev_7d_success_rate"] = round(prev_ok / prev_total, 4)
+        metrics["failure_rate_trend_delta"] = round(
+            metrics["recent_7d_success_rate"] - metrics["prev_7d_success_rate"], 4)
+
+    # ── 指标 3: 工具利用率 ─────────────────────────────────────
+    _TOOL_ACTIONS = frozenset({
+        "fs_read", "shell", "read_file", "run_command",
+        "write_file", "edit_file", "search_files", "bash",
+    })
+    cutoff_30d = _window_start(30)
+    try:
+        trows = conn.execute(
+            "SELECT action, outcome FROM episodes WHERE created_at >= ?",
+            (cutoff_30d,)).fetchall()
+    except sqlite3.Error:
+        trows = []
+    t_total = t_success = 0
+    for action_raw, outcome_raw in trows:
+        act = action_raw or ""
+        # action 可能存 JSON 或纯字符串
+        try:
+            ad = json.loads(act) if act.startswith("{") else act
+            act_val = ad if isinstance(ad, str) else str(ad.get("action", ""))
+        except (ValueError, AttributeError):
+            act_val = act
+        if act_val not in _TOOL_ACTIONS:
+            continue
+        t_total += 1
+        try:
+            oc = json.loads(outcome_raw or "{}")
+            if oc.get("success"):
+                t_success += 1
+        except (ValueError, TypeError):
+            pass
+    metrics["tool_action_total_30d"] = t_total
+    metrics["tool_action_success_30d"] = t_success
+    if t_total >= 5:
+        metrics["tool_utilization_rate"] = round(t_success / t_total, 4)
+
+    # ── 指标 4: C 类 Lesson 产出率 ─────────────────────────────
+    try:
+        lesson_rows = conn.execute(
+            "SELECT decision FROM episodes "
+            "WHERE source = 'lesson' AND created_at >= ?",
+            (prev_7d,)).fetchall()
+    except sqlite3.Error:
+        lesson_rows = []
+    c_count = sum(1 for (desc,) in lesson_rows if desc and "【" in desc)
+    metrics["c_lesson_count_7d"] = c_count
+    if lesson_rows:
+        metrics["c_lesson_production_per_day"] = round(c_count / 7.0, 2)
+
+    # ── 指标 5: Lesson 注入强度 ──────────────────────────────────
+    # injection_intensity = 30d lesson_prior_injected 次数 / 30d lesson 总数
+    # 注意: 一条 Lesson 可被注入多次，此值可 > 1.0
+    # 语义: ≥1.0 = Lesson 被频繁消费；越高 = C 类 procedure 被活跃复用
+    try:
+        total_lessons_30d = conn.execute(
+            "SELECT COUNT(*) FROM episodes "
+            "WHERE source = 'lesson' AND created_at >= ?",
+            (cutoff_30d,)).fetchone()[0]
+    except sqlite3.Error:
+        total_lessons_30d = 0
+    intensity: float | None = None
+    if total_lessons_30d > 0:
+        marks = _read_learning_marks()
+        cutoff_reuse = _window_start(30)
+        inj_30 = sum(1 for e in marks
+                     if str(e.get("ts", "")) >= cutoff_reuse
+                     and e.get("type") == "lesson_prior_injected")
+        if inj_30 > 0:
+            intensity = round(inj_30 / total_lessons_30d, 4)
+    metrics["lesson_injection_intensity"] = intensity
+
+    return metrics
+
+
 def _attribution_metrics(conn: sqlite3.Connection) -> dict:
     """V4 失败归因质量: 归因覆盖率代理（方案定义为人工抽样评分）。
 
@@ -572,6 +713,7 @@ def compute_vitals(db_path: str, window_days: int = 7) -> dict:
                 ("proactive", _proactive_metrics, window_days),
                 ("failure_recurrence", _failure_recurrence, None),
                 ("learning", _learning_metrics, None),
+                ("self_evolution", _self_evolution_metrics, None),
                 ("attribution", _attribution_metrics, None),
                 ("reactivity", _reactivity_metrics, window_days),
                 ("social", _social_metrics, None),
@@ -701,6 +843,40 @@ def render_vitals(v: dict) -> str:
         lines.append("  attribution         : 未点亮（30 天内无 lesson 数据）")
     else:
         lines.append(f"  attribution         : {att:.1%} (归因覆盖率×置信度代理, 达标线 ≥70%)")
+    # ── Phase B 自进化纵向量化 ─────────────────────────────────
+    frd = v.get("failure_rate_trend_delta")
+    r7 = v.get("recent_7d_success_rate")
+    p7 = v.get("prev_7d_success_rate")
+    if frd is None:
+        lines.append("  self_evolve_failure : 未点亮（近 14d episodes < 5 条）")
+    else:
+        trend_sym = "↓ 变好" if frd < 0 else ("↑ 退化" if frd > 0 else "→ 持平")
+        lines.append(f"  self_evolve_failure : {(1 - r7):.1%} ← 近 7d 失败率 "
+                     f"({frd:+.1%} {trend_sym})")
+    tu = v.get("tool_utilization_rate")
+    if tu is None:
+        lines.append(f"  self_evolve_tool    : 未点亮（30d 工具类 action < 5 条, "
+                     f"当前 {v.get('tool_action_total_30d', 0)} 条）")
+    else:
+        lines.append(f"  self_evolve_tool    : {tu:.1%} "
+                     f"({v.get('tool_action_success_30d', 0)}/"
+                     f"{v.get('tool_action_total_30d', 0)} success/tool, "
+                     f"达标线 ≥70%)")
+    clp = v.get("c_lesson_production_per_day")
+    clc = v.get("c_lesson_count_7d", 0)
+    if clp is None:
+        lines.append(f"  self_evolve_c_lesson: 未点亮（7d lesson < 1 条, "
+                     f"C 类产出 {clc} 条）")
+    else:
+        lines.append(f"  self_evolve_c_lesson: {clp:.2f}/天 C 类产出 "
+                     f"({clc}/7d, 达标线 ≥0.5/天)")
+    li = v.get("lesson_injection_intensity")
+    if li is None:
+        lines.append("  self_evolve_inject  : 未点亮（30d lesson 总数 = 0）")
+    else:
+        # 可 > 1.0（一条 Lesson 被注入多次），用整数×格式
+        lines.append(f"  self_evolve_inject  : {li:.2f}× "
+                     f"(30d 注入 / 30d lessons, ≥1× = 高频复用)")
     lines.append("[V3 感知-反应]")
     rea = v.get("reactivity_actions_per_day")
     if rea is None:

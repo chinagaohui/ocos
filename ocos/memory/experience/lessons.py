@@ -251,7 +251,11 @@ def _extract_failure_pattern(
     timestamp: datetime,
     min_confidence: float,
 ) -> LessonsLearned | None:
-    """从失败经验中提取模式。"""
+    """从失败经验中提取模式。
+
+    Phase A0+ 增强: 检测失败 cause，若 cause_to_procedure 能生成 C 类模板
+    则嵌入 description（跨经验归纳直接产生 C 类格式 Lesson）。
+    """
     confidence = min(1.0, len(failures) / max(5, len(failures)))
     if confidence < min_confidence:
         return None
@@ -262,21 +266,39 @@ def _extract_failure_pattern(
     common_action = _most_common(actions) if actions else "unknown_action"
     source_ids = [c.id for c in failures]
 
-    # 提取 error 信息
+    # 提取 error 信息 + 检测 cause（Phase A0+）
     errors = []
+    all_evidence = ""
     for c in failures:
         outcome = c.trace_bundle.outcome
         if isinstance(outcome, dict):
             err = outcome.get("error", outcome.get("result", ""))
             if err:
                 errors.append(str(err))
+                all_evidence += " " + str(err)
     error_summary = _most_common(errors) if errors else "repeated failure"
 
     ctx_str = ", ".join(sorted(common_ctx)[:5]) if common_ctx else "similar_context"
 
+    # Phase A0+: 尝试 cause_to_procedure 嵌入 C 类模板
+    # 注: lessons.py 属 memory 包，Phase 24 隔离测试禁止 memory import learning，
+    # 这里内联一个轻量版 cause_to_procedure（只覆盖 timeout）。
+    description_base = (
+        f"在 [{goal_ref}] 中，{ctx_str} 条件下 {common_action} 常失败: {error_summary}"
+    )
+    detected_cause = _detect_failure_cause(all_evidence + " " + error_summary)
+    if detected_cause:
+        procedure = _local_cause_to_procedure(detected_cause, goal_ref)
+        if procedure:
+            description = f"{description_base}\n{procedure}"
+        else:
+            description = description_base
+    else:
+        description = description_base
+
     return LessonsLearned(
         id=f"LESSON-{timestamp.strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}",
-        description=f"在 [{goal_ref}] 中，{ctx_str} 条件下 {common_action} 常失败: {error_summary}",
+        description=description,
         category="failure_pattern",
         confidence=round(confidence, 2),
         source_experiences=source_ids,
@@ -285,6 +307,47 @@ def _extract_failure_pattern(
         action=common_action,
         outcome=f"failure: {error_summary}",
     )
+
+
+def _detect_failure_cause(text: str) -> str | None:
+    """从错误文本中检测 FailureCause（轻量规则，供 LessonsSynthesizer 使用）。
+
+    与 FailureDiagnoser 同源但只返回字符串 cause value，
+    避免在 experience 层引入 Learning 依赖链循环。
+    """
+    text_lower = text.lower()
+    if any(s in text_lower for s in ("timeout", "超时", "timed out")):
+        return "timeout"
+    if any(s in text_lower for s in ("permission", "denied", "approval", "被拒绝")):
+        return "permission_denied"
+    if any(s in text_lower for s in ("not available", "unavailable", "找不到", "no tool")):
+        return "tool_unavailable"
+    return None
+
+
+def _local_cause_to_procedure(cause: str, goal_pattern: str) -> str:
+    """memory 包内联版 cause_to_procedure（只覆盖 timeout 场景）。
+
+    完整实现位于 ocos.learning.experience_learning.cause_to_procedure，
+    lessons.py 属 memory 包（Phase 24 隔离测试禁止 import learning），
+    故内联 timeout 映射。与完整实现保持逻辑一致。
+    """
+    if cause != "timeout":
+        return ""
+    gp_lower = (goal_pattern or "").lower()
+    # 具体模板优先（多文件展示）
+    for kw in ("文件", "files", "ls", "目录", "folder", "read them"):
+        if kw.lower() in gp_lower:
+            return ("【多文件展示程序】先 ls 列出文件清单；每批只读 2 个文件；"
+                    "等观察结果再读下一批。禁止 cat 多个文件。成功=多轮读取")
+    # 泛化模板（批量操作）
+    for kw in ("批量", "batch", "多个", "全部"):
+        if kw.lower() in gp_lower:
+            return ("【批量操作程序】先清点任务总量；每批执行≤3个；"
+                    "等每批完成再继续。禁止一次性执行全部。成功=分批完成无超时")
+    # 通用退化
+    return ("【超时规避程序】先检查当前操作规模；分批执行；"
+            "等每批完成。禁止单次执行过多。成功=不超时")
 
 
 def _extract_conditional_insight(
