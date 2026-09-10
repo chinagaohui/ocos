@@ -172,6 +172,24 @@ _TEMPORAL_QUERY_RE = re.compile(
     r"|(做了|干了)" +
     r".{0,6}(上午|下午|早上|晚上|夜里|凌晨|中午|今天|昨天|最近|刚才)")
 
+# ── V9-ENVIRONMENT: 环境/数据库/网络查询触发（2026-09-10 环境感知层） ─
+# 用户问宿主环境/DB/网络/健康/修复 → 注入真实 environment_probe 结果
+_ENVIRONMENT_QUERY_RE = re.compile(
+    # 直接关键词触发（无条件后缀）
+    r"(WAL|wal|reindex|索引|checkpoint|清理缓存|完整性|integrity|"
+    r"自修复|自动修复|check point)"
+    r"|"
+    # 名词 + 动词后缀
+    r"(环境|宿主机|服务器|主机|硬件|磁盘|内存|CPU|网络|DNS|SSL|带宽|"
+    r"数据库|DB|完整|自检|健康|体检|状况|状态|修复|异常|告警|报错|进程|活跃)"
+    r".{0,4}(怎么样|如何|什么情况|情况|状态|好吗|行吗|正常吗|"
+    r"问题|异常|发现|修|处理|做|改善|优化|升级|建议|吗)"
+    r"|"
+    # 动作 + 对象
+    r"(发现|看|查|有)"
+    r".{0,4}(问题|异常|告警|错误|报错)"
+)
+
 
 _REALTIME_DIRECTIVE = (
     "\n\n【内部提示】本条消息涉及机器当前实时数据 — "
@@ -598,6 +616,130 @@ class ChatResponder:
             logger.debug("activity summary block failed: %s", e)
             return ""
 
+    # ── V9-ENVIRONMENT: 环境/DB/网络/修复查询 → 注入真实探针结果 ──
+    def _environment_summary_block(self, message: str = "") -> str:
+        """当用户问环境/DB/网络/健康/修复相关问题时，跑 environment_probe
+        真实数据注入 context —— 让 LLM 有真实数据可引，不说谎。
+
+        智能选择：根据消息关键词只跑相关探针，不全跑省时间。
+        """
+        if not message:
+            return ""
+        try:
+            from ocos.diagnosis.environment_probe import (
+                probe_host_resources, probe_network,
+                probe_daemon_self, probe_cognition_heartbeat,
+            )
+        except Exception:
+            return ""
+
+        parts: list[str] = []
+        # 根据关键词选探针（默认全跑，但网络探针最耗时 ~2s）
+        msg = message.lower()
+        need_host = any(k in msg for k in ("环境", "宿主机", "硬件", "磁盘", "内存",
+                                           "cpu", "温度", "负载", "进程", "服务器",
+                                           "主机", "resource", "hardware"))
+        need_net  = any(k in msg for k in ("网络", "dns", "ssl", "带宽", "连通",
+                                           "international", "国内", "国际",
+                                           "github", "baidu"))
+        need_db   = any(k in msg for k in ("数据库", "db", "wal", "完整",
+                                           "integrity", "reindex", "索引",
+                                           "checkpoint", "check point",
+                                           "自修复", "自动处理", "修复", "清理"))
+        need_cog  = any(k in msg for k in ("认知", "心跳", "tick", "循环"))
+
+        # 如果没匹配到任何关键词，默认全跑（覆盖"健康状况""自检"等泛问）
+        if not any([need_host, need_net, need_db, need_cog]):
+            need_host = need_net = need_db = True
+
+        db_path = self._db_path or ""
+
+        if need_host:
+            try:
+                h = probe_host_resources(heavy=False)
+                m = h.metrics
+                lines = [
+                    f"  📦 宿主: load1={m.get('load1','?')} "
+                    f"内存={m.get('mem_avail_g','?')}G "
+                    f"磁盘={m.get('disk_avail_g','?')}G"
+                ]
+                if "ocos_pid" in m:
+                    lines.append(
+                        f"  📦 OCOS 进程: pid={m['ocos_pid']} "
+                        f"rss={m.get('ocos_rss_mb','?')}MB "
+                        f"state={m.get('ocos_state','?')}")
+                if h.warnings:
+                    for w in h.warnings[:2]:
+                        lines.append(f"  ⚠ {w}")
+                parts.append("\n".join(lines))
+            except Exception as e:
+                parts.append(f"  📦 宿主探针失败: {e}")
+
+        if need_db:
+            try:
+                d = probe_daemon_self(db_path)
+                m = d.metrics
+                lines = [
+                    f"  🗄 DB: integrity={m.get('integrity','?')} "
+                    f"wal={m.get('wal_size_mb',0)}M "
+                    f"size={m.get('db_size_mb','?')}M"
+                ]
+                if "last_episode_age_min" in m:
+                    lines.append(
+                        f"  🗄 daemon 活跃性: 最近 episode "
+                        f"{m['last_episode_age_min']} 分钟前")
+                if d.warnings:
+                    for w in d.warnings[:2]:
+                        lines.append(f"  ⚠ {w}")
+                parts.append("\n".join(lines))
+            except Exception as e:
+                parts.append(f"  🗄 DB 探针失败: {e}")
+
+        if need_net:
+            try:
+                n = probe_network()
+                m = n.metrics
+                lines = [
+                    f"  🌐 网络: state={m.get('state','?')} "
+                    f"dns={m.get('dns_ok','?')} "
+                    f"domestic={m.get('domestic_ok','?')} "
+                    f"intl={m.get('intl_ok','?')}"
+                ]
+                if "intl_ssl_days" in m:
+                    lines.append(f"  🌐 SSL 证书剩 {m['intl_ssl_days']} 天")
+                if "domestic_time_s" in m:
+                    lines.append(
+                        f"  🌐 延迟: 国内 {m['domestic_time_s']}s "
+                        f"国际 {m.get('intl_time_s','?')}s")
+                if n.warnings:
+                    for w in n.warnings[:2]:
+                        lines.append(f"  ⚠ {w}")
+                parts.append("\n".join(lines))
+            except Exception as e:
+                parts.append(f"  🌐 网络探针失败: {e}")
+
+        if need_cog:
+            try:
+                c = probe_cognition_heartbeat(db_path)
+                m = c.metrics
+                lines = [
+                    f"  🧠 认知循环: entries={m.get('cognition_entries',0)} "
+                    f"latest_age={m.get('latest_cognition_age_s','?')}s"
+                ]
+                if c.warnings:
+                    for w in c.warnings[:2]:
+                        lines.append(f"  ⚠ {w}")
+                parts.append("\n".join(lines))
+            except Exception as e:
+                parts.append(f"  🧠 认知心跳探针失败: {e}")
+
+        if not parts:
+            return ""
+
+        # 加实时指令提醒 LLM 引用真实数据
+        header = "【环境快照 — 真实探针数据（禁止说'没有记录'）】"
+        return "\n".join([header] + parts)
+
     # P2-USER-PROFILE (2026-09-09): 从对话历史提炼用户画像
     def _user_profile_block(self) -> str:
         """从 DB 对话历史提炼：用户常让做什么、拒绝过什么、最近让做过什么。"""
@@ -779,6 +921,12 @@ class ChatResponder:
             asb = self._activity_summary_block(message)
             if asb:
                 lines.append(asb)
+
+        # V9-ENVIRONMENT: 环境/DB/网络/修复查询 → 注入真实探针结果
+        if _ENVIRONMENT_QUERY_RE.search(message or ""):
+            esb = self._environment_summary_block(message)
+            if esb:
+                lines.append(esb)
 
         # P2-USER-PROFILE: 用户画像（让 OCOS 知道主人常让做什么）
         up = self._user_profile_block()
