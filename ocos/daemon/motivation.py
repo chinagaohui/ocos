@@ -1050,6 +1050,8 @@ class MotivationHub:
     # ── P0-A: 被动防御 — non-retryable failure lesson ──────────────────
 
     # 不可重试失败 cause 集合（FailureDiagnoser 定义的终态错误）
+    # 注意: SQL_SCHEMA_MISMATCH 不在此列 — 它是 "可重试但需先探测 schema"，
+    # 写 lesson 时会带 replan_hint='inspect_schema_first'，后续 Decision 可消费
     _NON_RETRYABLE_CAUSES = frozenset({
         "dependency_missing",
         "tool_unavailable",

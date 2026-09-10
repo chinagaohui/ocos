@@ -41,6 +41,7 @@ class FailureCause(str, Enum):
     TIMEOUT = "timeout"                      # 超时
     TOOL_UNAVAILABLE = "tool_unavailable"    # 工具/能力不可用
     DEPENDENCY_MISSING = "dependency_missing"  # P0-2026-09-10: 硬依赖缺失
+    SQL_SCHEMA_MISMATCH = "sql_schema_mismatch"  # P0-2026-09-10: SQL/schema 不一致 → 可重试但需先探测 schema
     LLM_CONVERSION_FAILED = "llm_conversion_failed"  # LLM 无法将描述转动作
     UNKNOWN = "unknown"                      # 无法分类
 
@@ -75,6 +76,15 @@ _DEPENDENCY_SIGNALS = [
     "exit_code=127",          # 典型 command not found exit code
     "ModuleNotFoundError",    # Python 模块缺失
     "No module named",        # Python 模块缺失 (ImportError 消息)
+]
+# P0-2026-09-10: SQL/schema 不一致信号 — SQLite 标准错误文案
+# no such column: content / no such table: xxx / table xxx has no column
+# 这类错误不是 "不可重试"（schema mismatch），而是 "可重试但需先探测 schema"
+_SQL_SCHEMA_SIGNALS = [
+    "no such column",         # SQLite "no such column: xxx" 最常见
+    "no such table",          # SQLite "no such table: xxx"
+    "has no column named",    # SQLite "table xxx has no column named yyy"
+    "sql_schema_mismatch",   # bridge fallback 注入的 error_type 标记
 ]
 _CONVERSION_SIGNALS = ["任务无法执行", "llm 无法执行此任务",
                        "无法转为", "无法转换", "cannot execute",
@@ -152,6 +162,16 @@ class FailureDiagnoser:
                     cause = FailureCause.DEPENDENCY_MISSING
                     signals_hit.append(sig)
                     break
+        # P0-2026-09-10: SQL_SCHEMA_MISMATCH 必须在 EXECUTION_SIGNALS 之前检查
+        # —— "no such column: content" 是 EXECUTION_ERROR 子类，但需要特殊处理:
+        # 不是 "不可重试"，而是 "可重试但需先探测 schema 再 replan"。
+        # 这个 cause 不会触发 fuse，但会写 lesson 带 replan_hint='inspect_schema_first'
+        if cause == FailureCause.UNKNOWN:
+            for sig in _SQL_SCHEMA_SIGNALS:
+                if sig.lower() in evidence.lower():
+                    cause = FailureCause.SQL_SCHEMA_MISMATCH
+                    signals_hit.append(sig)
+                    break
         if cause == FailureCause.UNKNOWN:
             for sig in _CONVERSION_SIGNALS:
                 if sig.lower() in evidence.lower():
@@ -176,6 +196,9 @@ class FailureDiagnoser:
             FailureCause.DEPENDENCY_MISSING: (
                 "运行时硬依赖缺失（如命令未安装、Python 模块缺失），"
                 "属于终态不可重试错误——重试不会解决"),
+            FailureCause.SQL_SCHEMA_MISMATCH: (
+                "SQL/schema 不一致——LLM 幻觉了不存在的列/表，"
+                "可重试但必须先探测真实 schema（PRAGMA table_info）再 replan"),
             FailureCause.LLM_CONVERSION_FAILED: "LLM 无法将任务描述转换为动作",
             FailureCause.UNKNOWN: "失败原因无法从现有证据分类",
         }
