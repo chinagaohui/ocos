@@ -691,11 +691,15 @@ class ResidentRuntime:
                     from datetime import datetime, timezone
                     now_ts = datetime.now(timezone.utc).timestamp()
                     last_cog = getattr(self, "_last_cognition_ts", 0)
-                    if (now_ts - last_cog) >= 60 and self._autonomy_level >= 1 and not self._braked:
+                    diff = now_ts - last_cog
+                    if diff >= 60 and self._autonomy_level >= 1 and not self._braked:
+                        logger.info("🧠 Cognition Loop firing (gap=%.0fs, L%d braked=%s)", diff, self._autonomy_level, self._braked)
                         self._run_continuous_cognition()
                         self._last_cognition_ts = now_ts
-                except Exception:
-                    logger.debug("continuous cognition failed", exc_info=True)
+                    elif diff > 0:
+                        logger.debug("🧠 cognition cooldown: %.0fs since last, need 60s", diff)
+                except Exception as e:
+                    logger.warning("continuous cognition failed: %s", e, exc_info=True)
 
                 # Phase 33: 将队列中的目标导入 runtime 的 goal_store
                 self._drain_goal_queue()
