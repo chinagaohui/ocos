@@ -1293,8 +1293,17 @@ class DecisionBridge:
                     prompt = f"{agents}\n\n{prompt}"
                 # P0-C (2026-09-10): DB Schema 注入 — sql_schema_mismatch 根因修复
                 # 只给列名，不给修复建议（让 LLM 自己决定）
-                if any(kw in description.lower()
-                       for kw in ("sql", "sqlite", "episodes", "数据库", "schema", "表", "查询", "统计")):
+                # 双触发: (1) description 含 DB/SQL 关键词
+                #        (2) agent 是 researcher/writer/analyst 类（自然会查 DB）
+                _db_kw = ("sql", "sqlite", "episodes", "数据库", "schema",
+                          "表", "查询", "统计", "检索", "聚合", "分布",
+                          "sqlite3", ".db", "数据库")
+                _db_agents = ("researcher", "writer", "analyst", "archivist",
+                              "critic")
+                _agent_id_lc = (getattr(self, "_agent_id", "") or "").lower()
+                _desc_lc = description.lower()
+                if any(kw in _desc_lc for kw in _db_kw) or \
+                        any(a in _agent_id_lc for a in _db_agents):
                     schema_ctx = self._schema_context()
                     if schema_ctx:
                         prompt = f"{schema_ctx}\n\n{prompt}"
