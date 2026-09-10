@@ -36,10 +36,11 @@ class FailureCause(str, Enum):
     """失败原因分类（确定性规则提取）。"""
 
     AMBIGUOUS_TASK = "ambiguous_task"        # 任务描述模糊，无法转动作
-    EXECUTION_ERROR = "execution_error"      # 执行层错误
+    EXECUTION_ERROR = "execution_error"      # 执行层错误（运行时）
     PERMISSION_DENIED = "permission_denied"  # 权限拒绝（ASK 未批 / 拦截）
     TIMEOUT = "timeout"                      # 超时
     TOOL_UNAVAILABLE = "tool_unavailable"    # 工具/能力不可用
+    DEPENDENCY_MISSING = "dependency_missing"  # P0-2026-09-10: 硬依赖缺失
     LLM_CONVERSION_FAILED = "llm_conversion_failed"  # LLM 无法将描述转动作
     UNKNOWN = "unknown"                      # 无法分类
 
@@ -50,6 +51,9 @@ class FailureCause(str, Enum):
 # _AMBIGUOUS_SIGNALS 下，导致沙盒白名单缺口（NONE 诚实失败文案
 # "任务无法执行: …"）被误判 ambiguous_task → AMBIGUOUS_BLOCK 终态，
 # 掩盖真实根因（工具不可用）并阻断重试。
+# P0-2026-09-10: DEPENDENCY_SIGNALS 优先于 EXECUTION_SIGNALS ——
+# "exit_code=127" 既是 _EXECUTION_SIGNALS 匹配项也是硬依赖缺失，
+# 必须先检查 DEPENDENCY，否则会被误判为可重试的 execution_error 无限循环。
 _AMBIGUOUS_SIGNALS = [
     "过于模糊", "未指定", "ambiguous", "not specific",
     "no data source", "missing input", "不清楚",
@@ -61,6 +65,17 @@ _TIMEOUT_SIGNALS = ["timeout", "超时", "timed out"]
 _TOOL_SIGNALS = ["not available", "unavailable", "not registered",
                  "no capability", "no tool", "找不到", "白名单内没有",
                  "白名单内无"]
+# P0-2026-09-10: 硬依赖缺失信号 — exit_code=127 "command not found"
+# /bin/sh: xxx: not found / ModuleNotFoundError / ImportError
+# 注意: "not found" 单独出现太宽（会匹配 file not found 等可重试错误），
+# 必须精确到 shell 格式、exit code、Python 标准异常名
+_DEPENDENCY_SIGNALS = [
+    "/bin/sh:",               # /bin/sh: 1: xxx: not found (最可靠的 shell 依赖缺失标志)
+    "command not found",      # bash 标准文案
+    "exit_code=127",          # 典型 command not found exit code
+    "ModuleNotFoundError",    # Python 模块缺失
+    "No module named",        # Python 模块缺失 (ImportError 消息)
+]
 _CONVERSION_SIGNALS = ["任务无法执行", "llm 无法执行此任务",
                        "无法转为", "无法转换", "cannot execute",
                        "no action"]
@@ -127,6 +142,16 @@ class FailureDiagnoser:
                     cause = FailureCause.TOOL_UNAVAILABLE
                     signals_hit.append(sig)
                     break
+        # P0-2026-09-10: DEPENDENCY_MISSING 必须在 EXECUTION_SIGNALS 之前检查
+        # —— "exit_code=127" / "/bin/sh: xxx: not found" 同时匹配 _EXECUTION_SIGNALS
+        # 的 "exit=" 和 "failed"，如果不前置 DEPENDENCY 检查，会被误判为可重试的
+        # execution_error → 无限重试循环（writer 循环已连续失败几百次）
+        if cause == FailureCause.UNKNOWN:
+            for sig in _DEPENDENCY_SIGNALS:
+                if sig.lower() in evidence.lower():
+                    cause = FailureCause.DEPENDENCY_MISSING
+                    signals_hit.append(sig)
+                    break
         if cause == FailureCause.UNKNOWN:
             for sig in _CONVERSION_SIGNALS:
                 if sig.lower() in evidence.lower():
@@ -148,6 +173,9 @@ class FailureDiagnoser:
             FailureCause.PERMISSION_DENIED: "动作被权限系统拒绝或等待人工审批",
             FailureCause.TIMEOUT: "执行超时",
             FailureCause.TOOL_UNAVAILABLE: "所需工具/能力未注册或不可用",
+            FailureCause.DEPENDENCY_MISSING: (
+                "运行时硬依赖缺失（如命令未安装、Python 模块缺失），"
+                "属于终态不可重试错误——重试不会解决"),
             FailureCause.LLM_CONVERSION_FAILED: "LLM 无法将任务描述转换为动作",
             FailureCause.UNKNOWN: "失败原因无法从现有证据分类",
         }

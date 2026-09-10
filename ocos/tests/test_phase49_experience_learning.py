@@ -91,13 +91,25 @@ class TestFailureDiagnoser:
         assert diag is None
 
     def test_execution_error(self):
+        # P0-2026-09-10: "command not found" 正确分类为 DEPENDENCY_MISSING
+        # （硬依赖缺失，重试不会解决）。真正的运行时错误用 RuntimeError 模拟。
         ep = make_episode(
             "EP4", "运行命令", success=False,
-            error="exit=2: command not found", decision="failed",
+            error="RuntimeError: division by zero at line 42", decision="traceback failed",
         )
         diag = FailureDiagnoser.diagnose(ep)
         assert diag is not None
         assert diag.cause == FailureCause.EXECUTION_ERROR
+
+    def test_dependency_missing_command_not_found(self):
+        # P0-2026-09-10: shell command not found → DEPENDENCY_MISSING（不可重试）
+        ep = make_episode(
+            "EP5", "运行命令", success=False,
+            error="exit=127: command not found", decision="/bin/sh: 1: foo: not found",
+        )
+        diag = FailureDiagnoser.diagnose(ep)
+        assert diag is not None
+        assert diag.cause == FailureCause.DEPENDENCY_MISSING
 
 
 class TestLessonArtifact:

@@ -44,6 +44,10 @@ _CAUSE_TO_REPLAN = {
     "timeout": ReplanAction.RETRY,
     "permission_denied": ReplanAction.CONTINUE_NEXT,  # 待批不阻塞其余
     "tool_unavailable": ReplanAction.SKIP_DEPENDENTS,
+    # P0-2026-09-10: 硬依赖缺失 → 终态跳过（不是软错误重试能解决的）
+    # writer 循环几百次失败就是因为 DEPENDENCY_MISSING 没被识别 →
+    # 当成 EXECUTION_ERROR 无限重试
+    "dependency_missing": ReplanAction.SKIP_DEPENDENTS,
     "llm_conversion_failed": ReplanAction.AMBIGUOUS_BLOCK,
     "unknown": ReplanAction.CONTINUE_NEXT,
 }

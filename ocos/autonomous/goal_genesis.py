@@ -177,15 +177,150 @@ class GoalGenesis:
         domain: str = "",
         source: str = "epistemic",
     ) -> list[GoalProposal]:
-        """从 EpistemicDrive suggestions 生成 GoalProposal 列表."""
+        """从 EpistemicDrive suggestions 生成 GoalProposal 列表.
+
+        P1-2026-09-10: 防重复 — 同类失败目标在冷却窗口内不重复生成。
+        writer 循环就是因为没有防重复: 同一个 writer 探查目标被连续
+        生成了几十次，每次都是 sqlite3 not found → dependency_missing →
+        SKIP_DEPENDENTS，但新 goal 又生成了。
+
+        防重复规则:
+          1. 描述归一化后（去空格/标点/大小写）和近 10 分钟已存在 proposal
+             相似度 ≥ 0.8 → 跳过
+          2. 同类 source + domain 在近 10 分钟有 ≥3 个 PENDING/APPROVED
+             且最终 FAILED 的 proposal → 冷却 10 分钟
+          3. 同类 source 在近 10 分钟有硬依赖缺失 (exit 127 / not found)
+             失败 → 标记依赖 offline，跳过
+        """
         proposals = []
+        conn = self._get_conn()
+
         for s in suggestions:
+            # P1: 防重复检查
+            if self._is_duplicate(conn, s, domain, source):
+                logger.debug(
+                    "GoalGenesis deduped: %s — 同类目标近期已存在/连续失败",
+                    s[:60])
+                continue
+            if self._is_cooling_down(conn, s, domain, source):
+                logger.debug(
+                    "GoalGenesis cooldown: %s — 同类目标连续失败 ≥3",
+                    s[:60])
+                continue
+
             prop = GoalProposal(description=s, domain=domain, source=source)
             prop.value_score = self._score_value(prop)
             prop.risk_level = self._assess_risk(prop)
             self._persist(prop)
             proposals.append(prop)
         return proposals
+
+    # ── P1-2026-09-10: 防重复 ────────────────────────────────────────────
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """归一化: 去空格/标点/数字 → 用于相似度比较。"""
+        import re
+        return re.sub(r"[\s\d_\-.,!?:;，。！？、；：]+", "", text.lower())
+
+    def _is_duplicate(self, conn, desc: str, domain: str, source: str) -> bool:
+        """近 10 分钟内已存在相似 proposal（归一化相似度 ≥ 0.8）?"""
+        cutoff = self._now_iso(minutes_ago=10)
+        try:
+            rows = conn.execute(
+                "SELECT description FROM goal_proposal "
+                "WHERE created_at >= ? AND source = ? AND status IN ('PENDING','APPROVED')",
+                (cutoff, source)).fetchall()
+        except Exception:
+            return False
+        norm_new = self._normalize(desc)
+        if not norm_new:
+            return False
+        for (existing,) in rows:
+            if not existing:
+                continue
+            norm_old = self._normalize(existing)
+            if norm_old and self._similarity(norm_new, norm_old) >= 0.75:
+                return True
+        return False
+
+    def _is_cooling_down(self, conn, desc: str, domain: str, source: str) -> bool:
+        """近 10 分钟内同类 source 连续失败 ≥3 → 冷却。"""
+        cutoff = self._now_iso(minutes_ago=10)
+        try:
+            # 从 goal_proposal → goals 表连查
+            rows = conn.execute(
+                """SELECT g.status, g.description, g.metadata
+                   FROM goals g
+                   WHERE g.source = ? AND g.created_at >= ?
+                   ORDER BY g.rowid DESC LIMIT 20""",
+                (source, cutoff)).fetchall()
+        except Exception:
+            return False
+
+        if len(rows) < 3:
+            return False
+
+        norm_new = self._normalize(desc)
+        recent_fails = 0
+        for status, g_desc, g_meta in rows:
+            norm_old = self._normalize(g_desc or "")
+            if not norm_old:
+                continue
+            # 语义相似 + 已失败 → 计失败
+            if self._similarity(norm_new, norm_old) >= 0.7:
+                if status in ("FAILED", "ABORTED"):
+                    recent_fails += 1
+                elif status == "COMPLETED":
+                    # 检查 metadata 里 success 标志
+                    try:
+                        meta = json.loads(g_meta or "{}") if g_meta else {}
+                        if meta.get("success") is False:
+                            recent_fails += 1
+                    except Exception:
+                        pass
+
+        return recent_fails >= 3
+
+    @staticmethod
+    def _similarity(a: str, b: str) -> float:
+        """多维度相似度: Jaccard char 集 + 关键词重叠 + 双向子串包含.
+
+        纯 Jaccard 不够 — 短描述 (如 "探查 writer") 和长描述
+        ("探查 writer 在宿主机有 7 个可用工具没试过") Jaccard 只有 0.48,
+        但语义几乎相同。
+        """
+        if not a or not b:
+            return 0.0
+        set_a, set_b = set(a), set(b)
+        union = set_a | set_b
+        jaccard = len(set_a & set_b) / len(union) if union else 0.0
+
+        # 子串包含检测: 短串是长串的子串 → 相似度 = 0.8
+        if len(a) < len(b):
+            substring_hit = a in b
+        else:
+            substring_hit = b in a
+        if substring_hit:
+            # 加权: Jaccard 和 子串包含 取 max
+            return max(jaccard, 0.8)
+
+        # 关键词重叠检测: 提取 2+ 字高频 token, 匹配数 ≥2 → +0.2
+        import re
+        tokens_a = set(re.findall(r"[\u4e00-\u9fff]{2,}|[a-z_]+", a))
+        tokens_b = set(re.findall(r"[\u4e00-\u9fff]{2,}|[a-z_]+", b))
+        if tokens_a and tokens_b:
+            overlap = len(tokens_a & tokens_b)
+            if overlap >= 2:
+                jaccard = max(jaccard, 0.6 + 0.1 * min(overlap - 2, 3))
+
+        return jaccard
+
+    @staticmethod
+    def _now_iso(minutes_ago: int = 0) -> str:
+        """返回 UTC ISO 时间戳（减 N 分钟）。"""
+        from datetime import datetime, timedelta, timezone
+        return (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
 
     def _score_value(self, proposal: GoalProposal) -> float:
         """价值评分 = f(不确定性关键词, 历史成功率) — 当前启发式."""
