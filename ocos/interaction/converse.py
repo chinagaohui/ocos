@@ -24,7 +24,7 @@ import os
 import re
 import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
@@ -161,6 +161,16 @@ _BOUNDARY_DIRECTIVE = (
     "并给出下一步可行建议（如何获得/谁来答/替代方案）。"
     "禁止编造知识或假装知道。"
 )
+
+# ── P1-TEMPORAL: 时间范围查询触发（2026-09-10 修复"上午做了什么"说谎）─
+# 用户问某个时间段的活动 → 必须从 episodes 按时间窗聚合真实数据
+_TEMPORAL_QUERY_RE = re.compile(
+    r"(上午|下午|早上|晚上|夜里|凌晨|中午|今天|昨天|前天|最近|刚才"
+    r"|这.{0,3}天|近.{0,3}天|这一星期|这一周|近一周)"
+    r".{0,6}(做了|干了|做了什么|干了什么|做过|干过|在做|在干什么|"
+    r"学习了|学了|查到|查了|看了|总结了)"
+    r"|(做了|干了)" +
+    r".{0,6}(上午|下午|早上|晚上|夜里|凌晨|中午|今天|昨天|最近|刚才)")
 
 
 _REALTIME_DIRECTIVE = (
@@ -424,6 +434,170 @@ class ChatResponder:
             logger.debug("daemon status probe failed: %s", e)
             return ""
 
+    # P1-TEMPORAL (2026-09-10): 时间窗口活动摘要 — 修复"上午做了什么"说谎
+    def _activity_summary_block(self, message: str = "") -> str:
+        """当用户问某个时间段的活动时，从 episodes 按时间窗聚合真实数据。
+
+        这是 OCOS 诚实性的底线保障 — LLM 在上下文里必须看到真实数据
+        才能如实回答；缺数据 = 上下文裁剪丢了 = LLM 被迫说谎。
+        """
+        # 1) 判断时间范围
+        now = datetime.now(timezone.utc)
+        today = now.date()
+        target_start = None
+        target_end = None
+        window_label = ""
+
+        if not message:
+            return ""
+
+        # UTC→北京时间
+        bj = now.astimezone(timezone(timedelta(hours=8)))
+        bj_today = bj.date()
+
+        if "上午" in message or "早上" in message or "凌晨" in message:
+            # 北京 06:00-12:00 → UTC 前一天 22:00 ~ 今天 04:00
+            bj_start = datetime.combine(bj_today, time(6, 0), tzinfo=bj.tzinfo)
+            bj_end = datetime.combine(bj_today, time(12, 0), tzinfo=bj.tzinfo)
+            target_start = bj_start.astimezone(timezone.utc)
+            target_end = bj_end.astimezone(timezone.utc)
+            window_label = "今天上午(北京时间 06:00-12:00)"
+        elif "下午" in message or "中午" in message:
+            bj_start = datetime.combine(bj_today, time(12, 0), tzinfo=bj.tzinfo)
+            bj_end = datetime.combine(bj_today, time(18, 0), tzinfo=bj.tzinfo)
+            target_start = bj_start.astimezone(timezone.utc)
+            target_end = bj_end.astimezone(timezone.utc)
+            window_label = "今天下午(北京时间 12:00-18:00)"
+        elif "晚上" in message or "夜里" in message:
+            bj_start = datetime.combine(bj_today, time(18, 0), tzinfo=bj.tzinfo)
+            bj_end = datetime.combine(bj_today, time(23, 59, 59), tzinfo=bj.tzinfo)
+            target_start = bj_start.astimezone(timezone.utc)
+            target_end = bj_end.astimezone(timezone.utc)
+            window_label = "今天晚上(北京时间 18:00-24:00)"
+        elif "刚才" in message:
+            target_start = now - timedelta(minutes=15)
+            target_end = now
+            window_label = "最近 15 分钟"
+        elif "昨天" in message:
+            yesterday = bj_today - timedelta(days=1)
+            bj_start = datetime.combine(yesterday, time(0, 0), tzinfo=bj.tzinfo)
+            bj_end = datetime.combine(yesterday, time(23, 59, 59), tzinfo=bj.tzinfo)
+            target_start = bj_start.astimezone(timezone.utc)
+            target_end = bj_end.astimezone(timezone.utc)
+            window_label = "昨天"
+        elif "前天" in message:
+            day_before = bj_today - timedelta(days=2)
+            bj_start = datetime.combine(day_before, time(0, 0), tzinfo=bj.tzinfo)
+            bj_end = datetime.combine(day_before, time(23, 59, 59), tzinfo=bj.tzinfo)
+            target_start = bj_start.astimezone(timezone.utc)
+            target_end = bj_end.astimezone(timezone.utc)
+            window_label = "前天"
+        else:
+            # 默认: 最近 8 小时
+            target_start = now - timedelta(hours=8)
+            target_end = now
+            window_label = "最近 8 小时"
+
+        try:
+            import sqlite3, json as _json
+            from collections import Counter
+            db = sqlite3.connect(self._db_path)
+            db.row_factory = sqlite3.Row
+            cur = db.cursor()
+            parts = []
+
+            # 2) action 分布
+            cur.execute(
+                "SELECT action, COUNT(*) as cnt FROM episodes "
+                "WHERE created_at >= ? AND created_at <= ? "
+                "GROUP BY action ORDER BY cnt DESC LIMIT 12",
+                (target_start.isoformat(), target_end.isoformat()))
+            rows = cur.fetchall()
+            if rows:
+                total = sum(r['cnt'] for r in rows)
+                dist = ", ".join(f"{r['action'].split('.')[0]}×{r['cnt']}"
+                                 for r in rows[:10])
+                parts.append(
+                    f"【时间窗活动: {window_label}】共 {total} 条记录，"
+                    f"动作分布: {dist}")
+            else:
+                parts.append(f"【时间窗活动: {window_label}】DB 中无此时间段的记录")
+
+            # 3) goal_result 成败统计
+            cur.execute(
+                "SELECT COUNT(*) FROM episodes "
+                "WHERE action='goal_result' AND created_at >= ? AND created_at <= ?",
+                (target_start.isoformat(), target_end.isoformat()))
+            goal_total = cur.fetchone()[0]
+            if goal_total > 0:
+                cur.execute(
+                    "SELECT COUNT(*) FROM episodes "
+                    "WHERE action='goal_result' AND created_at >= ? AND created_at <= ? "
+                    "AND outcome LIKE '%true%'",
+                    (target_start.isoformat(), target_end.isoformat()))
+                goal_ok = cur.fetchone()[0]
+                goal_fail = goal_total - goal_ok
+                # 前几条里程碑 (goal_result 详情)
+                cur.execute(
+                    "SELECT substr(decision,1,120) as d, created_at "
+                    "FROM episodes "
+                    "WHERE action='goal_result' AND created_at >= ? AND created_at <= ? "
+                    "ORDER BY rowid DESC LIMIT 5",
+                    (target_start.isoformat(), target_end.isoformat()))
+                milestones = cur.fetchall()
+                ms_texts = []
+                for m in milestones:
+                    text = (m['d'] or '').replace('\n', ' ')[:100]
+                    if text:
+                        ms_texts.append(
+                            f"  [{(m['created_at'] or '')[11:16]}] {text}")
+                parts.append(
+                    f"目标执行: {goal_total} 次 (成功 {goal_ok}, 失败 {goal_fail})"
+                    + ("\n关键结果:\n" + "\n".join(ms_texts)
+                       if ms_texts else ""))
+
+            # 4) self_check / boot 等系统事件
+            cur.execute(
+                "SELECT action, COUNT(*) as cnt FROM episodes "
+                "WHERE action IN ('self_check.run','boot_awareness.run',"
+                "'continuity_boot_check','vitals_report.generate') "
+                "AND created_at >= ? AND created_at <= ? "
+                "GROUP BY action",
+                (target_start.isoformat(), target_end.isoformat()))
+            sys_rows = cur.fetchall()
+            if sys_rows:
+                sys_str = ", ".join(
+                    f"{r['action'].split('.')[0]}×{r['cnt']}" for r in sys_rows)
+                parts.append(f"系统事件: {sys_str}")
+
+            # 5) conversation (用户交互)
+            cur.execute(
+                "SELECT substr(context,1,100) as ctx, decision, created_at "
+                "FROM episodes "
+                "WHERE action='conversation_reply' AND created_at >= ? AND created_at <= ? "
+                "ORDER BY rowid DESC LIMIT 3",
+                (target_start.isoformat(), target_end.isoformat()))
+            convs = cur.fetchall()
+            if convs:
+                conv_lines = []
+                for c in convs:
+                    ctx_str = c['ctx'] or ''
+                    try:
+                        ctx_obj = _json.loads(ctx_str) if ctx_str.startswith('{') else {}
+                    except Exception:
+                        ctx_obj = {}
+                    user_msg = (ctx_obj.get('content') or ctx_str)[:50]
+                    bot_reply = (c['decision'] or '')[:60]
+                    ts = (c['created_at'] or '')[11:16]
+                    conv_lines.append(f"  [{ts}] 你: {user_msg} → 我: {bot_reply}")
+                parts.append("用户交互:\n" + "\n".join(conv_lines))
+
+            db.close()
+            return "\n".join(parts) if parts else ""
+        except Exception as e:
+            logger.debug("activity summary block failed: %s", e)
+            return ""
+
     # P2-USER-PROFILE (2026-09-09): 从对话历史提炼用户画像
     def _user_profile_block(self) -> str:
         """从 DB 对话历史提炼：用户常让做什么、拒绝过什么、最近让做过什么。"""
@@ -599,6 +773,12 @@ class ChatResponder:
         ds = self._daemon_status_block()
         if ds:
             lines.append(ds)
+
+        # P1-TEMPORAL: 时间窗口活动摘要（用户问"上午做了什么"等 → 按时间窗聚合真实数据）
+        if _TEMPORAL_QUERY_RE.search(message or ""):
+            asb = self._activity_summary_block(message)
+            if asb:
+                lines.append(asb)
 
         # P2-USER-PROFILE: 用户画像（让 OCOS 知道主人常让做什么）
         up = self._user_profile_block()
