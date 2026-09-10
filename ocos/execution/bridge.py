@@ -443,12 +443,15 @@ class DecisionBridge:
             llm = self._handler_dag_task(SimpleNamespace(payload={
                 "description": description, "task_id": getattr(task, "task_id", ""),
                 "auto_readonly": task_type in _DAG_AUTO_TYPES}))
+            # Phase 1 (Mutation): command 字段提升到顶层 — agent_runtime
+            # 用 dag_result.get("command") 取，llm 内部有 command（_run_one 回传）
+            _cmd = llm.get("command", "") or ""
             if llm.get("ok"):
                 self._audit_record(
                     contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
                     status="completed",
                     summary=f"dag_{task_type}: {str(llm.get('stdout', llm.get('applied', '')))[:150]}")
-                return {"status": "completed", "result": llm}
+                return {"status": "completed", "result": llm, "command": _cmd}
             if llm.get("pending"):
                 # S1.1: FILE_WRITE 强制审批 — 待批而非失败/执行
                 self._audit_record(
@@ -456,14 +459,16 @@ class DecisionBridge:
                     status="pending",
                     summary=f"dag_{task_type}: {str(llm.get('error', ''))[:150]}")
                 return {"status": "pending_approval",
-                        "reason": str(llm.get("error", "file_write requires approval"))}
+                        "reason": str(llm.get("error", "file_write requires approval")),
+                        "command": _cmd}
             # UX-G: LLM 判定不可执行（描述模糊/无动作）→ 诚实 failed，
             # 落入 goal_result 摘要；不再堆无法批准的待批噪音
             # FIX-失败遮蔽: 真实原因若藏在 blocked/stderr/exit_code 里，
             # 会被默认兜底掩盖成 "LLM 无法执行此任务"— 用显式提取函数,
             # 让执行者/用户看到真实失败原因而非模糊文案。
             return {"status": "failed",
-                    "reason": self._execution_failure_reason(llm, description)}
+                    "reason": self._execution_failure_reason(llm, description),
+                    "command": _cmd}
 
         if task_type in _DAG_ASK_TYPES:
             # 审批关闭: 无 LLM 且写类动作无执行器（批准也只能 blocked）→ 诚实失败
@@ -492,16 +497,18 @@ class DecisionBridge:
                 llm = self._handler_dag_task(SimpleNamespace(payload={
                     "description": description, "task_id": "",
                     "auto_readonly": True}))
+                _cmd = llm.get("command", "") or ""
                 if llm.get("ok"):
                     self._audit_record(
                         contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
                         status="completed",
                         summary=f"dag_{task_type}: {str(llm.get('stdout', ''))[:150]}")
-                    return {"status": "completed", "result": llm}
+                    return {"status": "completed", "result": llm, "command": _cmd}
                 # LLM 判定不可执行 → 诚实 failed（归档进 goal_result）
                 return {"status": "failed",
                         "reason": (llm.get("error") or llm.get("block_reason")
-                                   or "LLM 无法转为只读动作")}
+                                   or "LLM 无法转为只读动作"),
+                        "command": _cmd}
             if result is not None:
                 if result.get("ok"):
                     self._audit_record(
