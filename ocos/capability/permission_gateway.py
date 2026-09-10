@@ -93,7 +93,8 @@ _SSRF_RE = re.compile(
 
 # Phase 22 危险指令（保留）
 _DANGEROUS_PATTERNS: list[re.Pattern] = [
-    re.compile(r"ocos\.\w+", re.IGNORECASE),
+    # 具体的自修改 API — 不用 ocos\.\w+ 泛化（会误拦 ocos.db / ocos.json 等合法文件名）
+    re.compile(r"\bocos\.(?:modify_self|modify_identity|write_memory|modify_goal|modify_constitution|approve_evolution|execute_system)\b", re.IGNORECASE),
     re.compile(r"\bmodify_self\b", re.IGNORECASE),
     re.compile(r"\bmodify_identity\b", re.IGNORECASE),
     re.compile(r"\bwrite_memory\b", re.IGNORECASE),
