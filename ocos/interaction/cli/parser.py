@@ -156,6 +156,13 @@ Examples:
     # ── daily-self-care（Phase 1: 每日自我关心只读扫描） ──────
     _add_daily_self_care_parser(subparsers)
 
+    # ── evolution artifact 审核 ──
+    try:
+        from ocos.interaction.cli.commands import evolution as evo_cmd
+        evo_cmd.register(subparsers)
+    except ImportError:
+        pass
+
     return parser
 
 

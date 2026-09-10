@@ -1178,7 +1178,8 @@ class ResidentRuntime:
                 except Exception:
                     pass  # DuckDuckGo 超时/空结果 → 跳过
 
-        # ── Step 5: 自我总结优化方案 (只要 LLMTutor 可用) ──
+        # ── Step 5: 自我总结优化方案 → 写 evolution_artifacts (PENDING) ──
+        # 关键闸门: 方案不直接写 knowledge — 必须经人工审核 (approve) 后才能沉淀
         if tutor._generator is not None and total_new > 0:
             try:
                 summary_prompt = (
@@ -1188,22 +1189,37 @@ class ResidentRuntime:
                     "OCOS 当前架构有 daemon 守护进程、EpistemicDrive 好奇心、"
                     "KnowledgeRegistry 知识沉淀、GrowthOptimizer 自进化护栏。"
                     "请基于这些方向分析 OCOS 可以如何自我升级，提出 3 条具体的优化建议。"
+                    "每条建议要包含: 改动点、预期收益、风险评估 (LOW/MEDIUM/HIGH)。"
                 )
                 summary = tutor.ask(summary_prompt)
                 if summary.success and summary.answer.strip():
-                    from ocos.learning.unified_ingestor import IngestArtifact, SourceChannel
-                    plan_art = IngestArtifact(
-                        channel=SourceChannel.LLM_QA,
-                        content=f"[每日自进化方案] {summary.answer.strip()[:800]}",
-                        title=f"self_improvement_plan_{cycle}",
-                        confidence=0.85,
-                        tags=["self_evolution", "daily_plan"],
-                        knowledge_type="principle",
-                    )
-                    for r in ingestor.ingest(plan_art, owner="daily_evolve_plan"):
-                        if r.status == IngestStatus.STORED:
-                            logger.info(
-                                "  📝 自我优化方案已沉淀到 knowledge")
+                    try:
+                        from ocos.evolution.artifacts import (
+                            EvolutionArtifact, ArtifactType,
+                            EvolutionArtifactStore,
+                        )
+
+                        evo_store = EvolutionArtifactStore(db_path)
+                        evo_art = EvolutionArtifact.new(
+                            type=ArtifactType.PLAN,
+                            title=f"每日自进化方案 (cycle={cycle})",
+                            content=summary.answer.strip(),
+                            summary=summary.answer.strip()[:150],
+                            confidence=0.85,
+                            source_agent="daily_evolve_plan",
+                            tags=["self_evolution", "daily_plan"],
+                            risk_level="MEDIUM",  # 方案默认 MEDIUM 风险
+                            human_review_required=True,
+                        )
+                        evo_store.save(evo_art)
+                        logger.info(
+                            "  📝 自我优化方案已产出 (EVO-%s) → "
+                            "待人工审核后沉淀 knowledge",
+                            evo_art.artifact_id,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "  self-evolution artifact save failed: %s", e)
             except Exception:
                 pass
 

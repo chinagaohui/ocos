@@ -206,6 +206,10 @@ def main(argv: list[str] | None = None) -> int:
             from ocos.interaction.cli.commands.daily_self_care import cmd_daily_self_care
             return cmd_daily_self_care(args, session)
 
+        elif args.command == "evolution":
+            from ocos.interaction.cli.commands.evolution import dispatch as evo_dispatch
+            return evo_dispatch(args)
+
         else:
             parser.print_help()
             return 1
