@@ -33,14 +33,17 @@ def _sandbox_switch_default_off(monkeypatch):
 @pytest.fixture(autouse=True)
 def _isolated_autonomy(monkeypatch, tmp_path):
     """隔离 autonomy_level — 生产 override file (~/.ocos/autonomy_level)
-    会被 daemon 写为 "0"，污染 pytest 环境（goal_arbitration 闸门关闭、
-    policy_engine autonomy_gate 等）。测试默认 autonomy_level=1（可运行
-    策略/仲裁/主动交互）。同时隔离 override file 到 pytest tmpdir。"""
-    from ocos.execution import autonomy as _autonomy_mod
-    monkeypatch.setattr(_autonomy_mod, "get_autonomy_level", lambda: 1)
-    # override file 隔离：用 env 变量指向 tmp_path 里的临时文件
-    monkeypatch.setenv("OCOS_AUTONOMY_OVERRIDE",
-                       str(tmp_path / "autonomy_level"))
+    会被 daemon 写为 "0"，污染 pytest 环境。做法:
+    1. 把 OCOS_AUTONOMY_OVERRIDE 指向 tmp_path 的临时文件（隔离生产文件）
+    2. 临时文件里写 1（默认测试期 autonomy=1 够跑大部分场景）
+    3. 测试可用 monkeypatch.setenv 自行覆盖 OCOS_AUTONOMY_OVERRIDE
+       （如 test_goal_claim 要测 level=0/2），env 优先级 > 文件默认值。
+    注意: 不能 monkeypatch get_autonomy_level() 函数本身 — 那会阻断
+    测试级别的 env override（函数硬编码返回值优先于 env）。"""
+    import os as _os
+    _override = tmp_path / "autonomy_level"
+    _override.write_text("1")  # 默认 1 — 大多数测试不关心具体值，能跑就行
+    monkeypatch.setenv("OCOS_AUTONOMY_OVERRIDE", str(_override))
     monkeypatch.delenv("OCOS_AUTONOMY_LEVEL", raising=False)
     yield
 
