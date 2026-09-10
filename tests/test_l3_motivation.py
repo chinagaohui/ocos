@@ -181,7 +181,8 @@ class TestAutonomyGate:
         stats = _make_hub(db, goal_store=gs, belief_store=bs).scan()
         assert stats["auto_enqueued"] == 1
         pending = gs.load_active()
-        assert pending and pending[0]["source"] == "autonomous"
+        assert pending and pending[0]["source"] in ("autonomous", "goal_genesis")
+        # GoalGenesis 接管后 source=goal_genesis；不可用时 fallback → autonomous
         assert json.loads(pending[0]["metadata"])["autonomous"] is True
         assert pending[0]["origin_level"] == "SELF"
 
@@ -223,12 +224,14 @@ class TestRateLimit:
 # ── 防跑飞 ────────────────────────────────────────────────────────────────
 
 class TestRunawayGuard:
+    # FAILURE_DEMOTE_THRESHOLD=10 + 滑窗成功率 < 30% 双重闸门
     def test_consecutive_failures_demote(self, env_autonomy, db):
         _set_level(env_autonomy, 2)
         hub = _make_hub(db)
-        assert hub.record_result(False) is None   # 1
-        assert hub.record_result(False) is None   # 2
-        info = hub.record_result(False)           # 3 → 降级
+        # 连续 10 次 False → 闸门 1 满足；滑窗成功率 0% < 30% → 闸门 2 满足
+        for _ in range(9):
+            assert hub.record_result(False) is None
+        info = hub.record_result(False)           # 第 10 次 → 降级
         assert info and info["demoted"] is True
         assert info["from"] == 2 and info["to"] == 1
         assert get_autonomy_level() == 1
@@ -237,9 +240,8 @@ class TestRunawayGuard:
         import os
         _set_level(env_autonomy, 2)
         hub = _make_hub(db)
-        hub.record_result(False)
-        hub.record_result(False)
-        hub.record_result(False)
+        for _ in range(10):
+            hub.record_result(False)
         audit_dir = tmp_path / "audit"
         files = list(audit_dir.glob("*.jsonl")) if audit_dir.exists() else []
         assert files, "降级必须留审计 JSONL"
@@ -250,18 +252,20 @@ class TestRunawayGuard:
     def test_success_resets_counter(self, env_autonomy, db):
         _set_level(env_autonomy, 2)
         hub = _make_hub(db)
+        # 1 次失败 → 1 次成功 → 重置计数
         hub.record_result(False)
-        hub.record_result(False)
-        assert hub.record_result(True) is None  # 成功重置
-        hub.record_result(False)
-        assert hub.record_result(False) is None  # 未达 3 连败
-        assert get_autonomy_level() == 2
+        assert hub.record_result(True) is None  # 成功重置连续计数
+        # 之后 9 次失败 → 连续计数 9 < 10 → 不降级
+        for _ in range(9):
+            hub.record_result(False)
+        assert get_autonomy_level() == 2   # 未达 10 连败
 
     def test_demote_not_below_zero(self, env_autonomy, db):
         _set_level(env_autonomy, 0)
         hub = _make_hub(db)
-        hub.record_result(False)
-        hub.record_result(False)
+        # 前 9 次 → 不降级；第 10 次 → 触发降级检查
+        for _ in range(9):
+            assert hub.record_result(False) is None
         info = hub.record_result(False)
         assert info["demoted"] is False         # 已在 LEVEL0，如实上报
         assert get_autonomy_level() == 0

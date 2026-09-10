@@ -254,6 +254,8 @@ class TestS5ProactiveReport:
         rt._channel_link = None
         rt._autonomous_inflight = deque(["GOAL-AUTO-test1"])
         rt._motivation = None
+        rt._recent_goal_push = {}        # UX-J2: retry 去重（2026-09-10 新增属性）
+        rt._goal_retry_counts = {}
 
         # 历史结果先落库（首次推送只定位游标，历史不重播）
         seed_episode(db, source="goal_result", action="goal_result",
@@ -285,6 +287,8 @@ class TestS5ProactiveReport:
         rt._channel_link = None
         rt._autonomous_inflight = deque(["GOAL-AUTO-x"])
         rt._motivation = hub
+        rt._recent_goal_push = {}        # UX-J2: retry 去重（2026-09-10 新增属性）
+        rt._goal_retry_counts = {}
 
         seed_episode(db, source="goal_result", action="goal_result",
                      decision="✓ 历史结果", tags=["goal_result"])

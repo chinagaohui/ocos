@@ -148,16 +148,17 @@ class TestS7LossOfControlBrake:
         assert rt._braked is False
 
     def test_consecutive_failures_auto_demote(self, tmp_path):
-        """连败 ×3 → 自动降级 LEVEL 2→1 + 审计 + 如实上报（防跑飞）。"""
+        """连败 ×10 → 自动降级 LEVEL 2→1 + 审计 + 如实上报（防跑飞双重闸门）。"""
         db = tmp_path / "life.db"
         from ocos.execution.autonomy import set_autonomy_level
         set_autonomy_level(2)
         from ocos.daemon.motivation import MotivationHub
         notified: list[str] = []
         hub = MotivationHub(db_path=str(db), notify_fn=notified.append)
-        assert hub.record_result(False) is None    # 1
-        assert hub.record_result(False) is None    # 2
-        info = hub.record_result(False)            # 3 → 降级
+        # 9 次 → 未达阈值；第 10 次 → 降级
+        for _ in range(9):
+            assert hub.record_result(False) is None
+        info = hub.record_result(False)
         assert info and info["demoted"] is True
         assert info["from"] == 2 and info["to"] == 1
         from ocos.execution.autonomy import get_autonomy_level

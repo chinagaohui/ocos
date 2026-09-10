@@ -1091,13 +1091,13 @@ class ResidentRuntime:
                     self._result_cursor_init = True
                     return
                 rows = conn.execute(
-                    "SELECT rowid, substr(decision,1,4000), created_at, outcome "
-                    "FROM episodes WHERE tags LIKE '%goal_result%' AND rowid > ? "
+                    "SELECT rowid, substr(decision,1,4000), created_at, outcome,"
+                    " goal FROM episodes WHERE tags LIKE '%goal_result%' AND rowid > ? "
                     "ORDER BY rowid LIMIT 5",
                     (self._last_result_rowid,)).fetchall()
             finally:
                 conn.close()
-            for rid, decision, created, outcome in rows:
+            for rid, decision, created, outcome, ep_goal in rows:
                 # UX-J2 摘要化 + retry 去重
                 summary = self._summarize_goal_result(decision, outcome)
                 # 提取 goal key (目标标题前 30 字) 用于 retry 去重
@@ -1149,13 +1149,17 @@ class ResidentRuntime:
                     self._autonomous_inflight.popleft()
                     if self._motivation is not None:
                         success = True
+                        oc: dict = {}
                         try:
                             oc = json.loads(outcome or "{}")
                             success = bool(oc.get("success", True))
                         except (ValueError, TypeError):
                             pass
                         try:
-                            self._motivation.record_result(success)
+                            # P0-B: 传 outcome dict + goal，让 motivation 消费
+                            # FailureDiagnoser 诊断 non-retryable 失败
+                            self._motivation.record_result(
+                                success, outcome=oc, goal=ep_goal or "")
                         except Exception:
                             logger.exception("Motivation record_result failed")
 

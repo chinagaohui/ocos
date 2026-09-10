@@ -165,6 +165,16 @@ class MotivationHub:
                 )
                 self._record_fuse_episode(c.description)
                 continue
+            # P0-A (2026-09-10): 被动防御 — 近 7 天内有同域 non-retryable
+            # failure lesson（DEPENDENCY_MISSING/TOOL_UNAVAILABLE）→ 不再
+            # propose 同类目标，避免反复踩同一坑
+            if self._has_recent_non_retryable_failure(c.description):
+                logger.info(
+                    "MotivationHub: skip propose — recent non-retryable "
+                    "failure lesson for domain: %s",
+                    c.description[:80],
+                )
+                continue
             self._propose(c, level, stats)
         return stats
 
@@ -460,7 +470,9 @@ class MotivationHub:
 
         # ── 落地: 低风险直写 goals 表，其余进待批 ────────────────────
         goal_id = f"GOAL-AUTO-{uuid.uuid4().hex[:12]}"
+        via = "unknown"  # P0-pre: 提前初始化（之前两个分支漏赋值 → NameError）
         if level >= 2 and c.low_risk and self._goal_store is not None:
+            via = "goals_table"
             # P1: authority 从 AUTONOMOUS 改为 PROPOSAL（走 GoalGenesis 宪法通道）
             prop_id = prop.proposal_id if prop else None
             self._goal_store.save(
@@ -479,6 +491,7 @@ class MotivationHub:
             if prop and genesis:
                 genesis.mark_completed(prop.proposal_id)
         elif self._pending_store is not None:
+            via = "pending_store"
             pid = self._pending_store.enqueue(
                 action_type="autonomous_goal",
                 target=goal_id,
@@ -734,7 +747,9 @@ class MotivationHub:
 
     # ── 防跑飞：结果闭环 + 连续失败自动降级 ──────────────────────────
 
-    def record_result(self, success: bool) -> dict | None:
+    def record_result(self, success: bool,
+                      outcome: dict | None = None,
+                      goal: str | None = None) -> dict | None:
         """daemon 在自主目标 goal_result 到达时调用（success 为真实 outcome）。
 
         降级双重闸门（v2 抗噪加固）:
@@ -742,6 +757,11 @@ class MotivationHub:
           2) 近 FAILURE_DEMOTE_WINDOW 次 goal_result 里成功率 < 30%
              （避免 writer 偶发失败就把整体打成"失控"）
         两个条件同时满足才降级。success=True 重置连续计数。
+
+        P0-B (2026-09-10): 失败时消费 FailureDiagnoser → 若 cause 为
+        DEPENDENCY_MISSING/TOOL_UNAVAILABLE/PERMISSION_DENIED 则写带
+        non_retryable=True 的 failure lesson，让后续 propose 阶段的
+        _has_recent_non_retryable_failure() 能拦截同类目标。
 
         M1: 成功后自动续 goal，避免 goal 供给断档 (active=0 空转).
         """
@@ -762,6 +782,25 @@ class MotivationHub:
                 logger.debug("followup injection failed", exc_info=True)
             return None
         self._consecutive_failures += 1
+
+        # ── P0-B: 失败诊断 → non-retryable lesson ──────────────────
+        # 用 outcome 构造一个最小 episode-like 对象给 FailureDiagnoser
+        if outcome or goal:
+            try:
+                _diag = self._diagnose_and_record_non_retryable(
+                    outcome or {}, goal or "")
+                if _diag:
+                    logger.info(
+                        "MotivationHub: diagnosed non-retryable failure "
+                        "(cause=%s, goal=%s) — recorded lesson",
+                        _diag, (goal or "")[:60])
+                    # 既然是 non-retryable，不需要累计连续失败来降级
+                    # 直接重置计数（这个失败不会"传染"到下一个目标）
+                    self._consecutive_failures = 0
+                    return {"diagnosed": True, "cause": _diag,
+                            "non_retryable": True}
+            except Exception as e:
+                logger.debug("failure diagnose skipped: %s", e)
 
         # ── 闸门 1: 连续失败数 ────────────────────────────
         if self._consecutive_failures < FAILURE_DEMOTE_THRESHOLD:
@@ -995,15 +1034,133 @@ class MotivationHub:
                 oc = json.loads(outcome_blob) if outcome_blob else {}
             except Exception:
                 oc = {}
-            ok = oc.get("success", True)
+            # P1-A (2026-09-10): outcome NULL/缺失 → fail-closed
+            # 原 oc.get("success", True) 把 NULL 当作成功 → 熔断被静默跳过
+            ok = oc.get("success", None)
             if ok is False or ok == 0:
                 consec_fail += 1
                 if consec_fail >= threshold:
                     return True
-            else:
+            elif ok is True:
                 break  # 成功打断连续
+            # ok is None → outcome 缺失，不计入连续也不打断（跳过继续看前一条）
 
         return False
+
+    # ── P0-A: 被动防御 — non-retryable failure lesson ──────────────────
+
+    # 不可重试失败 cause 集合（FailureDiagnoser 定义的终态错误）
+    _NON_RETRYABLE_CAUSES = frozenset({
+        "dependency_missing",
+        "tool_unavailable",
+        "permission_denied",
+    })
+
+    def _has_recent_non_retryable_failure(self, description: str,
+                                          days: int = LOOKBACK_DAYS) -> bool:
+        """P0-A (2026-09-10): 近 N 天内是否存在同域 non-retryable failure lesson。
+
+        查 source='lesson' 且 outcome.non_retryable=True 或 tags 包含
+        _NON_RETRYABLE_CAUSES 的 episodes。如果匹配到，说明这个问题已经被
+        诊断为"重试不会解决"，不应该再 propose 同类目标。
+
+        这是对 _is_goal_fused 的补充：熔断是"连续失败 N 次后停"，而这里是
+        "只要有一条 non-retryable lesson 就立即停" — 更硬的防御。
+        """
+        key = (description or "")[:30]
+        since = (datetime.now(timezone.utc)
+                 - timedelta(days=days)).isoformat()
+        try:
+            conn = _open_ro(self._db_path)
+            try:
+                rows = conn.execute(
+                    "SELECT tags, outcome FROM episodes "
+                    "WHERE source='lesson' AND goal LIKE ? "
+                    "AND created_at >= ? "
+                    "ORDER BY created_at DESC LIMIT 20",
+                    (f"%{key}%", since),
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return False  # 查询失败 → 不阻断（但也不保证，诚实性 trade-off）
+
+        for row in rows:
+            # 检查 tags 里有没有 non-retryable cause
+            try:
+                tag_list = json.loads(row["tags"] or "[]")
+            except ValueError:
+                tag_list = []
+            if isinstance(tag_list, list):
+                for t in tag_list:
+                    if t in self._NON_RETRYABLE_CAUSES:
+                        return True
+            # 检查 outcome 里有没有 non_retryable 标记
+            try:
+                oc = json.loads(row["outcome"] or "{}")
+            except ValueError:
+                oc = {}
+            if oc.get("non_retryable") is True:
+                return True
+
+        return False
+
+    def _diagnose_and_record_non_retryable(self, outcome: dict,
+                                           goal: str) -> str | None:
+        """P0-B (2026-09-10): 用 FailureDiagnoser 诊断失败，若是 non-retryable
+        则写一条带 non_retryable=True 的 failure lesson。
+
+        Returns:
+            non-retryable cause 字符串，或 None（可重试/无法诊断）
+        """
+        from ocos.learning.experience_learning import FailureDiagnoser
+
+        # 构造最小 episode-like 对象（FailureDiagnoser 用 getattr 取属性）
+        class _MiniEp:
+            pass
+        ep = _MiniEp()
+        ep.outcome = outcome
+        ep.decision = (outcome.get("error") or outcome.get("reason")
+                       or outcome.get("result") or goal)
+
+        diag = FailureDiagnoser.diagnose(ep)
+        if diag is None:
+            return None
+        cause = getattr(diag, "cause", None) or getattr(diag, "cause_name", "")
+        if cause not in self._NON_RETRYABLE_CAUSES:
+            return None  # 可重试的失败 → 不写 non-retryable lesson
+
+        # 写 failure lesson episode（带 non_retryable 标记 + cause tag）
+        try:
+            from ocos.memory.episode.store import EpisodeStore
+            from ocos.memory.episode.models import Episode
+            store = EpisodeStore(db_path=self._db_path)
+            store.initialize()
+            ep_lesson = Episode(
+                id=f"EP-NONRETRY-{uuid.uuid4().hex[:10]}",
+                experience_id=f"NONRETRY-{uuid.uuid4().hex[:8]}",
+                source="lesson",
+                action="non_retryable_failure",
+                goal=(goal or "unknown")[:100],
+                decision=(
+                    f"【不可重试】cause={cause}, goal={goal[:80] if goal else '?'},"
+                    f" evidence={diag.signals_hit if hasattr(diag, 'signals_hit') else ''}"
+                )[:4000],
+                outcome={
+                    "success": False,
+                    "non_retryable": True,
+                    "cause": cause,
+                    "signals_hit": getattr(diag, "signals_hit", []),
+                    "suggestion": getattr(diag, "suggestion", ""),
+                },
+                significance_score=0.9,
+                tags=["failure_lesson", cause, "non_retryable"],
+            )
+            store.save(ep_lesson)
+        except Exception as e:
+            logger.debug("non-retryable lesson save failed: %s", e)
+
+        return cause
 
     def _record_fuse_episode(self, description: str) -> None:
         """写熔断 episode — 防止同一 goal 再次 propose。"""
