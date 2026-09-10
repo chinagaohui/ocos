@@ -1412,6 +1412,8 @@ class DecisionBridge:
                         SimpleNamespace(payload={"command": _retried_cmd}))
                     if run_result.get("ok"):
                         run_result["_executed_command"] = _retried_cmd
+            # Phase 1 (Mutation): 回传原始 command → agent_runtime 需它生成 mutation_policy
+            run_result.setdefault("command", command)
             return run_result
 
         # UX-I+: 多动作任务（"uname/df/free/uptime 汇总"类）— LLM 可输出

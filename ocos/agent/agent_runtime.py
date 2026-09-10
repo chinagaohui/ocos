@@ -1395,7 +1395,7 @@ class AgentRuntime:
                 logger.debug("world source bind skipped: %s", _wse)
 
     def _replan_failed_task(self, task_id: str, task: Any,
-                            reason: str) -> dict[str, Any]:
+                            reason: str, cmd: str = "") -> dict[str, Any]:
         """Phase 49-C (L4): 失败任务重规划决策。
 
         用 FailureDiagnoser 分类失败原因 → TaskReplanner 决定动作:
@@ -1479,7 +1479,7 @@ class AgentRuntime:
             # P5.1 (AGI 计划): 不可修正/重试耗尽失败 → 教训回学习管道（feed G1）
             # （模糊任务/工具受限/重试耗尽 → honest failed + 教训入库）
             meta["lesson"] = self._record_failure_lesson(
-                task_id, task, diag, decision, reason)
+                task_id, task, diag, decision, reason, cmd=cmd)
         return meta
 
     def _revise_task_description(self, base: str, reason: str,
@@ -1505,7 +1505,7 @@ class AgentRuntime:
 
     def _record_failure_lesson(self, task_id: str, task: Any,
                                diagnosis: Any, decision: Any,
-                               reason: str) -> dict[str, Any]:
+                               reason: str, cmd: str = "") -> dict[str, Any]:
         """P5.1 (AGI 计划): 失败教训回学习管道 — 不可修正失败 → LESSON 入库。
 
         对齐 G5（失败归因重规划）: 归因已由 FailureDiagnoser 完成（确定性
@@ -1566,6 +1566,17 @@ class AgentRuntime:
                     # 格式: "<normalized_goal>|<cause>"
                     # 替代原来的 LIKE 模糊匹配，避免 30 字截断丢失语义
                     "failure_signature": _signature,
+                    # Phase 1 (Mutation): failure_lesson（描述性，给 LLM 看）
+                    "failure_lesson": {
+                        "cause": _cause,
+                        "evidence": {
+                            "command": (cmd or "")[:200],
+                            "stderr": (reason or "")[:500],
+                        },
+                    },
+                    # Phase 1 (Mutation): mutation_policy（约束性，给 Mutation Engine 消费）
+                    # 确定性生成，无 LLM。None 表示该 cause 不支持 mutation。
+                    **({"mutation_policy": _gen_policy} if (_gen_policy := self._generate_mutation_policy(_cause, cmd or "", reason or "")) else {}),
                 },
                 goal=description[:200],
                 decision=(f"[{artifact.artifact_type.value}] "
@@ -1612,6 +1623,72 @@ class AgentRuntime:
         except Exception as e:
             logger.debug("failure lesson recording skipped: %s", e)
         return lesson
+
+    @staticmethod
+    def _generate_mutation_policy(cause: str, cmd: str, stderr: str) -> dict | None:
+        """Phase 1 (Mutation): 根据 cause + cmd + stderr 确定性生成 mutation_policy.
+
+        三种 mutation_level（BV4 范围）:
+          - permission_denied  → action level  → deny.patterns（正则提取被拒路径）
+          - dependency_missing  → tool level   → deny.commands（从 command 首词提取）
+          - sql_schema_mismatch → planning level → deny.pattern（固定模板，BV5 消费）
+        其他 cause → 返回 None（不生成 mutation_policy，保持旧 lesson 结构兼容）。
+
+        冻结约束:
+          - Deterministic. No LLM. 相同输入 → 相同输出。
+          - 必须带 mutation_policy_version = "1.0"。
+          - MAX_RETRY = 1（per-Action transaction）。
+        """
+        import re
+        _cmd = (cmd or "").strip()
+        _stderr = (stderr or "").strip()
+
+        # 只有三种 cause 生成 mutation_policy（BV4 范围）
+        if cause == "permission_denied":
+            # 路径提取: 优先引号内路径，fallback 冒号后路径，再 fallback command 最后一个词
+            path = ""
+            m = re.search(r"['\"]([^'\"]+)['\"]", _stderr)
+            if m:
+                path = m.group(1)
+            else:
+                m = re.search(r"(\S+):\s*(?:Permission denied|cannot open)", _stderr)
+                if m:
+                    path = m.group(1)
+            if not path and _cmd:
+                path = _cmd.split()[-1] if _cmd.split() else ""
+            return {
+                "mutation_policy_version": "1.0",
+                "level": "action",
+                "deny": {"patterns": [path] if path else []},
+                "retry_policy": {"max_retry": 1},
+            }
+
+        elif cause == "dependency_missing":
+            # 命令名提取: 优先 command 首词，fallback stderr 里 "command not found: xxx" 的 xxx
+            tool = _cmd.split()[0] if _cmd else ""
+            if not tool:
+                m = re.search(r"(?:command not found:\s*)(\S+)", _stderr)
+                if m:
+                    tool = m.group(1)
+            return {
+                "mutation_policy_version": "1.0",
+                "level": "tool",
+                "deny": {"commands": [tool] if tool else []},
+                "retry_policy": {"max_retry": 1},
+            }
+
+        elif cause == "sql_schema_mismatch":
+            # 固定模板 — planning 级 BV5 消费，Phase 3 暂不检查
+            return {
+                "mutation_policy_version": "1.0",
+                "level": "planning",
+                "deny": {"pattern": "query_nonexistent_table_or_column"},
+                "retry_policy": {"max_retry": 1},
+            }
+
+        else:
+            # 其他 cause（timeout, execution_error, llm_conversion_failed 等）→ 不生成
+            return None
 
     def _record_capability_offline(self, task: Any, diagnosis: Any,
                                     reason: str) -> None:
@@ -1787,8 +1864,13 @@ class AgentRuntime:
                                     dag_result.get("reason")
                                     or dag_result.get("error")
                                     or "")[:300]
+                                # Phase 1 (Mutation): 透传原始 command → 供
+                                # _record_failure_lesson 生成 mutation_policy
+                                _cmd = str(
+                                    dag_result.get("command")
+                                    or "")[:200]
                                 replan_meta = self._replan_failed_task(
-                                    tid, task, reason)
+                                    tid, task, reason, cmd=_cmd)
                                 if replan_meta.get("decision") == "retry_pending":
                                     # 本 tick 不推进 cursor — 下 tick 重试同任务
                                     self._task_statuses[tid] = "retry_pending"
