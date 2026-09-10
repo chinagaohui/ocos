@@ -149,6 +149,9 @@ class ResidentRuntime:
         self._last_result_rowid: int = 0    # UX-J: goal_result 增量游标
         self._result_cursor_init: bool = False
         self._result_push_lock = threading.Lock()  # 即时回调与 5-tick 兜底并发推送去重
+        # UX-J2 (2026-09-10): retry 去重 — 同 goal 短时间内反复失败不刷屏
+        self._recent_goal_push: dict[str, float] = {}  # goal_title_prefix → last_push_ts
+        self._goal_retry_counts: dict[str, int] = {}   # goal_title_prefix → retry_count
         if db_path and db_path != ":memory:":
             try:
                 from ocos.interaction.inbox import UserInbox
@@ -945,14 +948,109 @@ class ResidentRuntime:
             logger.exception("Failed to import queued goal: %s", description)
             return False
 
+    @staticmethod
+    def _summarize_goal_result(decision: str, outcome: str) -> str:
+        """UX-J2: 把 goal_result 的长 decision 压缩成 ≤200 字的人类可读摘要.
+
+        原始 decision 可能包含 curl 命令、shell 原始输出、重复失败行、
+        Markdown 大纲等 4000+ 字符的噪声 — 用户不需要看到这些，
+        他们只关心：成功了没 / 做了什么 / 结果怎么样。
+        """
+        # 1) 首行: 目标标题（从 decision 里所有 ✓/✗ 行提取去重的目标名）
+        import re as _re
+        lines = decision.strip().split("\n")
+        # 收集所有 ✓/✗ 行里的目标名（去重，取第一个非 retry 的）
+        goal_title = ""
+        seen_titles = set()
+        for ln in lines:
+            stripped = ln.strip()
+            if not stripped or stripped[0] not in ("✓", "✗"):
+                continue
+            m = _re.match(r"^[✓✗]\s*(.+?)\s*(?:→|$)", stripped)
+            if m:
+                title = m.group(1)[:60]
+                title = _re.sub(r"\s*→\s*retry.*$", "", title).strip()
+                if title not in seen_titles:
+                    seen_titles.add(title)
+                    if not goal_title:
+                        goal_title = title
+                    if "retry" not in title.lower() and "sqlite" not in title.lower():
+                        goal_title = title
+                        break
+        if not goal_title:
+            for ln in lines:
+                if ln.strip():
+                    goal_title = ln.strip()[:60]
+                    break
+
+        # 结果标记优先用 outcome JSON（执行器真值，而非 decision 里可能混的行）
+        success_mark = "?"
+
+        # 2) 结果状态: 从 outcome JSON 判断 + 从 decision 尾部找结论
+        is_success = "unknown"
+        try:
+            oc = json.loads(outcome or "{}")
+            is_success = "yes" if oc.get("success") else "no"
+        except Exception:
+            pass
+
+        # 3) 结论行: 找 "【结论摘要】" 后的第一句有意义的话（≤60 字）
+        conclusion = ""
+        for i, ln in enumerate(lines):
+            if "结论" in ln and "摘要" in ln:
+                # 往后找 1-3 行非空内容
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    cl = lines[j].strip().lstrip("*").strip()
+                    if cl and len(cl) >= 6:
+                        conclusion = _re.sub(r"\s+", " ", cl)[:80]
+                        break
+                break
+
+        # 4) 简短失败原因（如果失败且有 retry）
+        fail_reason = ""
+        if is_success == "no":
+            for ln in lines[:15]:
+                if "sqlite3" in ln:
+                    fail_reason = "缺 sqlite3 命令"
+                    break
+                if "sandbox" in ln.lower():
+                    fail_reason = "被沙盒拦截"
+                    break
+                if "timeout" in ln.lower() or "超时" in ln:
+                    fail_reason = "超时"
+                    break
+            if not fail_reason and "retry scheduled" in decision:
+                fail_reason = "重试中"
+
+        # 组装最终摘要 — success_mark 用 outcome 真值（执行器判定，最可信）
+        final_mark = "✓" if is_success == "yes" else ("✗" if is_success == "no" else "?")
+        parts = [f"{final_mark} {goal_title}"]
+        if is_success == "yes":
+            parts.append("✓ 成功")
+        elif is_success == "no":
+            parts.append(f"✗ 失败（{fail_reason or '见详情'}）")
+        if conclusion and "大纲" not in conclusion and "原始输出" not in conclusion:
+            parts.append(conclusion)
+
+        result = " ".join(p for p in parts if p)
+        return result[:200]
+
     def _push_goal_results(self) -> None:
-        """UX-J: 新 goal_result episode → 出站消息（UI 自动弹出结果）。
+        """UX-J: 新 goal_result episode → 出站消息（UI 自动弹出结果）.
+
+        UX-J2 (2026-09-10):
+          1) decision 摘要化 — 4000 字压缩到 ≤200 字（去掉 curl/原始输出/重复）
+          2) retry 去重 — 同 goal 10 分钟内反复失败不刷屏, 只推 "retry #N"
+          3) 完整 decision 仍在 DB 里保留审计, 推给用户的是摘要版
 
         可被两条路径并发调用（即时回调 + 5-tick 兜底），全程持锁
         防止同批 episode 重复推送。
         """
+        import time as _time
         if self._user_inbox is None:
             return
+        now_ts = _time.time()
+        RETRY_WINDOW = 600.0   # 10 分钟内相同 goal 视为 retry
         with self._result_push_lock:
             conn = __import__("sqlite3").connect(
                 self._user_inbox._db_path)  # noqa — 只读查询同库
@@ -973,9 +1071,36 @@ class ResidentRuntime:
             finally:
                 conn.close()
             for rid, decision, created, outcome in rows:
-                result_text = f"目标执行完成（{created[11:19]}）：\n{decision}"
-                self._user_inbox.post_outbound(result_text)
-                self._dispatch_result(result_text)   # L2-3: 结果类附加外发
+                # UX-J2 摘要化 + retry 去重
+                summary = self._summarize_goal_result(decision, outcome)
+                # 提取 goal key (目标标题前 30 字) 用于 retry 去重
+                import re as _re
+                key_match = _re.search(r"[✓✗]\s*(.{3,40}?)\s*(?:→|$)", summary)
+                goal_key = (key_match.group(1) if key_match else summary[:30]).strip()
+
+                last_ts = self._recent_goal_push.get(goal_key, 0)
+                retry_cnt = self._goal_retry_counts.get(goal_key, 0) + 1
+
+                if now_ts - last_ts < RETRY_WINDOW and retry_cnt > 1:
+                    # 窗口内 retry — 只推简短重试计数（不刷完整摘要）
+                    short_text = f"↻ retry #{retry_cnt}: {summary[:100]}"
+                    self._user_inbox.post_outbound(short_text)
+                else:
+                    # 首次或窗口外 — 推完整摘要
+                    result_text = f"目标执行完成（{created[11:19]}）：\n{summary}"
+                    self._user_inbox.post_outbound(result_text)
+
+                self._recent_goal_push[goal_key] = now_ts
+                self._goal_retry_counts[goal_key] = retry_cnt
+
+                # 清理过期条目（> 1 小时）
+                stale_keys = [k for k, t in self._recent_goal_push.items()
+                              if now_ts - t > 3600]
+                for k in stale_keys:
+                    self._recent_goal_push.pop(k, None)
+                    self._goal_retry_counts.pop(k, None)
+
+                self._dispatch_result(summary)  # L2-3: 结果类附加外发（用摘要版）
                 self._last_result_rowid = rid
                 # L3 防跑飞: 在途自主目标的结果 → 连续失败计数/自动降级。
                 # FIFO 配对为近似（daemon 单线程串行认领），诚实标注于
