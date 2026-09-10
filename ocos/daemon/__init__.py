@@ -684,15 +684,18 @@ class ResidentRuntime:
                         logger.exception("Dream cycle failed")
 
                 # ── 持续认知循环 (R5 continuous cognition) ────────────
-                # 每 12 ticks ≈ 60s 做一次: 反思 → LLM验证学习 → 制定计划
-                # 独立于 dream cycle (200 ticks), 时刻保持大脑在工作
-                if (self._hb_ticks % 12 == 0
-                        and self._autonomy_level >= 1
-                        and not self._braked):
-                    try:
+                # 每 60s 做一次: 反思 → LLM验证学习 → 制定计划
+                # 独立于 dream cycle (200 ticks ≈ 16min), 时刻保持大脑在工作
+                # 用时间戳而非 tick 取模 — agent 执行 goal 时 tick 可能不规律
+                try:
+                    from datetime import datetime, timezone
+                    now_ts = datetime.now(timezone.utc).timestamp()
+                    last_cog = getattr(self, "_last_cognition_ts", 0)
+                    if (now_ts - last_cog) >= 60 and self._autonomy_level >= 1 and not self._braked:
                         self._run_continuous_cognition()
-                    except Exception:
-                        logger.debug("continuous cognition failed", exc_info=True)
+                        self._last_cognition_ts = now_ts
+                except Exception:
+                    logger.debug("continuous cognition failed", exc_info=True)
 
                 # Phase 33: 将队列中的目标导入 runtime 的 goal_store
                 self._drain_goal_queue()
