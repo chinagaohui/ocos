@@ -411,7 +411,11 @@ class GoalGenesis:
 
     @staticmethod
     def _probe_dependency_available(dep: str) -> bool:
-        """探测依赖是否可用 (shell command -v / python import)."""
+        """探测依赖是否可用.
+
+        修复: subprocess.run(["command", "-v", dep]) 里的 command 是 shell builtin,
+        Python subprocess 不能直接调用。改用 shutil.which() + subprocess.Popen(..., shell=True)。
+        """
         if not dep:
             return False
         try:
@@ -420,11 +424,15 @@ class GoalGenesis:
                 __import__(module)
                 return True
             else:
-                # shell command -v
+                # 优先 shutil.which (更可靠)
+                import shutil
+                if shutil.which(dep):
+                    return True
+                # 次选 shell=True 跑 "command -v"
                 import subprocess
                 result = subprocess.run(
-                    ["command", "-v", dep],
-                    capture_output=True, timeout=3)
+                    f"command -v {dep}",
+                    shell=True, capture_output=True, timeout=3)
                 return result.returncode == 0
         except Exception:
             return False
