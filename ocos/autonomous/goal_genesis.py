@@ -358,22 +358,29 @@ class GoalGenesis:
             try:
                 rows = conn.execute(
                     """SELECT statement, confidence, scope FROM belief
-                       WHERE scope = 'capability_offline'
-                         AND confidence <= 0.1""").fetchall()
+                       WHERE confidence <= 0.1 AND scope IS NOT NULL""").fetchall()
             except Exception:
                 continue
 
-            for stmt, conf, scope in rows:
-                if not (conf <= 0.1 and agent.lower() in stmt.lower()):
+            for stmt, conf, scope_json in rows:
+                # scope 是 JSON dict: {"type": "capability_offline", "agent": "writer", "dependency": "sqlite3"}
+                try:
+                    scope = json.loads(scope_json or "{}")
+                except Exception:
+                    continue
+                if scope.get("type") != "capability_offline":
+                    continue
+                scope_agent = scope.get("agent", "")
+                if not (scope_agent.lower() == agent.lower() or agent.lower() in stmt.lower()):
                     continue
 
                 # P2b: 探测依赖是否恢复
                 now_ts = __import__("time").time()
                 cooldown_key = f"{agent}:{stmt[:30]}"
                 last_probe = GoalGenesis._capability_probe_cooldown.get(cooldown_key, 0)
+                dep = scope.get("dependency") or self._extract_dependency(stmt, scope_json)
                 if now_ts - last_probe >= 60:
                     GoalGenesis._capability_probe_cooldown[cooldown_key] = now_ts
-                    dep = self._extract_dependency(stmt, scope)
                     if dep and self._probe_dependency_available(dep):
                         try:
                             conn.execute(
@@ -388,8 +395,8 @@ class GoalGenesis:
                             pass
 
                 logger.info(
-                    "capability offline hit: agent[%s] conf=%.1f stmt=%s",
-                    agent.lower(), conf, stmt[:80])
+                    "capability offline hit: agent[%s] conf=%.1f dep='%s' stmt=%s",
+                    agent.lower(), conf, dep or "?", stmt[:80])
                 return True
         return False
 

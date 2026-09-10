@@ -1658,14 +1658,19 @@ class AgentRuntime:
         if db_path:
             try:
                 import uuid as _uuid
+                import json as _json
                 conn = sqlite3.connect(db_path)
                 conn.execute(
                     """INSERT INTO belief
                         (id, statement, confidence, uncertainty, scope, status,
                          created_at, last_updated, source_knowledge_ids, evidence_ids)
-                    VALUES (?, ?, 0.0, 1.0, 'capability_offline', 'active', ?, ?, '[]', '[]')""",
+                    VALUES (?, ?, 0.0, 1.0, ?, 'active', ?, ?, '[]', '[]')""",
                     (f"BLF-CAPOFF-{_uuid.uuid4().hex[:10]}",
-                     belief_text, now_iso, now_iso))
+                     belief_text,
+                     _json.dumps({"type": "capability_offline",
+                                  "agent": agent_type,
+                                  "dependency": dep}),
+                     now_iso, now_iso))
                 conn.commit()
                 conn.close()
                 logger.warning(
