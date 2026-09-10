@@ -54,8 +54,9 @@ FAULT_TO_REPAIR: dict[FaultCategory, list[tuple[RepairType, RepairRisk, str]]] =
         (RepairType.PAUSE_RESUME, RepairRisk.MODERATE, "暂停后恢复调度"),
     ],
     FaultCategory.STATE_CORRUPTION: [
-        (RepairType.ROLLBACK, RepairRisk.HIGH, "回滚到最近检查点"),
-        (RepairType.REBUILD_INDEX, RepairRisk.HIGH, "重建索引"),
+        (RepairType.CLEAR_CACHE, RepairRisk.LOW, "执行 WAL checkpoint 清理日志文件"),
+        (RepairType.REINDEX, RepairRisk.MODERATE, "重建索引并清理碎片"),
+        (RepairType.ROLLBACK, RepairRisk.HIGH, "回滚到最近检查点（仅当前两步失败）"),
     ],
     FaultCategory.SCHEDULER_STALL: [
         (RepairType.RESTART_SUBSYS, RepairRisk.MODERATE, "重启调度器"),
@@ -151,11 +152,19 @@ class RepairProposer:
                 "3. 验证功能正常",
             ],
             RepairType.CLEAR_CACHE: [
+                # V9: target 感知 — daemon_self 的 CLEAR_CACHE 就是 WAL checkpoint
+                "1. 执行 WAL checkpoint 清理日志文件",
+                "2. 验证 checkpoint 后 WAL 文件已 truncate",
+            ] if target in ("daemon_self", "database") else [
                 f"1. 标记 {target} 缓存为待清理",
                 "2. 清空缓存",
                 "3. 验证性能恢复",
             ],
             RepairType.REINDEX: [
+                # V9: 简化为可白名单通过的 2 步（reindex 本身原子，无需显式锁/解锁）
+                "1. 重建索引",
+                "2. 验证查询正常",
+            ] if target in ("daemon_self", "database") else [
                 f"1. 锁住 {target} 写入",
                 "2. 重建索引",
                 "3. 解锁写入",

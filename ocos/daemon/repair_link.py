@@ -44,7 +44,9 @@ def _step_whitelisted(step: str) -> bool:
     return (("索引" in step and "重建" in step) or "REINDEX" in s
             or "清理缓存" in step or "CLEAR_CACHE" in s
             or "重新连接" in step or "RECONNECT" in s
-            or "归档" in step or "修剪" in step)
+            or "归档" in step or "修剪" in step
+            or "WAL" in s or "CHECKPOINT" in s.lower()
+            or "日志" in step and ("清理" in step or "删除" in step))
 
 
 # ── 诊断循环（health_loop 每 N 次体检调用一次） ────────────────────────
@@ -81,14 +83,30 @@ def run_diagnosis_cycle(db_path: str) -> dict:
                             "severity": signal.severity.value,
                             "category": signal.category.value})
 
-        # V9: 环境类 HIGH/CATASTROPHIC 信号 → 主动上报（让用户知道
-        # OCOS 发现了环境问题，不是 silent failure）
-        if signal.is_critical and signal.source in (
-                "host", "network", "daemon_self", "cognition_heartbeat"):
-            env_alerts.append(
-                f"[{signal.source}] {signal.description} "
-                f"(severity={signal.severity.name})")
+        # V9: 环境类 HIGH/CATASTROPHIC 信号 + 附带修复/适配方案
+        env_source = signal.source in (
+            "host", "network", "daemon_self", "cognition_heartbeat")
+
         proposals = proposer.propose(report, signal)
+
+        # V9: 如果是环境信号且有可逆白名单通过的方案 → "告警 + 正在做 X"
+        if env_source and signal.is_critical:
+            approved_steps: list[str] = []
+            for proposal in proposals:
+                if not proposal.reversible:
+                    continue
+                if not all(_step_whitelisted(s) for s in proposal.steps):
+                    continue
+                approved_steps.extend(proposal.steps)
+                break  # 只取第一个通过的方案（最小化扰动）
+            if approved_steps:
+                env_alerts.append(
+                    f"[{signal.source}] {signal.description} → "
+                    f"⚡ 正在修复: {' / '.join(approved_steps)}")
+            else:
+                env_alerts.append(
+                    f"[{signal.source}] {signal.description} "
+                    f"(severity={signal.severity.name})")
         for proposal in proposals:
             if not proposal.reversible:
                 continue  # 不可逆修复不自动入队（诚实保守）
@@ -270,9 +288,16 @@ def _execute_step(db_path: str):
                 ok = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
                 conn.commit()
                 return ok
-            if "清理缓存" in step or "CLEAR_CACHE" in step.upper():
+            # V9: WAL checkpoint — STATE_CORRUPTION 首选自修复步骤
+            step_upper = step.upper()
+            if ("清理缓存" in step or "CLEAR_CACHE" in step_upper
+                    or "WAL" in step_upper
+                    or "CHECKPOINT" in step_upper):
                 conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 conn.commit()
+                wal_path = db_path + "-wal"
+                wal_kb = Path(wal_path).stat().st_size // 1024 if Path(wal_path).exists() else 0
+                logger.info("Repair: WAL checkpoint TRUNCATE done, wal=%dKB", wal_kb)
                 return True
             if "重新连接" in step or "RECONNECT" in step.upper():
                 from ocos.capability_reality.adapter_discovery import (
