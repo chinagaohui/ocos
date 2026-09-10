@@ -1194,7 +1194,9 @@ class ResidentRuntime:
         import sqlite3
         from datetime import datetime, timezone
         db_path = getattr(self, "_db_path", None)
+        logger.info("🧠 cogni_enter db_path=%s", db_path)
         if not db_path:
+            logger.info("🧠 cogni_skip — no db_path")
             return
 
         # ── 限频 LLM 调用 (60s 内只调一次) ──
@@ -1230,21 +1232,35 @@ class ResidentRuntime:
                         self._last_llm_cognition_ts = now_ts
                         # 沉淀到 knowledge
                         try:
-                            ingestor = self._build_ingestor()
+                            ingestor = self._build_ingestor(db_path=db_path)
                             if ingestor is not None and llm_findings:
-                                from ocos.learning.unified_ingestor import IngestArtifact
+                                from ocos.learning.unified_ingestor import IngestArtifact, SourceChannel
                                 art = IngestArtifact(
-                                    content={"question": question, "answer": llm_findings[:500]},
-                                    source="continuous_cognition",
-                                    source_type="concept",
+                                    channel=SourceChannel.LLM_QA,
+                                    content=f"Q: {question}\nA: {llm_findings[:500]}",
+                                    title=f"Cognition Loop: {question[:60]}",
                                     confidence=0.65,
                                     metadata={"reflection_point": reflection_point.get("source", "")},
+                                    knowledge_type="concept",
                                 )
                                 result = ingestor.ingest(art, owner="epistemic_llm")
-                                if result.get("stored", 0) > 0:
-                                    logger.info("🧠 Cognition Loop Step② stored knowledge +%d", result["stored"])
-                        except Exception:
-                            pass
+                                logger.info("🧠 cogni_ingest result=%s", result)
+                                # ingest 可能返回 IngestResult 对象或 dict
+                                stored_count = 0
+                                if hasattr(result, 'status'):
+                                    # IngestResult 对象
+                                    if result.status.value == "stored":
+                                        stored_count = 1
+                                elif isinstance(result, dict):
+                                    stored_count = result.get("stored", 0)
+                                elif isinstance(result, list):
+                                    stored_count = sum(1 for r in result
+                                                       if hasattr(r,'status') and r.status.value=="stored"
+                                                       or isinstance(r,dict) and r.get("status")=="stored")
+                                if stored_count > 0:
+                                    logger.info("🧠 Cognition Loop Step② stored knowledge +%d", stored_count)
+                        except Exception as e:
+                            logger.info("🧠 cogni_ingest err: %s", e)
             except Exception as e:
                 logger.debug("LLM cognition step failed: %s", e)
 
@@ -1257,10 +1273,10 @@ class ResidentRuntime:
                 logger.info("🧠 Cognition Loop Step③ plan generated: %s", plan.get("title", "")[:80])
                 # 写 PENDING evolution artifact (需人工审核)
                 try:
-                    from ocos.evolution.artifacts import EvolutionArtifactStore
+                    from ocos.evolution.artifacts import EvolutionArtifactStore, EvolutionArtifact, ArtifactType
                     store = EvolutionArtifactStore(db_path=db_path)
-                    artifact_id = store.create(
-                        artifact_type="plan",
+                    art = EvolutionArtifact.new(
+                        type=ArtifactType.PLAN,
                         title=plan["title"],
                         summary=plan["summary"],
                         content=plan["content"],
@@ -1270,19 +1286,20 @@ class ResidentRuntime:
                         risk_level="LOW",
                         human_review_required=True,
                     )
-                    if artifact_id:
-                        logger.info("🧠 Cognition Loop Step③ saved PENDING plan → %s", artifact_id)
+                    store.save(art)
+                    logger.info("🧠 Cognition Loop Step③ saved PENDING plan → %s", art.artifact_id)
                 except Exception as e:
-                    logger.debug("cognition plan save failed: %s", e)
+                    logger.info("🧠 cogni_plan_save failed: %s", e)
         except Exception as e:
-            logger.debug("cognition plan step failed: %s", e)
+            logger.info("🧠 cogni_plan_step failed: %s", e)
 
     def _pick_reflection_point(self, db_path: str) -> dict | None:
         """Step①: 挑一个值得反思的点."""
-        import traceback as _tb
+        import sqlite3
         try:
             conn = sqlite3.connect(db_path)
-        except Exception:
+        except Exception as e:
+            logger.info("🧠 pick_reflect sqlite3.connect failed: %s", e)
             return None
 
         # (a) gap
@@ -1322,12 +1339,20 @@ class ResidentRuntime:
         except Exception as e:
             logger.info("🧠 pick_reflect (b) err: %s", e)
 
-        # (c) 新知识
+        # (c) 新知识 — 优先挑 agent 工作沉淀的 (lesson/principle/procedure),
+        #     排除认知循环自己刚刚沉淀的 concept, 避免递归嵌套自激
         try:
             row = conn.execute(
                 "SELECT substr(statement,1,80) as s, scope_domain FROM knowledge "
+                "WHERE scope_domain IN ('lesson','principle','procedure','debug') "
                 "ORDER BY rowid DESC LIMIT 1"
             ).fetchone()
+            if not row:
+                row = conn.execute(
+                    "SELECT substr(statement,1,80) as s, scope_domain FROM knowledge "
+                    "WHERE scope_domain = 'concept' AND statement NOT LIKE '%Q: 新知识%' "
+                    "ORDER BY rowid DESC LIMIT 1"
+                ).fetchone()
             if row and row[0]:
                 conn.close()
                 logger.info("🧠 pick_reflect hit (c) knowledge")
