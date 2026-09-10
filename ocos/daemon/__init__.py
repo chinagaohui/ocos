@@ -711,6 +711,12 @@ class ResidentRuntime:
                     self._auto_approve_pending()
                 except Exception:
                     logger.exception("auto approve pump failed")
+                # B1 管道打通: evolution_artifacts PENDING→APPROVED→goals
+                if self._hb_ticks % 12 == 0:
+                    try:
+                        self._pump_evolution_artifacts()
+                    except Exception:
+                        logger.exception("evolution artifacts pump failed")
                 # UX-1: 认领 CLI 创建的持久化目标（每 tick 最多 1 个）
                 self._claim_persisted_goals()
 
@@ -2010,6 +2016,123 @@ class ResidentRuntime:
             except Exception:
                 logger.exception("auto approve failed: %s", pid)
         return n
+
+    def _pump_evolution_artifacts(self, cap: int = 5) -> int:
+        """B1 管道打通: evolution_artifacts PENDING→APPROVED→goals 表.
+
+        每 12 tick (≈60s) 扫一次:
+          1) PENDING auto_generated + LOW risk + confidence>=0.6 → 自动 APPROVED
+             (去重: 同 summary 已存在 APPROVED 则跳过)
+          2) APPROVED plan (applied_at IS NULL) → 写 goals 表 PENDING
+             (limit=cap, 节流防爆发)
+        """
+        from ocos.evolution.artifacts import (
+            EvolutionArtifactStore, ArtifactStatus, ArtifactType,
+        )
+        store = EvolutionArtifactStore(self._db_path)
+
+        # ── Step 1: 自动批准低风险 PENDING plans ──
+        auto_approved = 0
+        try:
+            pending = store.list(
+                status=ArtifactStatus.PENDING,
+                type=ArtifactType.PLAN,
+                limit=50,
+            )
+            # 去重: 同 summary text 近 10 分钟已有 APPROVED 就跳过
+            recent_approved_summaries: set[str] = set()
+            for art in store.list(
+                status=ArtifactStatus.APPROVED,
+                type=ArtifactType.PLAN,
+                limit=30,
+            ):
+                s = (art.summary or "")[:80].strip()
+                if s:
+                    recent_approved_summaries.add(s)
+
+            for art in pending:
+                if auto_approved >= cap:
+                    break
+                risk = getattr(art, "risk_level", "") or ""
+                conf = getattr(art, "confidence", 0) or 0
+                tags = getattr(art, "tags", []) or []
+                is_auto = "auto_generated" in tags or "continuous_cognition" in tags
+                is_low = risk.upper() in ("LOW", "")
+                is_conf_ok = conf >= 0.55
+                summary_key = (art.summary or "")[:80].strip()
+
+                if is_auto and is_low and is_conf_ok and summary_key not in recent_approved_summaries:
+                    store.review(
+                        art.artifact_id, ArtifactStatus.APPROVED,
+                        reviewer="auto_pump",
+                        comment=f"B1 auto-approve (LOW risk, conf={conf:.2f})",
+                    )
+                    recent_approved_summaries.add(summary_key)
+                    auto_approved += 1
+                    logger.info("🧠 Auto-approved artifact %s (conf=%.2f, risk=%s)",
+                                art.artifact_id[:8], conf, risk)
+        except Exception:
+            logger.exception("pump step 1 (auto-approve) failed")
+
+        # ── Step 2: APPROVED plans → goals 表 ──
+        goals_created = 0
+        try:
+            import sqlite3
+            db = sqlite3.connect(self._db_path)
+            db.row_factory = sqlite3.Row
+
+            approved_null_applied = db.execute("""
+                SELECT artifact_id, title, summary, content, confidence
+                FROM evolution_artifacts
+                WHERE type='plan' AND status='approved' AND applied_at IS NULL
+                  AND risk_level IN ('LOW', '')
+                ORDER BY rowid ASC LIMIT ?""", (cap,)).fetchall()
+
+            for row in approved_null_applied:
+                aid = row["artifact_id"]
+                title = row["title"] or f"Evolution plan {aid[:8]}"
+                summary = row["summary"] or ""
+                # 合成 goal description: 标题 + 摘要前 200 字
+                desc = f"{title}\n\n{summary[:200]}"
+
+                # 检查 goals 表是否已有相同 title 的 goal（防重复）
+                dup = db.execute(
+                    "SELECT id FROM goals WHERE description LIKE ? LIMIT 1",
+                    (f"%{title[:40]}%",)).fetchone()
+                if dup:
+                    logger.info("Pump: skip duplicate goal for artifact %s", aid[:8])
+                    continue
+
+                # 写入 goals 表 (PENDING, source=evolution_artifact)
+                db.execute("""
+                    INSERT OR IGNORE INTO goals
+                    (id, description, status, source, priority, created_at, metadata)
+                    VALUES (?, ?, 'PENDING', 'evolution_artifact', ?, datetime('now'), ?)
+                """, (
+                    f"EVO-GOAL-{aid[:8]}",
+                    desc,
+                    min(2.0, (row["confidence"] or 0.5) * 2 + 0.5),
+                    json.dumps({
+                        "artifact_id": aid,
+                        "confidence": row["confidence"],
+                        "autonomous": True,
+                    }),
+                ))
+                db.commit()
+
+                # 标记 artifact applied
+                store.mark_applied(aid)
+                goals_created += 1
+                logger.info("🚀 Artifact %s → goal (id=EVO-GOAL-%s)", aid[:8], aid[:8])
+
+            db.close()
+        except Exception:
+            logger.exception("pump step 2 (adopt as goals) failed")
+
+        if auto_approved or goals_created:
+            logger.info("🧠 Pump: auto_approved=%d, goals_created=%d",
+                        auto_approved, goals_created)
+        return auto_approved + goals_created
 
     def _claim_persisted_goals(self) -> int:
         """UX-1: 认领 goals 表中 CLI 创建的 PENDING 人类目标。
