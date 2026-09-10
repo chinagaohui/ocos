@@ -337,6 +337,43 @@ class UnifiedIngestor:
     def stats(self) -> dict:
         return dict(self._stats)
 
+    # ── 建议 3: Gap 闭环 ──────────────────────────────────────────
+
+    def resolve_gap(
+        self,
+        gap_id: str,
+        knowledge_ids: list[str],
+    ) -> None:
+        """回写 PredictionGapTracker — 这批摄入知识是否缩小了 gap.
+
+        闭环: PredictionGapTracker.emit_gap_hypothesis → EpistemicDrive.prioritize_by_gap
+             → 定向探索 → UnifiedIngestor.ingest → resolve_gap 回写
+
+        当前简化: 只是在 knowledge 表记录 gap 关联 (用于反查),
+        未来版本可以让 PredictionGapTracker 根据摄入反馈动态更新 gap.
+        """
+        try:
+            if not gap_id or not knowledge_ids:
+                return
+            # 写 marker 表
+            import sqlite3
+            conn = sqlite3.connect(self._db_path)
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS gap_resolutions ("
+                "gap_id TEXT, knowledge_id TEXT, resolved_at TEXT)"
+            )
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).isoformat()
+            for kid in knowledge_ids:
+                conn.execute(
+                    "INSERT INTO gap_resolutions VALUES (?,?,?)",
+                    (gap_id, kid, now),
+                )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.debug("resolve_gap failed: %s", e)
+
 
 __all__ = [
     "UnifiedIngestor",

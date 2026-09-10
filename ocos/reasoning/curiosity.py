@@ -205,6 +205,34 @@ class PredictionGapTracker:
             ),
         }
 
+    def emit_gap_hypothesis(self, top_n: int = 3) -> list[dict[str, Any]]:
+        """输出结构化 gap hypothesis — 给 EpistemicDrive / ReflectionEngine 消费.
+
+        Returns:
+          [{"gap_id": str, "domain": str, "error_magnitude": float,
+            "hypothesis": str, "target_pattern": str}, ...]
+        """
+        hypotheses: list[dict[str, Any]] = []
+        # 按 domain 聚合 + 按 gap 排序
+        for domain, records in self._gaps.items():
+            if not records:
+                continue
+            # 取 gap 最大的 record
+            worst = max(records, key=lambda r: r.gap)
+            hypotheses.append({
+                "gap_id": f"GAP-{domain}-{hash(worst.target_pattern) & 0xFFFFFFFF:x}",
+                "domain": domain,
+                "target_pattern": worst.target_pattern or "",
+                "error_magnitude": worst.gap,
+                "hypothesis": (
+                    f"Domain '{domain}' 中 pattern "
+                    f"'{worst.target_pattern[:40]}' gap={worst.gap:.2f} "
+                    f"— 预测与观察不符, 需要定向探索"
+                ),
+            })
+        hypotheses.sort(key=lambda h: -h["error_magnitude"])
+        return hypotheses[:top_n]
+
 
 # ── EpistemicDrive ───────────────────────────────────────────────────────────
 
@@ -381,6 +409,24 @@ class EpistemicDrive:
 
         goals: list[str] = []
 
+        # ── ReflectionEngine 种子: deepen_topics ──
+        try:
+            conn = sqlite3.connect(self._db_path)
+            seed_rows = conn.execute(
+                "SELECT topic FROM reflection_seed_topics WHERE used=0 ORDER BY rowid DESC LIMIT 2"
+            ).fetchall()
+            for (topic,) in seed_rows:
+                goals.append(f"【反思引导】深入学习: {topic}")
+            # 标记为已用
+            if seed_rows:
+                conn.execute(
+                    "UPDATE reflection_seed_topics SET used=1 WHERE used=0"
+                )
+                conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
         # 探针 1：宿主机工具探索
         tool_probe = self._check_host_tools()
         if tool_probe:
@@ -396,7 +442,7 @@ class EpistemicDrive:
         if boundary_probe:
             goals.append(boundary_probe)
 
-        return goals[:3]
+        return goals[:5]
 
     def _check_host_tools(self) -> str | None:
         """宿主机上有什么工具我没试过用？"""
@@ -559,3 +605,40 @@ class EpistemicDrive:
                 unique.append(g)
 
         return unique[:self._top_n * 3]
+
+    def prioritize_by_gap(self, goal_candidates: list[str]) -> list[str]:
+        """PredictionGapTracker.emit_gap_hypothesis 消费入口.
+
+        根据当前 prediction gap 对 goal candidates 做加权 —
+        让有明确 gap_id 的探索目标优先级更高.
+
+        这是 "预测误差 → 定向探索 → 摄入验证" 闭环的 EpistemicDrive 侧.
+        """
+        hypotheses = self._tracker.emit_gap_hypothesis(top_n=self._top_n)
+        if not hypotheses:
+            return goal_candidates
+
+        # 给每个 hypothesis 生成定向探索目标 — 带 gap_id
+        gap_goals: list[str] = []
+        for h in hypotheses:
+            gap_goals.append(
+                f"【定向探索·gap={h['error_magnitude']:.1%}】"
+                f"domain={h['domain']} "
+                f"gap_id={h['gap_id']} "
+                f"→ 深入验证 hypothesis: {h['hypothesis'][:60]}"
+            )
+
+        # 加权合并: gap_goals 放前面 (高 gap 定向探索优先级高)
+        merged: list[str] = []
+        merged.extend(gap_goals)
+        merged.extend(gap_goals)  # 2x 权重
+        merged.extend(goal_candidates)
+        # 去重
+        seen = set()
+        unique = []
+        for g in merged:
+            key = g[:60]
+            if key not in seen:
+                seen.add(key)
+                unique.append(g)
+        return unique[:len(gap_goals) + len(goal_candidates)]
