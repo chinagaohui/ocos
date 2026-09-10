@@ -2111,8 +2111,10 @@ class ResidentRuntime:
                 # 写入 goals 表 (PENDING, source=evolution_artifact)
                 db.execute("""
                     INSERT OR IGNORE INTO goals
-                    (id, level, description, status, source, priority, created_at, metadata)
-                    VALUES (?, 'AUTO', ?, 'PENDING', 'evolution_artifact', ?, datetime('now'), ?)
+                    (id, level, description, status, source, priority,
+                     created_at, updated_at, metadata)
+                    VALUES (?, 'AUTO', ?, 'PENDING', 'evolution_artifact', ?,
+                            datetime('now'), datetime('now'), ?)
                 """, (
                     f"EVO-GOAL-{aid[:8]}",
                     desc,
