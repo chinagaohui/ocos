@@ -2193,6 +2193,7 @@ class ResidentRuntime:
                 aid = row["artifact_id"]
                 title = row["title"] or f"Evolution plan {aid[:8]}"
                 summary = row["summary"] or ""
+                desc = f"{title}\n\n{summary[:200]}"   # 写入 goals 的 description
 
                 # 精确去重: 查 goals.metadata 里的 artifact_id（而非 title LIKE）
                 dup = db.execute(
@@ -2232,6 +2233,8 @@ class ResidentRuntime:
 
             db.close()
         except Exception:
+            import traceback as _tb
+            _tb.print_exc()  # debug: traceback 直接打 stderr
             logger.exception("pump step 2 (adopt as goals) failed")
 
         if auto_approved or goals_created:
