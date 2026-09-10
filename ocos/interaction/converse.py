@@ -2018,12 +2018,16 @@ class ChatResponder:
                     "或让我帮你执行常用命令（df -h / free -h / 查看日志）。"
             provider = "state-degraded"
         else:
-            # mock 模式（无 LLM key）：保留有用的 context 片段（前 500 字符）
-            # 让测试能验证深度内视/知识边界等路由块被正确注入
+            # mock 模式（无 LLM key）：回显用户消息 + 保留有用的 context 片段
+            # 让测试能验证 message 回显 + 深度内视/知识边界等路由块被正确注入
             _ctx_preview = (context or "")[:2000].strip()
-            reply = (f"[未配置 LLM key] 抱歉，还没配置 API key。\n\n"
-                     f"---\n{_ctx_preview}" if _ctx_preview
-                     else "[未配置 LLM key] 抱歉，还没配置 API key。")
+            _msg = (message or "").strip()[:200]
+            header = (f"[未配置 LLM key] 抱歉，还没配置 API key。\n\n"
+                      f"【你说】{_msg}\n\n")
+            if _ctx_preview:
+                reply = f"{header}---\n{_ctx_preview}"
+            else:
+                reply = header.rstrip()
             provider = "state-mock"
         return {"reply": reply, "provider": provider, "mock": True}
 

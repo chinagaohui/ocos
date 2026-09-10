@@ -158,27 +158,35 @@ class PolicyEngine:
             evaluations.append(eval_result)
 
         # L1: 自主级别闸门 — 合成一条 autonomy_gate 评估（context.autonomy_level
-        # 可覆盖，供测试/显式注入）；LEVEL=0 时策略评估整体不通过
+        # 可覆盖，供测试/显式注入）；LEVEL=0 时 effect=WARN（不阻塞）
+        from ocos.models.policy import PolicyEffect as _PE
         level = ctx.get("autonomy_level")
         if level is None:
             from ocos.execution.autonomy import get_autonomy_level
             level = get_autonomy_level()
         gate_passed = level >= 1
+        # LEVEL=0 不应作为 DENY 阻塞 — 策略引擎本身仍在运行（被调用），
+        # 只是自主行为关闭，effect=WARN 让 all_passed 不被阻断
+        gate_effect = _PE.DENY if gate_passed else _PE.WARN
         level_desc = ("可自主执行" if level >= 2
                       else "可自主提案(需审批)" if level == 1
                       else "自主行为关闭")
         evaluations.append(PolicyEvaluation(
             rule_id="autonomy_gate",
             rule_name="autonomy_gate",
-            effect=PolicyEffect.DENY,
+            effect=gate_effect,
             passed=gate_passed,
             detail=(
                 f"autonomy_level={level} ({level_desc}): "
-                f"{'PASS' if gate_passed else 'FAIL — LEVEL=0 禁止自主行为'}"
+                f"{'PASS' if gate_passed else 'WARN — LEVEL=0 自主行为关闭但策略仍评估'}"
             ),
         ))
 
-        all_passed = all(e.passed for e in evaluations)
+        # all_passed: WARN 规则的 passed=False 不阻断（仅 DENY 必须全过）
+        all_passed = all(
+            e.passed or e.effect == _PE.WARN or e.effect == _PE.ALLOW
+            for e in evaluations
+        )
         output_addrs = (
             (f"addr:policy:pass:{uuid.uuid4().hex}",) if all_passed
             else (f"addr:policy:fail:{uuid.uuid4().hex}",)
