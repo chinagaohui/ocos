@@ -1060,32 +1060,32 @@ class MotivationHub:
 
     def _has_recent_non_retryable_failure(self, description: str,
                                           days: int = LOOKBACK_DAYS) -> bool:
-        """P0-A (2026-09-10): 近 N 天内是否存在同域 non-retryable failure lesson。
+        """P0-A (2026-09-10 + P2): 近 N 天内是否存在同域 non-retryable failure lesson。
 
-        查 source='lesson' 且 outcome.non_retryable=True 或 tags 包含
-        _NON_RETRYABLE_CAUSES 的 episodes。如果匹配到，说明这个问题已经被
-        诊断为"重试不会解决"，不应该再 propose 同类目标。
+        P2 升级: 优先用 failure_signature（normalized_goal|cause）精确匹配，
+        无签名时 fallback 到原 LIKE 模糊匹配（兼容历史 lessons）。
 
         这是对 _is_goal_fused 的补充：熔断是"连续失败 N 次后停"，而这里是
         "只要有一条 non-retryable lesson 就立即停" — 更硬的防御。
         """
-        key = (description or "")[:30]
         since = (datetime.now(timezone.utc)
                  - timedelta(days=days)).isoformat()
         try:
             conn = _open_ro(self._db_path)
             try:
+                # P2 策略 1: 精确签名匹配
+                # 先查所有 non-retryable lessons 的签名片段
                 rows = conn.execute(
-                    "SELECT tags, outcome FROM episodes "
-                    "WHERE source='lesson' AND goal LIKE ? "
+                    "SELECT tags, outcome, context FROM episodes "
+                    "WHERE source='lesson' "
                     "AND created_at >= ? "
-                    "ORDER BY created_at DESC LIMIT 20",
-                    (f"%{key}%", since),
+                    "ORDER BY rowid DESC LIMIT 50",
+                    (since,),
                 ).fetchall()
             finally:
                 conn.close()
         except sqlite3.Error:
-            return False  # 查询失败 → 不阻断（但也不保证，诚实性 trade-off）
+            return False
 
         for row in rows:
             # 检查 tags 里有没有 non-retryable cause
@@ -1093,11 +1093,36 @@ class MotivationHub:
                 tag_list = json.loads(row["tags"] or "[]")
             except ValueError:
                 tag_list = []
-            if isinstance(tag_list, list):
-                for t in tag_list:
-                    if t in self._NON_RETRYABLE_CAUSES:
-                        return True
-            # 检查 outcome 里有没有 non_retryable 标记
+            has_non_retry = (
+                isinstance(tag_list, list)
+                and any(t in self._NON_RETRYABLE_CAUSES for t in tag_list)
+            )
+            if not has_non_retry:
+                continue
+
+            # P2: 用 signature 匹配 context 里的 failure_signature
+            try:
+                ctx = json.loads(row["context"] or "{}")
+            except Exception:
+                ctx = {}
+            sig = ctx.get("failure_signature", "")
+            if sig:
+                # 精确: normalized_goal 部分（|前）与当前 description 归一化后比较
+                from ocos.agent.agent_runtime import (
+                    _normalize_goal_for_signature,
+                )
+                norm = _normalize_goal_for_signature(description)
+                sig_goal = sig.split("|")[0] if "|" in sig else sig
+                # 双向包含: sig_goal 是 norm 的子串 或 norm 是 sig_goal 的子串
+                if sig_goal and (sig_goal in norm or norm in sig_goal):
+                    return True
+                continue  # 有 signature 但不匹配 → 下一条（不走 LIKE fallback）
+
+            # Fallback: 无 signature → 用 LIKE 模糊匹配 (兼容历史 lessons)
+            key = (description or "")[:30]
+            goal_text = row["goal"] if "goal" in row.keys() else ""
+            if key and key in (goal_text or ""):
+                return True
             try:
                 oc = json.loads(row["outcome"] or "{}")
             except ValueError:

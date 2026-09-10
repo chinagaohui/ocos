@@ -1548,6 +1548,9 @@ class AgentRuntime:
                     signals_hit=(),
                 )
             description = (getattr(task, "description", "") or "")[:300]
+            # P2: normalized_goal — 去噪后提取稳定语义签名
+            _sig_text = _normalize_goal_for_signature(description)
+            _signature = f"{_sig_text}|{_cause}"
             artifact = build_lesson_artifact(diagnosis, description)
             episode = Episode(
                 id=f"EPI-LESSON-{_uuid.uuid4().hex[:12]}",
@@ -1559,6 +1562,10 @@ class AgentRuntime:
                     "task_id": task_id,
                     "artifact_id": artifact.id,
                     "goal_pattern": description[:100],
+                    # P2: failure_signature — 精确检索键
+                    # 格式: "<normalized_goal>|<cause>"
+                    # 替代原来的 LIKE 模糊匹配，避免 30 字截断丢失语义
+                    "failure_signature": _signature,
                 },
                 goal=description[:200],
                 decision=(f"[{artifact.artifact_type.value}] "
@@ -2544,6 +2551,77 @@ class AgentRuntime:
                        reverse=True)
         return artifacts[:limit]
 
+    # ── P2 (2026-09-11): failure_signature — 精确检索辅助 ────────────────
+
+    @staticmethod
+    def _lookup_failure_by_signature(db_path: str | None,
+                                     description: str,
+                                     days: int = 7) -> list[dict]:
+        """P2: 用 failure_signature 精确查同目标同因 failure lessons。
+
+        优先用 failure_signature（normalized_goal + cause）精确匹配；
+        无签名时 fallback 到 LIKE 模糊匹配（兼容历史 lessons）。
+
+        返回简化的 lesson 字典列表（含 rowid, cause, hypothesis）。
+        """
+        import sqlite3 as _sqlite3
+        from datetime import datetime, timezone as _tz, timedelta as _td
+
+        if not db_path:
+            return []
+        try:
+            since = (datetime.now(_tz.utc) - _td(days=days)).isoformat()
+            conn = _sqlite3.connect(db_path)
+            conn.row_factory = _sqlite3.Row
+
+            norm = _normalize_goal_for_signature(description)
+            # 策略 1: 精确签名匹配（新 lessons 有 signature）
+            rows = conn.execute(
+                "SELECT rowid, tags, context, substr(decision,1,200) as d "
+                "FROM episodes "
+                "WHERE action='failure_lesson' "
+                "AND created_at >= ? "
+                "AND context LIKE ? "
+                "ORDER BY rowid DESC LIMIT 10",
+                (since, f'%failure_signature": "{norm}|%'),
+            ).fetchall()
+            if not rows:
+                # 策略 2: LIKE fallback（历史 lessons 无 signature）
+                key = (description or "")[:30]
+                rows = conn.execute(
+                    "SELECT rowid, tags, context, substr(decision,1,200) as d "
+                    "FROM episodes "
+                    "WHERE action='failure_lesson' "
+                    "AND goal LIKE ? "
+                    "AND created_at >= ? "
+                    "ORDER BY rowid DESC LIMIT 10",
+                    (f"%{key}%", since),
+                ).fetchall()
+            conn.close()
+        except Exception:
+            return []
+
+        result = []
+        for r in rows:
+            cause = None
+            try:
+                tags = json.loads(r["tags"] or "[]")
+            except Exception:
+                tags = []
+            for t in tags:
+                if t in ("sql_schema_mismatch", "dependency_missing",
+                         "tool_unavailable", "permission_denied"):
+                    cause = t
+                    break
+            if cause is None:
+                continue
+            result.append({
+                "rowid": r["rowid"],
+                "cause": cause,
+                "text": (r["d"] or "")[:150],
+            })
+        return result
+
     # ── P0-D (2026-09-10): Failure Lesson 主动注入 ─────────────────────
 
     def _inject_failure_lessons(self, artifacts: list[dict],
@@ -2877,3 +2955,32 @@ class AgentRuntime:
             if self._wm_store:
                 self._wm_store.close()
             logger.info("AgentRuntime shutdown complete.")
+
+
+# ── P2 (2026-09-11): failure_signature — 模块级辅助 ────────────────────
+
+def _normalize_goal_for_signature(text: str) -> str:
+    """P2: 把任意 goal 描述归一化为稳定签名片段。
+
+    规则：
+      1. 去标点/空白/全角符号
+      2. 小写化
+      3. 截断到 80 字符（语义足够 + 索引友好）
+      4. 兜底: 空串 → "_empty_"
+
+    目的: 同一个"查 episodes 表 source 分布"目标不管怎么描述
+    （"episodes source 统计" / "episodes表按source分组"），
+    归一化后有机会产生相同或重叠的签名片段，让 LIKE 和精确匹配
+    都能工作得更可靠。
+    """
+    if not text:
+        return "_empty_"
+    # 1. 去空白
+    t = re.sub(r"\s+", "", text)
+    # 2. 去常见标点（中英）
+    t = re.sub(r"[，。？！,.?!、；;：:（）()「」""''—~…/\\|]", "", t)
+    # 3. 小写
+    t = t.lower()
+    # 4. 截断
+    t = t[:80]
+    return t or "_empty_"
