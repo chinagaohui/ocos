@@ -169,10 +169,15 @@ class LifecycleManager:
             self.log.boot_count += 1
 
     def _register_signals(self) -> None:
-        """注册 SIGINT/SIGTERM 处理。"""
+        """注册 SIGINT/SIGTERM 处理。
+
+        FIX-CROSS-TEST: 不在 handler 里 sys.exit(0) — 会污染 pytest 进程
+        （pytest timeout 发 SIGTERM → 整个测试进程 exit）。daemon 主循环
+        应该从 shutdown 返回后自行终止。handler 只做清理，不强制退出。
+        """
         def handler(signum, frame):
             self.shutdown(f"signal {signum}")
-            sys.exit(0)
+            # 只设事件让主循环退出，不硬退出进程
         try:
             signal.signal(signal.SIGINT, handler)
             signal.signal(signal.SIGTERM, handler)
