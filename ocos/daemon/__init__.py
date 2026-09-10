@@ -1036,6 +1036,43 @@ class ResidentRuntime:
             except Exception:
                 logger.exception("  ❌ %s failed", mod)
 
+        # ── ReflectionEngine: 双层反思回环 ──
+        # dream cycle 结束后, 用 ReflectionEngine 对本轮
+        # ingest + research 摄入的新知识做结构化反思.
+        # 反思报告写 evolution_artifacts(PENDING) 等人工审核.
+        try:
+            self._run_reflection(db_path)
+        except Exception:
+            logger.exception("ReflectionEngine failed")
+
+    def _run_reflection(self, db_path: str) -> None:
+        """ReflectionEngine 双层反思回环 — 挂在 dream cycle 末尾."""
+        from ocos.autonomous.reflection_engine import ReflectionEngine
+
+        engine = ReflectionEngine(db_path, ingest_batch_threshold=8, auto_save=True)
+
+        # 取最近 ingest_batch_threshold*2 条知识 (本轮 dream 里 ingest + research 刚写的)
+        import sqlite3
+        c = sqlite3.connect(db_path)
+        rows = c.execute(
+            "SELECT rowid FROM knowledge ORDER BY rowid DESC LIMIT 16"
+        ).fetchall()
+        c.close()
+        if not rows:
+            return
+
+        report = engine.add_batch([str(r[0]) for r in rows])
+        if report is None:
+            report = engine.reflect_now()
+        if report:
+            logger.info(
+                "  🔄 ReflectionEngine: batch=%d fills_gaps=%d conflicts=%d "
+                "deepen_topics=%d gaps_resolved=%d gaps_remaining=%d → saved as PENDING",
+                report.batch_size, len(report.fills_gaps),
+                len(report.conflicts), len(report.deepen_topics),
+                report.gaps_resolved, len(report.gaps_remaining),
+            )
+
     def _build_ingestor(self, db_path: str) -> "UnifiedIngestor":
         """构建完整注入的 UnifiedIngestor (KnowledgeRegistry + SemanticStore + AccessMatrix).
 
