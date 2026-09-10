@@ -49,7 +49,8 @@ logger = logging.getLogger(__name__)
 
 GOAL_CAP_ENV = "OCOS_AUTONOMY_GOAL_CAP"
 DEFAULT_GOAL_CAP = 5
-FAILURE_DEMOTE_THRESHOLD = 3      # 连续失败 N 次 → 自动降级
+FAILURE_DEMOTE_THRESHOLD = 10     # 连续失败 N 次 → 自动降级（10 次=50s，抗 writer/reviewer 偶发失败噪声）
+FAILURE_DEMOTE_WINDOW = 20        # 滑窗: 近 20 次 goal_result 里成功率 < 30% 才允许降级
 SCORE_THRESHOLD = 0.5             # 综合分低于此值不成提案
 CONF_MIN, CONF_MAX = 0.3, 0.6     # 低置信边界（好奇心探测区间）
 LOOKBACK_DAYS = 7
@@ -111,6 +112,7 @@ class MotivationHub:
         self._belief_store = belief_store
         self._notify_fn = notify_fn
         self._consecutive_failures = 0   # 防跑飞计数（进程内，结果闭环驱动）
+        self._result_window: list[bool] = []  # v2 滑窗（近 N 次 success/failure）
         base = os.environ.get("OCOS_AUDIT_DIR", "").strip()
         self._audit_dir = (Path(base).expanduser() if base
                            else Path.home() / ".ocos" / "audit")
@@ -735,14 +737,21 @@ class MotivationHub:
     def record_result(self, success: bool) -> dict | None:
         """daemon 在自主目标 goal_result 到达时调用（success 为真实 outcome）。
 
-        连续 FAILURE_DEMOTE_THRESHOLD 次失败 → 自动降级 LEVEL 并 audit，
-        返回降级信息 dict（daemon 负责 outbox 如实上报）；成功重置计数。
+        降级双重闸门（v2 抗噪加固）:
+          1) 连续 FAILURE_DEMOTE_THRESHOLD 次失败（默认 10，原 3 太激进）
+          2) 近 FAILURE_DEMOTE_WINDOW 次 goal_result 里成功率 < 30%
+             （避免 writer 偶发失败就把整体打成"失控"）
+        两个条件同时满足才降级。success=True 重置连续计数。
 
-        M1 修复 (2026-09-10): success=True 且最近没新 goal 产出时,
-        自动注入一个 follow-up goal 避免 goal 供给断档 (active=0 空转).
+        M1: 成功后自动续 goal，避免 goal 供给断档 (active=0 空转).
         """
         from ocos.execution.autonomy import (
             audit_level_change, get_autonomy_level, set_autonomy_level)
+
+        # ── v2: 滑窗成功率保护 ────────────────────────────
+        self._result_window.append(success)
+        if len(self._result_window) > FAILURE_DEMOTE_WINDOW:
+            self._result_window = self._result_window[-FAILURE_DEMOTE_WINDOW:]
 
         if success:
             self._consecutive_failures = 0
@@ -753,8 +762,23 @@ class MotivationHub:
                 logger.debug("followup injection failed", exc_info=True)
             return None
         self._consecutive_failures += 1
+
+        # ── 闸门 1: 连续失败数 ────────────────────────────
         if self._consecutive_failures < FAILURE_DEMOTE_THRESHOLD:
             return None
+
+        # ── 闸门 2: 滑窗成功率 < 30% ────────────────────────────
+        _win_total = len(self._result_window)
+        _win_success = sum(1 for s in self._result_window if s)
+        _win_rate = _win_success / _win_total if _win_total else 1.0
+        if _win_rate >= 0.30:
+            logger.info(
+                "Demote blocked: consecutive_failures=%d meets threshold, "
+                "but window success_rate=%.1f%% (>=30%%) — agent healthy overall",
+                self._consecutive_failures, _win_rate * 100)
+            self._consecutive_failures = 0  # 清零避免下次立即再试
+            return None
+
         old = get_autonomy_level()
         new = max(0, old - 1)
         self._consecutive_failures = 0
@@ -764,11 +788,12 @@ class MotivationHub:
         set_autonomy_level(new)
         audit_level_change(
             self._db_path, old, new,
-            source=(f"连续 {FAILURE_DEMOTE_THRESHOLD} 次自主目标失败，"
-                    f"防跑飞自动降级"))
+            source=(f"连续 {FAILURE_DEMOTE_THRESHOLD} 次失败 + 近 "
+                    f"{_win_total} 次成功率 {_win_rate:.0%}，防跑飞自动降级"))
         info = {"demoted": True, "from": old, "to": new,
-                "reason": (f"连续 {FAILURE_DEMOTE_THRESHOLD} 次自主目标"
-                           f"失败，已自动降级 LEVEL {old}→{new}")}
+                "reason": (f"连续 {FAILURE_DEMOTE_THRESHOLD} 次失败 + "
+                           f"近 {_win_total} 次成功率 {_win_rate:.0%}，"
+                           f"已自动降级 LEVEL {old}→{new}")}
         logger.warning("MotivationHub: %s", info["reason"])
         if self._notify_fn is not None:
             try:

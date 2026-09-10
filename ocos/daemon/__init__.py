@@ -2193,15 +2193,17 @@ class ResidentRuntime:
                 aid = row["artifact_id"]
                 title = row["title"] or f"Evolution plan {aid[:8]}"
                 summary = row["summary"] or ""
-                # 合成 goal description: 标题 + 摘要前 200 字
-                desc = f"{title}\n\n{summary[:200]}"
 
-                # 检查 goals 表是否已有相同 title 的 goal（防重复）
+                # 精确去重: 查 goals.metadata 里的 artifact_id（而非 title LIKE）
                 dup = db.execute(
-                    "SELECT id FROM goals WHERE description LIKE ? LIMIT 1",
-                    (f"%{title[:40]}%",)).fetchone()
+                    "SELECT id, status FROM goals WHERE metadata LIKE ? LIMIT 1",
+                    (f"%\"artifact_id\": \"{aid}\"%",)).fetchone()
                 if dup:
-                    logger.info("Pump: skip duplicate goal for artifact %s", aid[:8])
+                    logger.info("Pump: skip duplicate goal for artifact %s "
+                                "(goal=%s status=%s) — mark applied",
+                                aid[:8], dup["id"], dup["status"])
+                    store.mark_applied(aid)   # FIX: skip 也要标记已处理
+                    goals_created += 0         # 不占 cap 但记一次处理
                     continue
 
                 # 写入 goals 表 (PENDING, source=evolution_artifact)
