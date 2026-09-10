@@ -1672,6 +1672,14 @@ class MasterAgent:
             except Exception:
                 pass  # Semantic 沉淀失败不阻塞 consolidation
 
+        # ── F4: Layer-2 抽象 — pattern cluster → principle ──────────────
+        # procedure 占 76% vs principle 3% 严重偏斜, 补这一层让系统学会"为什么"
+        try:
+            principles_added = self._extract_principles_from_patterns()
+            stats["principles_added"] = principles_added
+        except Exception:
+            stats["principles_added"] = 0
+
         # 4. 弱 Belief 修剪（weaken → archive，退出推理）
         for belief in self._belief_store.query_by_status(
             BeliefStatus.ACTIVE, limit=self._CONSOLIDATION_BATCH_LIMIT
@@ -1689,6 +1697,81 @@ class MasterAgent:
                 pass  # 单条标记失败不阻塞
 
         return stats
+
+    def _extract_principles_from_patterns(self) -> int:
+        """F4: Layer-2 抽象 — 把 pattern cluster 归纳成 principle.
+
+        不调用 LLM (避免延迟), 用基于规则的归因:
+          一组相同 trigger_condition 但 outcome 不同的 pattern
+          → 归纳出 "当 X 时, A 倾向于 Y, 但在 Z 条件下会变成 W" 的 principle.
+
+        存储: knowledge 表, scope_domain='principle'
+        返回: 新存入的 principle 数量.
+        """
+        if self._pattern_store is None or self._semantic_store is None:
+            return 0
+
+        from collections import defaultdict
+        from ocos.memory.semantic.models import KnowledgeEntry, KnowledgeScope
+
+        # 1. 聚合同 trigger_condition 的 pattern
+        clusters: dict[str, list] = defaultdict(list)
+        patterns = list(self._pattern_store.query_by_status(
+            "active", limit=100)) if hasattr(self._pattern_store, 'query_by_status') else []
+        for p in patterns:
+            key = getattr(p, 'trigger_condition', '') or ''
+            if key:
+                clusters[key[:30]].append(p)
+
+        added = 0
+        for trigger, pats in clusters.items():
+            if len(pats) < 2:
+                continue  # 至少 2 个 pattern 才能归纳
+
+            # 2. 检查这个 trigger 下有没有已经存的 principle (幂等)
+            existing = self._semantic_store.query(
+                scope=KnowledgeScope(domain="principle"),
+                limit=50
+            ) if hasattr(self._semantic_store, 'query') else []
+            existing_stmts = [e.statement for e in (existing or [])]
+
+            # 3. 用规则归因生成 principle statement
+            rels = set()
+            for p in pats:
+                rel = getattr(p, 'observed_relation', '') or ''
+                if rel:
+                    rels.add(rel[:40])
+            if len(rels) < 2:
+                continue  # outcome 单一没什么可归纳的
+
+            statement = (
+                f"规律: 在 {trigger} 场景下, "
+                f"不同条件导致不同结果 — "
+                f"涉及 {len(pats)} 次观察, "
+                f"结果包括 {', '.join(sorted(rels)[:3])}"
+            )
+            # 简单去重
+            if any(trigger in s for s in existing_stmts):
+                continue
+
+            # 4. 存 principle
+            confidence = sum(
+                getattr(p, 'confidence', 0.5) for p in pats
+            ) / len(pats)
+            entry = KnowledgeEntry.create(
+                statement=statement,
+                source_patterns=[getattr(p, 'id', '') for p in pats],
+                confidence=min(confidence * 0.9, 0.85),  # principle 置信度打 9 折
+                scope=KnowledgeScope(domain="principle"),
+                stability=0.8,
+            )
+            try:
+                self._semantic_store.save(entry)
+                added += 1
+            except Exception:
+                pass
+
+        return added
 
     # ── Phase 49-A: 快通路学习（Adaptation Path）──────────────────────
 

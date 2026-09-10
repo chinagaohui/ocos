@@ -382,6 +382,15 @@ class ResidentRuntime:
             builder = SelfModelBuilder(belief_store, boundary)
             governor = SelfGovernor(boundary)
             self._self_monitor = SelfMonitor(builder, governor, belief_store)
+            # F3: seed 初始 SelfModel — 避免 "no SelfModel" 导致 evolution 检查全 deny
+            try:
+                initial_model = builder.build()
+                self._self_monitor.seed(initial_model)
+                logger.info(
+                    "SelfMonitor seeded with initial SelfModel "
+                    "(version=%d)", initial_model.version)
+            except Exception as e:
+                logger.debug("initial SelfModel build failed (non-fatal): %s", e)
             self._self_monitor_eligible = True
             logger.info("SelfMonitor initialized — evolution checks enabled")
         except Exception as e:
@@ -486,6 +495,12 @@ class ResidentRuntime:
                         self._tick_interval, self._autonomy_level,
                         LEVEL_DESCRIPTIONS.get(self._autonomy_level, "?"),
                         self._braked)
+            # F1: 启动时检查 goal 供给 — 如果 active=0 立即注入一个 follow-up
+            try:
+                if self._motivation is not None:
+                    self._motivation._inject_followup_if_idle()
+            except Exception:
+                logger.debug("startup followup inject failed", exc_info=True)
 
     def stop(self, timeout: float = 30.0) -> None:
         """优雅关闭 daemon — 停止 tick 线程，触发 orchestrator 安全关闭。"""
@@ -1094,10 +1109,14 @@ class ResidentRuntime:
             semantic_store = SemanticStore(db_path=db_path)
             semantic_store.initialize()
             access_matrix = AccessMatrix()
+            # F2: 给所有会调 ingest 的 owner 都加写权限
             for lvl in KnowledgeLevel:
-                access_matrix.set_permission(
-                    "daemon_experience", lvl, can_read=True, can_write=True,
-                )
+                for owner in ("daemon_experience", "epistemic_llm",
+                              "epistemic_web", "epistemic_research",
+                              "daily_self_evolution", "reflection_engine"):
+                    access_matrix.set_permission(
+                        owner, lvl, can_read=True, can_write=True,
+                    )
             registry = KnowledgeRegistry(
                 semantic_store=semantic_store,
                 access_matrix=access_matrix,
