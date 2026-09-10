@@ -682,6 +682,18 @@ class ResidentRuntime:
                         self._run_dream_cycle()
                     except Exception:
                         logger.exception("Dream cycle failed")
+
+                # ── 持续认知循环 (R5 continuous cognition) ────────────
+                # 每 12 ticks ≈ 60s 做一次: 反思 → LLM验证学习 → 制定计划
+                # 独立于 dream cycle (200 ticks), 时刻保持大脑在工作
+                if (self._hb_ticks % 12 == 0
+                        and self._autonomy_level >= 1
+                        and not self._braked):
+                    try:
+                        self._run_continuous_cognition()
+                    except Exception:
+                        logger.debug("continuous cognition failed", exc_info=True)
+
                 # Phase 33: 将队列中的目标导入 runtime 的 goal_store
                 self._drain_goal_queue()
                 # 全自动模式: 待批队列自动通过（ask 模式零开销空转）
@@ -1158,6 +1170,226 @@ class ResidentRuntime:
             return LLMTutor(text_generator=tg)
         except Exception:
             return LLMTutor()
+
+    # ── R5: 持续认知循环 (continuous cognition loop) ──────────────────
+
+    def _run_continuous_cognition(self) -> None:
+        """每 ≈ 60s 做一次: 反思 → LLM验证学习 → 制定计划.
+
+        这是 OCOS 作为数字生命必须时刻做的三件事:
+          ① 对自身优化思考 — 从最近 episodes/gaps 里挑一个值得反思的点
+          ② 思考后找 LLM 知识库验证学习 — LLMTutor 问一个聚焦问题
+          ③ 制定计划 — 把学习结果存 PENDING evolution_artifact + 注入 follow-up
+
+        独立于 dream cycle (200 ticks) 和 evolution cycle (2880 ticks),
+        让大脑在任何 tick 都保持活跃思考状态。
+        """
+        import sqlite3
+        from datetime import datetime, timezone
+        db_path = getattr(self, "_db_path", None)
+        if not db_path:
+            return
+
+        # ── 限频 LLM 调用 (60s 内只调一次) ──
+        now_ts = datetime.now(timezone.utc).timestamp()
+        last_ts = getattr(self, "_last_llm_cognition_ts", 0)
+        llm_throttle_ok = (now_ts - last_ts) >= 60
+
+        # ═══════════════════════════════════════════════════════════
+        # Step ①: 反思 — 从最近的 gap / failed episode / new pattern 里挑
+        # ═══════════════════════════════════════════════════════════
+        reflection_point = self._pick_reflection_point(db_path)
+        if not reflection_point:
+            # 没什么值得反思的 → 也输出心跳日志让人类知道大脑在跳
+            logger.debug("🧠 cognition heartbeat — nothing new to reflect")
+            return
+
+        logger.info("🧠 Cognition Loop Step① reflection: %s", reflection_point.get("question", "")[:80])
+
+        # ═══════════════════════════════════════════════════════════
+        # Step ②: LLM 验证学习 — 把反思疑问喂给 LLMTutor
+        # ═══════════════════════════════════════════════════════════
+        llm_findings = ""
+        if llm_throttle_ok:
+            try:
+                tutor = self._build_tutor()
+                question = reflection_point.get("question", "")
+                if question and tutor is not None:
+                    resp = tutor.ask(question)
+                    if resp and resp.success:
+                        llm_findings = resp.answer or ""
+                        logger.info("🧠 Cognition Loop Step② LLM verified: %s", llm_findings[:100])
+                        # 限频更新
+                        self._last_llm_cognition_ts = now_ts
+                        # 沉淀到 knowledge
+                        try:
+                            ingestor = self._build_ingestor()
+                            if ingestor is not None and llm_findings:
+                                from ocos.learning.unified_ingestor import IngestArtifact
+                                art = IngestArtifact(
+                                    content={"question": question, "answer": llm_findings[:500]},
+                                    source="continuous_cognition",
+                                    source_type="concept",
+                                    confidence=0.65,
+                                    metadata={"reflection_point": reflection_point.get("source", "")},
+                                )
+                                result = ingestor.ingest(art, owner="epistemic_llm")
+                                if result.get("stored", 0) > 0:
+                                    logger.info("🧠 Cognition Loop Step② stored knowledge +%d", result["stored"])
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.debug("LLM cognition step failed: %s", e)
+
+        # ═══════════════════════════════════════════════════════════
+        # Step ③: 制定计划 — 写 mini-plan + 注入 follow-up goal
+        # ═══════════════════════════════════════════════════════════
+        try:
+            plan = self._build_plan_from_reflection(reflection_point, llm_findings, db_path)
+            if plan:
+                logger.info("🧠 Cognition Loop Step③ plan generated: %s", plan.get("title", "")[:80])
+                # 写 PENDING evolution artifact (需人工审核)
+                try:
+                    from ocos.evolution.artifacts import EvolutionArtifactStore
+                    store = EvolutionArtifactStore(db_path=db_path)
+                    artifact_id = store.create(
+                        artifact_type="plan",
+                        title=plan["title"],
+                        summary=plan["summary"],
+                        content=plan["content"],
+                        confidence=0.6,
+                        source_agent="continuous_cognition",
+                        tags=["cognition_loop", "auto_generated", "mini_plan"],
+                        risk_level="LOW",
+                        human_review_required=True,
+                    )
+                    if artifact_id:
+                        logger.info("🧠 Cognition Loop Step③ saved PENDING plan → %s", artifact_id)
+                except Exception as e:
+                    logger.debug("cognition plan save failed: %s", e)
+        except Exception as e:
+            logger.debug("cognition plan step failed: %s", e)
+
+    def _pick_reflection_point(self, db_path: str) -> dict | None:
+        """Step①: 挑一个值得反思的点.
+
+        优先级:
+          a. PredictionGapTracker 有新 gap (还没被消化)
+          b. 最近 failed episode (agent 某件事没做成)
+          c. 新知识入库了 (值得深入)
+          d. deepen_topics 里还有没消费的
+        """
+        try:
+            conn = sqlite3.connect(db_path)
+        except Exception:
+            return None
+
+        # (a) gap
+        try:
+            from ocos.reasoning.curiosity import PredictionGapTracker
+            tracker = PredictionGapTracker(db_path=db_path)
+            gaps = tracker.emit_gap_hypothesis(top_n=1)
+            if gaps:
+                g = gaps[0]
+                conn.close()
+                return {
+                    "source": "prediction_gap",
+                    "question": f"为什么 {g['task_text'][:60]} 预测准确率只有 {g['error_magnitude']:.2f}? 如何改进?",
+                    "hint": g.get("hypothesis", "")[:100],
+                }
+        except Exception:
+            pass
+
+        # (b) 最近 failed goal
+        try:
+            row = conn.execute(
+                "SELECT substr(description,1,80) as d, created_at FROM goals "
+                "WHERE status IN ('abandoned','failed','expired') "
+                "ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                conn.close()
+                return {
+                    "source": "failed_goal",
+                    "question": f"这个目标为什么失败了? 有没有办法让下次成功? 目标: {row[0]}",
+                    "hint": "失败原因分析",
+                }
+        except Exception:
+            pass
+
+        # (c) 新知识
+        try:
+            row = conn.execute(
+                "SELECT substr(statement,1,80) as s, scope_domain FROM knowledge "
+                "ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            if row and row[0]:
+                conn.close()
+                return {
+                    "source": "new_knowledge",
+                    "question": f"新知识 [{row[1]}] 说 '{row[0]}' — 这个对 OCOS 架构意味着什么? 有什么可以落地的改进?",
+                    "hint": "知识落地建议",
+                }
+        except Exception:
+            pass
+
+        # (d) deepen topics
+        try:
+            row = conn.execute(
+                "SELECT topic FROM reflection_seed_topics WHERE used=0 ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                conn.close()
+                return {
+                    "source": "deepen_topic",
+                    "question": f"深入学习: {row[0]}",
+                    "hint": "反思引导",
+                }
+        except Exception:
+            pass
+
+        conn.close()
+        return None
+
+    def _build_plan_from_reflection(
+            self, reflection: dict, llm_findings: str, db_path: str) -> dict | None:
+        """Step③: 从反思 + LLM 学习结果构建一个 mini-plan."""
+        if not reflection:
+            return None
+
+        src = reflection.get("source", "reflection")
+        q = reflection.get("question", "")[:100]
+        h = reflection.get("hint", "")
+
+        # 构建 plan content (简短, 因为是每 60s 一次)
+        content_lines = [
+            f"# Mini-Plan: 来自持续认知循环",
+            f"",
+            f"## 触发源",
+            f"- 来源: {src}",
+            f"- 问题: {q}",
+            f"- 提示: {h}",
+            f"",
+        ]
+        if llm_findings:
+            content_lines.extend([
+                f"## LLM 学习结果",
+                f"{llm_findings[:600]}",
+                f"",
+            ])
+        content_lines.extend([
+            f"## 建议行动",
+            f"1. 基于以上分析, 增加一个 follow-up goal 深入探索",
+            f"2. 下次 dream consolidation 时重点关注这个方向",
+            f"3. 如果 LLM 学习结果有代码架构启发, 记入 knowledge principle",
+        ])
+
+        title = f"Mini-Plan: {src} — {q[:40]}"
+        return {
+            "title": title[:80],
+            "summary": f"[{src}] {q[:60]}",
+            "content": "\n".join(content_lines),
+        }
 
     # ── Phase S2-P2: 每日自进化循环 ─────────────────────────────────
 
