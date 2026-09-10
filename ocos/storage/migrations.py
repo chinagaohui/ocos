@@ -75,6 +75,18 @@ MIGRATIONS: dict[int, tuple[str, list[str]]] = {
             "ALTER TABLE goal RENAME TO goal_legacy",
         ],
     ),
+    7: (
+        # 2026-09-10: LLM 动态生成 SQL 时想查 lessons 表但不存在，
+        # 实际 failure_lesson 存在 episodes 表 (action='failure_lesson')。
+        # 创建视图让 LLM 查询兼容。
+        "L9: lessons 视图 — episodes 表 failure_lesson 别名",
+        [
+            """CREATE VIEW IF NOT EXISTS lessons AS
+               SELECT id, created_at, decision, outcome, context, tags
+               FROM episodes
+               WHERE action='failure_lesson'""",
+        ],
+    ),
 }
 
 

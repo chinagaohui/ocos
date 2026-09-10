@@ -1,6 +1,6 @@
 """SQLite Schema 定义 — 所有持久化表的建表语句和数据字典。"""
 
-STORAGE_SCHEMA_VERSION = 6  # S2.6: goal→goal_legacy（双目标表并存治理）  # UX-P2: user_messages  # AUD-F8: plan_dag
+STORAGE_SCHEMA_VERSION = 7  # v7: lessons 视图 (episodes WHERE action='failure_lesson')
 
 # ── 表名常量 ────────────────────────────────────────────────────────────────
 
