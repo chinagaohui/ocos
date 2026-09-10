@@ -712,11 +712,15 @@ class ResidentRuntime:
                 except Exception:
                     logger.exception("auto approve pump failed")
                 # B1 管道打通: evolution_artifacts PENDING→APPROVED→goals
-                if self._hb_ticks % 12 == 0:
-                    try:
+                # 每次 tick 调，内部用 60s 节流（和 cognition loop 同节奏）
+                try:
+                    now_ts = self._runtime._cycle_count * 5  # tick ≈ 5s
+                    last = getattr(self, "_last_evol_pump_tick", 0)
+                    if now_ts - last >= 60:
                         self._pump_evolution_artifacts()
-                    except Exception:
-                        logger.exception("evolution artifacts pump failed")
+                        self._last_evol_pump_tick = now_ts
+                except Exception:
+                    logger.exception("evolution artifacts pump failed")
                 # UX-1: 认领 CLI 创建的持久化目标（每 tick 最多 1 个）
                 self._claim_persisted_goals()
 
@@ -2084,8 +2088,9 @@ class ResidentRuntime:
             approved_null_applied = db.execute("""
                 SELECT artifact_id, title, summary, content, confidence
                 FROM evolution_artifacts
-                WHERE type='plan' AND status='approved' AND applied_at IS NULL
-                  AND risk_level IN ('LOW', '')
+                WHERE type='plan' AND status='approved'
+                  AND (applied_at IS NULL OR applied_at = '')
+                  AND (risk_level IN ('LOW', '') OR risk_level IS NULL)
                 ORDER BY rowid ASC LIMIT ?""", (cap,)).fetchall()
 
             for row in approved_null_applied:
