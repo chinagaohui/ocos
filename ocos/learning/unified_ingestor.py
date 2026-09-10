@@ -323,8 +323,8 @@ class UnifiedIngestor:
 
         if art.channel == SourceChannel.EXPERIENCE:
             return KnowledgeLevel.OBSERVATION   # 自己的经验 = 底层观测
-        if art.channel == SourceChannel.WEB:
-            return KnowledgeLevel.EVIDENCE       # 外部搜索 = 证据层
+        if art.channel in (SourceChannel.WEB_RESEARCH, SourceChannel.LLM_QA):
+            return KnowledgeLevel.EVIDENCE       # 外部搜索/LLM问答 = 证据层
         if art.confidence >= 0.8:
             return KnowledgeLevel.PRINCIPLE      # 高置信度 = 原则
         if art.confidence >= 0.5:

@@ -678,6 +678,13 @@ class ResidentRuntime:
                         self._epistemic_research()
                     except Exception:
                         logger.exception("Epistemic research failed")
+
+                    # Phase S2-P2: 每日自进化循环 — 双路径学习 + 自我总结
+                    # 每 2880 ticks (≈ 4h) 触发一次，避免每 tick 都跑
+                    try:
+                        self._daily_self_evolution()
+                    except Exception:
+                        logger.exception("Daily self-evolution failed")
                 # Phase 33: 将队列中的目标导入 runtime 的 goal_store
                 self._drain_goal_queue()
                 # 全自动模式: 待批队列自动通过（ask 模式零开销空转）
@@ -1060,6 +1067,151 @@ class ResidentRuntime:
             return LLMTutor(text_generator=tg)
         except Exception:
             return LLMTutor()
+
+    # ── Phase S2-P2: 每日自进化循环 ─────────────────────────────────
+
+    # 每 N 个 dream_interval 触发一次自进化（≈ 4h）
+    _EVOLUTION_INTERVAL_TICKS = 2880
+
+    # 种子学习主题 — 长期自我进化方向
+    _EVOLUTION_SEED_TOPICS = [
+        "cognitive architecture ACT-R SOAR CLARION",
+        "LLM agent reflection self-improving",
+        "digital life autonomous learning loop",
+        "knowledge representation semantic memory",
+        "autonomous agent curiosity-driven",
+        "self-evolving code architecture",
+        "cognitive load decision efficiency",
+    ]
+
+    def _daily_self_evolution(self) -> None:
+        """每日自进化循环 — 双路径学习 + 自我总结优化方案.
+
+        触发条件: cycle % _EVOLUTION_INTERVAL_TICKS == 0 (dream cycle 时检查)
+
+        执行步骤:
+          1. EpistemicDrive suggest → 挑 3 个不确定/薄弱领域
+          2. LLMTutor 对每个领域问 3 个核心问题 → 沉淀 knowledge
+          3. WebResearcher 对每个领域搜 2 个 query → 沉淀 knowledge
+          4. 记录当日学习统计 → 输出日志
+          5. (可选) LLM 总结生成自我优化方案 → 写入 knowledge principles
+        """
+        from ocos.learning.unified_ingestor import IngestStatus
+
+        db_path = getattr(self, "_db_path", None)
+        cycle = getattr(self._runtime, "_cycle_count", 0)
+        if not db_path or cycle % self._EVOLUTION_INTERVAL_TICKS != 0:
+            return
+
+        logger.info(
+            "━━━ 每日自进化循环 启动 (cycle=%d) ━━━", cycle)
+
+        ingestor = self._build_ingestor(db_path)
+        researcher = self._build_researcher()
+        tutor = self._build_tutor()
+
+        # ── Step 1: EpistemicDrive suggest + 种子主题补充 ──
+        topics: list[str] = []
+        try:
+            from ocos.reasoning.curiosity import PredictionGapTracker, EpistemicDrive
+            tracker = PredictionGapTracker(db_path=db_path)
+            drive = EpistemicDrive(tracker=tracker, db_path=db_path, top_n=3)
+            topics.extend(list(drive.suggest_explore())[:3])
+            topics.extend(list(drive.suggest_growth())[:2])
+        except Exception:
+            pass  # EpistemicDrive 失败不阻塞
+
+        # 种子主题 fallback — 保证每次都有东西学
+        if not topics:
+            # 用 cycle 取模挑 3 个种子主题，让每轮都不同
+            import hashlib
+
+            def _topic_key(t: str) -> int:
+                return int(hashlib.md5(t.encode()).hexdigest(), 16) % cycle
+
+            topics = sorted(
+                self._EVOLUTION_SEED_TOPICS,
+                key=_topic_key,
+            )[:3]
+
+        logger.info("  📋 本轮学习主题 (%d): %s",
+                     len(topics), topics)
+
+        total_stored = 0
+        total_new = 0
+
+        # ── Step 2+3: 双路径学习 ──
+        for topic in topics[:3]:
+            # 路径 1: LLMTutor (问 3 个核心问题)
+            for question in [
+                f"什么是 {topic}？核心原理和关键概念是什么？",
+                f"{topic} 对自主 Agent / 数字生命有什么实际启发？",
+                f"如何把 {topic} 的思想融入 OCOS 的自我进化架构？",
+            ]:
+                result = tutor.ask(question)
+                if result.success and result.answer.strip():
+                    arts = result.to_ingest_artifacts()
+                    for art in arts:
+                        for r in ingestor.ingest(art, owner="daily_evolve_llm"):
+                            if r.status == IngestStatus.STORED:
+                                total_stored += 1
+                                total_new += 1
+
+            # 路径 2: WebResearcher (搜 2 个 query)
+            for query in [topic, f"{topic} 2024 2025 latest"]:
+                try:
+                    res = researcher.research(query)
+                    if res and getattr(res, "findings", None):
+                        for finding in res.findings[:2]:
+                            from ocos.learning.unified_ingestor import IngestArtifact, SourceChannel
+                            art = IngestArtifact(
+                                channel=SourceChannel.WEB_RESEARCH,
+                                content=str(finding)[:500],
+                                title=f"web:{query[:40]}",
+                                confidence=getattr(res, "confidence", 0.7),
+                                tags=["daily_evolve", topic[:20]],
+                            )
+                            for r in ingestor.ingest(art, owner="daily_evolve_web"):
+                                if r.status == IngestStatus.STORED:
+                                    total_stored += 1
+                                    total_new += 1
+                except Exception:
+                    pass  # DuckDuckGo 超时/空结果 → 跳过
+
+        # ── Step 5: 自我总结优化方案 (只要 LLMTutor 可用) ──
+        if tutor._generator is not None and total_new > 0:
+            try:
+                summary_prompt = (
+                    f"你是 OCOS 数字生命的自我进化顾问。"
+                    f"今天 OCOS 学习了 {total_new} 条新知识 (关于 {', '.join(topics[:2])}),"
+                    "涉及认知架构、LLM Agent 自反思、数字生命自主学习等方向。"
+                    "OCOS 当前架构有 daemon 守护进程、EpistemicDrive 好奇心、"
+                    "KnowledgeRegistry 知识沉淀、GrowthOptimizer 自进化护栏。"
+                    "请基于这些方向分析 OCOS 可以如何自我升级，提出 3 条具体的优化建议。"
+                )
+                summary = tutor.ask(summary_prompt)
+                if summary.success and summary.answer.strip():
+                    from ocos.learning.unified_ingestor import IngestArtifact, SourceChannel
+                    plan_art = IngestArtifact(
+                        channel=SourceChannel.LLM_QA,
+                        content=f"[每日自进化方案] {summary.answer.strip()[:800]}",
+                        title=f"self_improvement_plan_{cycle}",
+                        confidence=0.85,
+                        tags=["self_evolution", "daily_plan"],
+                        knowledge_type="principle",
+                    )
+                    for r in ingestor.ingest(plan_art, owner="daily_evolve_plan"):
+                        if r.status == IngestStatus.STORED:
+                            logger.info(
+                                "  📝 自我优化方案已沉淀到 knowledge")
+            except Exception:
+                pass
+
+        logger.info(
+            "━━━ 每日自进化循环 完成 (cycle=%d): "
+            "stored=%d topics=%d new=%d ━━━",
+            cycle, total_stored, len(topics), total_new,
+        )
 
     # ── Phase S2-P1b: UnifiedIngestor 经验自动摄入 ──
     def _ingest_experience(self) -> None:
