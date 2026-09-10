@@ -1592,9 +1592,114 @@ class AgentRuntime:
                 pass
             logger.info("Failure lesson recorded: cause=%s task=%s "
                         "artifact=%s", _cause, task_id, artifact.id)
+
+            # P2a-2026-09-10: DEPENDENCY_MISSING → agent 能力 offline 标记
+            # 硬依赖缺失（shell 命令/Python 模块不可用）不是可修复的软错误。
+            # 除了 failure_lesson episode，还要写明确的 agent capability 状态
+            # 让 GoalGenesis / EpistemicDrive 知道: writer 在当前环境不可用。
+            if _cause == "dependency_missing":
+                try:
+                    self._record_capability_offline(task, diagnosis, reason)
+                except Exception as e2:
+                    logger.debug("capability offline record skipped: %s", e2)
         except Exception as e:
             logger.debug("failure lesson recording skipped: %s", e)
         return lesson
+
+    def _record_capability_offline(self, task: Any, diagnosis: Any,
+                                    reason: str) -> None:
+        """P2a-2026-09-10: DEPENDENCY_MISSING → 标记 agent 能力 offline.
+
+        写入 belief 表:
+          statement: "<agent_type> 在当前环境因依赖缺失不可用: <dependency>"
+          confidence: 0.0 (确定不可用)
+          tags: ["capability_offline", "dependency_missing", agent_type]
+
+        供 GoalGenesis / EpistemicDrive 查询 → 不再生成该 agent 的目标。
+        依赖修复后（P2b 自恢复），需手动或重启后重新探测。
+        """
+        from datetime import datetime, timezone
+        import sqlite3
+
+        agent_type = getattr(task, "agent_type", "unknown") or "unknown"
+        evidence = getattr(diagnosis, "evidence", reason or "") or ""
+
+        # 从 evidence 提取缺失的依赖 (启发式)
+        dep = "unknown_dependency"
+        for sig in ("/bin/sh:", "command not found", "exit_code=127",
+                    "ModuleNotFoundError", "No module named"):
+            if sig in evidence:
+                # 尝试提取具体命令/模块名
+                if "/bin/sh:" in evidence:
+                    # "/bin/sh: 1: sqlite3: not found" → "sqlite3"
+                    import re as _re
+                    m = _re.search(r"/bin/sh:\s*\d+:\s*(\S+):", evidence)
+                    if m:
+                        dep = m.group(1)
+                elif "No module named" in evidence:
+                    import re as _re
+                    m = _re.search(r"No module named ['\"]?(\S+?)['\"]?", evidence)
+                    if m:
+                        dep = f"python:{m.group(1)}"
+                break
+
+        hub = getattr(self, "_memory_hub", None)
+        db_path = None
+        if hub and hasattr(hub, "db_path"):
+            db_path = hub.db_path
+        elif hub and hasattr(hub, "_db_path"):
+            db_path = hub._db_path
+
+        belief_text = (
+            f"agent[{agent_type}] 在当前环境因依赖 '{dep}' 不可用"
+        )
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        if db_path:
+            try:
+                conn = sqlite3.connect(db_path)
+                conn.execute(
+                    """INSERT OR REPLACE INTO belief
+                        (statement, confidence, created_at, tags, source)
+                    VALUES (?, 0.0, ?, '["capability_offline","dependency_missing",?]', 'system')""",
+                    (belief_text, now_iso, agent_type))
+                conn.commit()
+                conn.close()
+                logger.warning(
+                    "P2a-capability-offline: %s → dep=%s (written to belief)",
+                    agent_type, dep)
+            except Exception:
+                pass
+        else:
+            logger.warning(
+                "P2a-capability-offline: %s → dep=%s (no db_path, belief not written)",
+                agent_type, dep)
+
+        # 同时写一条 episode 让 cognition loop 可见
+        try:
+            from ocos.memory.episode.models import Episode, EpisodeStatus
+            import uuid as _uuid
+            ep = Episode(
+                id=f"EPI-CAPOFF-{_uuid.uuid4().hex[:10]}",
+                created_at=now_iso,
+                session_id="capability_offline",
+                context={"agent_type": agent_type, "dependency": dep,
+                         "evidence": evidence[:200]},
+                goal=f"capability_offline:{agent_type}",
+                decision=belief_text[:300],
+                action="capability_offline",
+                outcome={"success": False, "cause": "dependency_missing",
+                         "confidence": 0.0},
+                condition=f"agent={agent_type} dep={dep}",
+                significance_score=0.9,
+                tags=["capability_offline", "dependency_missing", agent_type],
+                source="system",
+                status=EpisodeStatus.ACTIVE,
+            )
+            if hub:
+                hub.episode.save(ep)
+        except Exception:
+            pass
 
     def _tick_step_core_loop(self) -> dict[str, Any]:
         """Step 7: Core Loop — 优先执行 TaskDAG，无 DAG 时回退认知循环。

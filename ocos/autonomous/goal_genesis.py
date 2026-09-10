@@ -207,6 +207,12 @@ class GoalGenesis:
                     "GoalGenesis cooldown: %s — 同类目标连续失败 ≥3",
                     s[:60])
                 continue
+            # P2c: agent 能力 offline 检查
+            if self._agent_capability_offline(conn, s, domain):
+                logger.info(
+                    "GoalGenesis cap-offline: %s — %s 能力被标记为不可用",
+                    s[:60], domain)
+                continue
 
             prop = GoalProposal(description=s, domain=domain, source=source)
             prop.value_score = self._score_value(prop)
@@ -321,6 +327,110 @@ class GoalGenesis:
         """返回 UTC ISO 时间戳（减 N 分钟）。"""
         from datetime import datetime, timedelta, timezone
         return (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+
+    def _agent_capability_offline(self, conn, desc: str, domain: str) -> bool:
+        """P2b-2026-09-10: 能力 offline 检查 + 自恢复探测.
+
+        逻辑:
+          1. belief 表里有 capability_offline 标记 → 被拦截
+          2. 但每次拦截都探测一下依赖是否已恢复 (command -v 检测)
+          3. 如果依赖恢复了 → 删除 belief 标记 (unlock) → 放行
+          4. 探测有 60 秒冷却 (不每次都跑 shell 命令)
+
+        自恢复路径:
+          belief "agent[writer]...sqlite3 不可用" → command -v sqlite3 成功
+          → DELETE FROM belief WHERE tags LIKE '%capability_offline%'
+          → GoalGenesis 放行 writer 目标
+        """
+        import re
+        agent_pattern = re.compile(
+            r"\b(writer|researcher|reviewer|planner|executor|exec|reader|critic|learner|curator)\b",
+            re.IGNORECASE)
+        found_agents = agent_pattern.findall(desc)
+        if not found_agents:
+            return False
+
+        # 探测冷却 (类级变量，避免每 tick 都 shell)
+        if not hasattr(GoalGenesis, "_capability_probe_cooldown"):
+            GoalGenesis._capability_probe_cooldown = {}
+
+        for agent in found_agents:
+            try:
+                rows = conn.execute(
+                    """SELECT statement, confidence, tags FROM belief
+                       WHERE tags LIKE ? AND confidence <= 0.1""",
+                    (f"%\"{agent}\"%",)).fetchall()
+            except Exception:
+                continue
+
+            for stmt, conf, tags in rows:
+                if not (conf <= 0.1 and agent.lower() in stmt.lower()):
+                    continue
+
+                # P2b: 探测依赖是否恢复
+                now_ts = __import__("time").time()
+                cooldown_key = f"{agent}:{stmt[:30]}"
+                last_probe = GoalGenesis._capability_probe_cooldown.get(cooldown_key, 0)
+                if now_ts - last_probe >= 60:
+                    GoalGenesis._capability_probe_cooldown[cooldown_key] = now_ts
+                    dep = self._extract_dependency(stmt, tags)
+                    if dep and self._probe_dependency_available(dep):
+                        # 依赖恢复 → 删除 belief 标记
+                        try:
+                            conn.execute(
+                                "DELETE FROM belief WHERE confidence <= 0.1 AND statement = ?",
+                                (stmt,))
+                            conn.commit()
+                            logger.warning(
+                                "P2b-capability-restored: agent[%s] dep='%s' recovered, "
+                                "deleted offline belief", agent.lower(), dep)
+                            return False  # 放行！
+                        except Exception:
+                            pass
+
+                logger.info(
+                    "capability offline hit: agent[%s] conf=%.1f stmt=%s",
+                    agent.lower(), conf, stmt[:80])
+                return True
+        return False
+
+    @staticmethod
+    def _extract_dependency(stmt: str, tags: str) -> str | None:
+        """从 belief statement / tags 提取依赖名."""
+        import re
+        # belief 格式: "agent[writer] 在当前环境因依赖 'sqlite3' 不可用"
+        m = re.search(r"依赖\s*['\"](\S+?)['\"]\s*不可用", stmt)
+        if m:
+            return m.group(1)
+        # 从 tags 里找
+        try:
+            tag_list = json.loads(tags) if tags else []
+            for t in tag_list:
+                if ":" in t:
+                    return t.split(":", 1)[1]
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _probe_dependency_available(dep: str) -> bool:
+        """探测依赖是否可用 (shell command -v / python import)."""
+        if not dep:
+            return False
+        try:
+            if dep.startswith("python:"):
+                module = dep[len("python:"):]
+                __import__(module)
+                return True
+            else:
+                # shell command -v
+                import subprocess
+                result = subprocess.run(
+                    ["command", "-v", dep],
+                    capture_output=True, timeout=3)
+                return result.returncode == 0
+        except Exception:
+            return False
 
     def _score_value(self, proposal: GoalProposal) -> float:
         """价值评分 = f(不确定性关键词, 历史成功率) — 当前启发式."""
