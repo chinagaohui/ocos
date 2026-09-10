@@ -732,6 +732,11 @@ class ResidentRuntime:
                         self._last_evol_pump_tick = now_ts
                 except Exception:
                     logger.exception("evolution artifacts pump failed")
+                # U5: 每日学习摘要推送（每天一次，日期节流）
+                try:
+                    self._push_daily_learning_summary()
+                except Exception:
+                    logger.exception("daily learning summary failed")
                 # UX-1: 认领 CLI 创建的持久化目标（每 tick 最多 1 个）
                 self._claim_persisted_goals()
 
@@ -2031,6 +2036,86 @@ class ResidentRuntime:
             except Exception:
                 logger.exception("auto approve failed: %s", pid)
         return n
+
+    # U5: 每日学习摘要推送
+    def _push_daily_learning_summary(self) -> None:
+        """每天一次: 从 lessons 视图收集今日 failure lessons，
+        生成 3-5 条关键发现，推送到 user_inbox（daemon 主动说话）。"""
+        import datetime as _dt
+        today = _dt.date.today().isoformat()
+        last_date = getattr(self, "_last_daily_summary_date", "")
+        if last_date == today:
+            return  # 今天已推送过
+
+        try:
+            import sqlite3 as _sqlite3
+            import os as _os
+            from ocos.interaction.inbox import UserInbox
+
+            db_path = _os.path.expanduser("~/.ocos/ocos.db")
+            if not _os.path.exists(db_path):
+                return
+            conn = _sqlite3.connect(db_path)
+            conn.row_factory = _sqlite3.Row
+
+            # 今日 failure lessons 总数 + cause 分布
+            agg = conn.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN outcome LIKE '%execution_error%' THEN 1 ELSE 0 END) as exec_err,
+                    SUM(CASE WHEN outcome LIKE '%permission_denied%' THEN 1 ELSE 0 END) as perm,
+                    SUM(CASE WHEN outcome LIKE '%dependency_missing%' THEN 1 ELSE 0 END) as dep
+                FROM lessons WHERE date(created_at)=?""", (today,)).fetchone()
+
+            total = agg["total"] if agg else 0
+            if total == 0:
+                conn.close()
+                self._last_daily_summary_date = today
+                return  # 今天没东西，也记日期避免反复查
+
+            # Top 3 高频 agent
+            top_agents = conn.execute("""
+                SELECT tags, COUNT(*) as c FROM lessons
+                WHERE date(created_at)=? GROUP BY tags ORDER BY c DESC LIMIT 3
+            """, (today,)).fetchall()
+
+            conn.close()
+
+            # 摘要文案
+            lines = [f"📚 今日学习摘要（{today}）", f"共 {total} 条 failure lesson"]
+            if agg["exec_err"]:
+                lines.append(f"  · 执行错误 {agg['exec_err']} 次")
+            if agg["perm"]:
+                lines.append(f"  · 权限拒绝 {agg['perm']} 次")
+            if agg["dep"]:
+                lines.append(f"  · 依赖缺失 {agg['dep']} 次")
+            if top_agents:
+                _agents = []
+                for a in top_agents:
+                    _t = (a["tags"] or "")
+                    if "writer" in _t.lower():
+                        _agents.append(f"writer×{a['c']}")
+                    elif "reviewer" in _t.lower():
+                        _agents.append(f"reviewer×{a['c']}")
+                    elif "planner" in _t.lower():
+                        _agents.append(f"planner×{a['c']}")
+                if _agents:
+                    lines.append(f"高频: {', '.join(_agents)}")
+
+            summary = "\n".join(lines)
+            logger.info("Daily learning summary:\n%s", summary)
+
+            # 推送到 inbox（daemon 主动说话）
+            try:
+                inbox = UserInbox(db_path=db_path)
+                inbox.post(sender="daemon", content=summary,
+                           kind="daily_summary")
+            except Exception:
+                logger.exception("Failed to push daily summary to inbox")
+
+            self._last_daily_summary_date = today
+        except Exception:
+            logger.exception("Daily learning summary generation failed")
 
     def _pump_evolution_artifacts(self, cap: int = 5) -> int:
         """B1 管道打通: evolution_artifacts PENDING→APPROVED→goals 表.
