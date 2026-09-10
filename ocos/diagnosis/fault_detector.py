@@ -95,17 +95,31 @@ class FaultDetector:
         if comp.healthy:
             return None
 
-        # 根据组件名推断类别
-        if "event" in name or "store" in name:
+        # V9 环境感知扩展: 先匹配环境组件名，再回退到内部组件
+        if name == "host":
+            category = FaultCategory.RESOURCE_PRESSURE
+            severity = Severity.HIGH
+        elif name == "network":
+            category = FaultCategory.CONNECTION_FAILURE
+            severity = Severity.HIGH
+        elif name == "daemon_self":
+            category = FaultCategory.STATE_CORRUPTION
+            severity = Severity.HIGH
+        elif name == "cognition_heartbeat":
+            category = FaultCategory.PERFORMANCE_DEGRADATION
+            severity = Severity.MODERATE
+        elif "event" in name or "store" in name:
             category = FaultCategory.STORAGE_FAILURE
+            severity = Severity.MODERATE
         elif "capability" in name or "adapter" in name:
             category = FaultCategory.CAPABILITY_FAILURE
+            severity = Severity.MODERATE
         elif "scheduler" in name:
             category = FaultCategory.SCHEDULER_STALL
+            severity = Severity.HIGH
         else:
             category = FaultCategory.CONNECTION_FAILURE
-
-        severity = Severity.HIGH if "memory" in name or "identity" in name else Severity.MODERATE
+            severity = Severity.MODERATE
 
         return FaultSignal(
             signal_id=f"fault-{uuid.uuid4().hex[:12]}",

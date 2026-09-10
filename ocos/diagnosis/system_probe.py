@@ -34,8 +34,10 @@ class SystemProbe:
 
     tick: int = 0
     db_path: str = ""   # UX 修复: event_memory 探针需要真实 DB 路径
+    # V9 环境感知扩展: 加入 host/network/daemon_self/cognition_heartbeat
     probes_enabled: list[str] = field(default_factory=lambda: [
         "runtime", "persistence", "event_memory", "memory",
+        "host", "network", "daemon_self", "cognition_heartbeat",
     ])
 
     def capture(self) -> SystemSnapshot:
@@ -163,6 +165,28 @@ class SystemProbe:
             healthy=True,
             metrics={"status": "probed"},
         )
+
+    # ── V9 环境感知: 四层新探针 ──────────────────────────────────────────
+
+    def _probe_host(self) -> ComponentHealth:
+        """宿主机资源: CPU load / 内存 / 磁盘 / OCOS 进程状态 / 温度。"""
+        from ocos.diagnosis.environment_probe import probe_host_resources
+        return probe_host_resources(heavy=False)
+
+    def _probe_network(self) -> ComponentHealth:
+        """网络: DNS / HTTP 可达性（国内+国际）/ 延迟 / SSL。"""
+        from ocos.diagnosis.environment_probe import probe_network
+        return probe_network()
+
+    def _probe_daemon_self(self) -> ComponentHealth:
+        """OCOS 深度: DB 完整性 / WAL 状态 / 关键目录权限 / 活跃性。"""
+        from ocos.diagnosis.environment_probe import probe_daemon_self
+        return probe_daemon_self(self.db_path)
+
+    def _probe_cognition_heartbeat(self) -> ComponentHealth:
+        """认知循环心跳: 最近 tick 连续性 / trace 是否断。"""
+        from ocos.diagnosis.environment_probe import probe_cognition_heartbeat
+        return probe_cognition_heartbeat(self.db_path)
 
     def _calculate_health(self, snapshot: SystemSnapshot) -> float:
         comps = snapshot.components

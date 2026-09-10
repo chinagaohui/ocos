@@ -63,6 +63,7 @@ def run_diagnosis_cycle(db_path: str) -> dict:
 
     proposer = RepairProposer()
     queued, diagnostics, executed = [], [], []
+    env_alerts: list[str] = []   # V9: 环境问题主动上报文本
     for signal in signals:
         report = DiagnosisReport(
             report_id=f"diag-{uuid.uuid4().hex[:10]}",
@@ -79,6 +80,14 @@ def run_diagnosis_cycle(db_path: str) -> dict:
         diagnostics.append({"problem": report.problem,
                             "severity": signal.severity.value,
                             "category": signal.category.value})
+
+        # V9: 环境类 HIGH/CATASTROPHIC 信号 → 主动上报（让用户知道
+        # OCOS 发现了环境问题，不是 silent failure）
+        if signal.is_critical and signal.source in (
+                "host", "network", "daemon_self", "cognition_heartbeat"):
+            env_alerts.append(
+                f"[{signal.source}] {signal.description} "
+                f"(severity={signal.severity.name})")
         proposals = proposer.propose(report, signal)
         for proposal in proposals:
             if not proposal.reversible:
@@ -163,13 +172,28 @@ def run_diagnosis_cycle(db_path: str) -> dict:
     except sqlite3.OperationalError:
         pass
 
+    # V9: 环境问题主动上报 — 尝试通过 outbox 推送给用户
+    if env_alerts:
+        try:
+            from ocos.interaction.inbox import UserInbox
+            inbox = UserInbox(db_path=db_path)
+            for alert in env_alerts:
+                inbox.post_outbound(
+                    f"⚠ 环境异常: {alert}",
+                    kind="report")
+            logger.warning("Environment alerts pushed to user: %s",
+                          env_alerts[:2])
+        except Exception as _ae:
+            logger.debug("Environment alert push skipped: %s", _ae)
+
     return {"snapshot": snapshot.snapshot_id,
             "degraded": snapshot.degraded_components,
             "failing": snapshot.failing_components,
             "faults": len(signals),
             "diagnoses": diagnostics,
             "repairs_queued": queued,
-            "repairs_executed": executed}
+            "repairs_executed": executed,
+            "env_alerts": env_alerts}
 
 
 # ── 审批后的白名单修复执行 ────────────────────────────────────────────

@@ -102,7 +102,8 @@ class SelfCheckRunner:
         report = SelfCheckReport(
             started_at=datetime.now(timezone.utc).isoformat())
         for fn in (self._check_redline, self._check_cognitive,
-                   self._check_trace_audit, self._check_living):
+                   self._check_trace_audit, self._check_living,
+                   self._check_environment):   # V9: 第 5 层环境审计
             try:
                 fn(report)
             except Exception as e:   # 自检项异常 = 该项失败（诚实上报）
@@ -322,6 +323,84 @@ class SelfCheckRunner:
             report.checks.append(CheckResult(
                 layer="living", name="identity_no_drift", passed=False,
                 evidence=f"基线读写失败: {e}"))
+
+    # ── L5 环境感知（V9 扩展层）：宿主机/网络/OCOS 深度/认知心跳 ──
+
+    def _check_environment(self, report: SelfCheckReport) -> None:
+        """V9: 环境感知层 — 调用 environment_probe 的 4 个探针。"""
+        from ocos.diagnosis.environment_probe import (
+            probe_host_resources, probe_network,
+            probe_daemon_self, probe_cognition_heartbeat,
+        )
+
+        def _add(layer: str, name: str, passed: bool, evidence: str) -> None:
+            report.checks.append(CheckResult(
+                layer=layer, name=name, passed=passed, evidence=evidence))
+
+        # 1. 宿主机资源
+        try:
+            h = probe_host_resources(heavy=False)
+            warn = f" | 警告: {'; '.join(h.warnings[:2])}" if h.warnings else ""
+            ev = (f"load1={h.metrics.get('load1', '?')} "
+                  f"mem={h.metrics.get('mem_avail_g', '?')}G "
+                  f"disk={h.metrics.get('disk_avail_g', '?')}G{warn}")
+            _add("environment", "host_resources", h.healthy, ev)
+        except Exception as e:
+            _add("environment", "host_resources", False,
+                 f"probe crashed: {e}")
+
+        # 2. 网络连通性
+        try:
+            n = probe_network()
+            warn = f" | 警告: {'; '.join(n.warnings[:2])}" if n.warnings else ""
+            ev = (f"state={n.metrics.get('state', '?')} "
+                  f"intl_ok={n.metrics.get('intl_ok', '?')} "
+                  f"intl_latency={n.metrics.get('intl_time_s', '?')}s{warn}")
+            _add("environment", "network_connectivity", n.healthy, ev)
+        except Exception as e:
+            _add("environment", "network_connectivity", False,
+                 f"probe crashed: {e}")
+
+        # 3. OCOS 深度 — 拆 3 个断言（DB 完整性/权限/活跃性）
+        try:
+            d = probe_daemon_self(self._db_path or "")
+            integrity_ok = d.metrics.get("integrity") == "ok"
+            wal_mb = d.metrics.get("wal_size_mb")
+            db_mb = d.metrics.get("db_size_mb")
+            wal_txt = (f" | WAL={wal_mb}M(主DB {db_mb}M)"
+                       if wal_mb and db_mb else "")
+            _add("environment", "db_integrity", integrity_ok,
+                 f"integrity_check={d.metrics.get('integrity', '?')}{wal_txt}")
+
+            all_writable = all(
+                d.metrics.get(f"{k}_writable", False)
+                for k in ("data_root", "artifacts", "plans", "reports"))
+            _add("environment", "filesystem_writable", all_writable,
+                 f"data_root={d.metrics.get('data_root_writable')} "
+                 f"artifacts={d.metrics.get('artifacts_writable')} "
+                 f"plans={d.metrics.get('plans_writable')} "
+                 f"reports={d.metrics.get('reports_writable')}")
+
+            age = d.metrics.get("last_episode_age_min", -1)
+            warn = f" | 警告: {'; '.join(d.warnings[:2])}" if d.warnings else ""
+            _add("environment", "daemon_active",
+                 (age < 30 or age < 0),
+                 f"last_episode_age_min={age}{warn}")
+        except Exception as e:
+            _add("environment", "daemon_self", False, f"probe crashed: {e}")
+
+        # 4. 认知循环心跳（无条目 ≠ unhealthy）
+        try:
+            c = probe_cognition_heartbeat(self._db_path or "")
+            no_entries = c.metrics.get("cognition_entries", 0) == 0
+            passed = c.healthy or no_entries
+            warn = f" | 警告: {'; '.join(c.warnings[:2])}" if c.warnings else ""
+            ev = (f"entries={c.metrics.get('cognition_entries', 0)}"
+                  f" latest_age={c.metrics.get('latest_cognition_age_s', '?')}s{warn}")
+            _add("environment", "cognition_heartbeat", passed, ev)
+        except Exception as e:
+            _add("environment", "cognition_heartbeat", False,
+                 f"probe crashed: {e}")
 
     # ── 工具 ──────────────────────────────────────────────────────────
 
