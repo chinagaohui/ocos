@@ -1005,7 +1005,12 @@ class ResidentRuntime:
         if not db_path:
             return
 
-        selector = ActionSelector(db_path)
+        # 关键修复: ActionSelector 存成实例变量, 不然每次新建实例
+        # → _last_run_ticks 状态全丢 → cooldown 失效
+        if not hasattr(self, "_action_selector") or self._action_selector is None:
+            self._action_selector = ActionSelector(db_path)
+        selector = self._action_selector
+
         state = selector.snapshot_state()
         state.dream_cycle_tick = True
 

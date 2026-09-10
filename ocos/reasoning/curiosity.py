@@ -210,7 +210,7 @@ class PredictionGapTracker:
 
         Returns:
           [{"gap_id": str, "domain": str, "error_magnitude": float,
-            "hypothesis": str, "target_pattern": str}, ...]
+            "hypothesis": str, "task_text": str}, ...]
         """
         hypotheses: list[dict[str, Any]] = []
         # 按 domain 聚合 + 按 gap 排序
@@ -220,13 +220,13 @@ class PredictionGapTracker:
             # 取 gap 最大的 record
             worst = max(records, key=lambda r: r.gap)
             hypotheses.append({
-                "gap_id": f"GAP-{domain}-{hash(worst.target_pattern) & 0xFFFFFFFF:x}",
+                "gap_id": f"GAP-{domain}-{hash(worst.task_text) & 0xFFFFFFFF:x}",
                 "domain": domain,
-                "target_pattern": worst.target_pattern or "",
+                "task_text": worst.task_text or "",
                 "error_magnitude": worst.gap,
                 "hypothesis": (
-                    f"Domain '{domain}' 中 pattern "
-                    f"'{worst.target_pattern[:40]}' gap={worst.gap:.2f} "
+                    f"Domain '{domain}' task "
+                    f"'{(worst.task_text or '')[:40]}' gap={worst.gap:.2f} "
                     f"— 预测与观察不符, 需要定向探索"
                 ),
             })
@@ -412,17 +412,26 @@ class EpistemicDrive:
         # ── ReflectionEngine 种子: deepen_topics ──
         try:
             conn = sqlite3.connect(self._db_path)
+            # 只取 1 条 used=0 (每次 dream 消化一条, 省着用)
             seed_rows = conn.execute(
-                "SELECT topic FROM reflection_seed_topics WHERE used=0 ORDER BY rowid DESC LIMIT 2"
+                "SELECT topic FROM reflection_seed_topics WHERE used=0 "
+                "ORDER BY rowid DESC LIMIT 1"
             ).fetchall()
             for (topic,) in seed_rows:
                 goals.append(f"【反思引导】深入学习: {topic}")
-            # 标记为已用
-            if seed_rows:
+            # 标记这一批为已用 (只标记本次消化的, 不是全表)
+            used_ids = [hash(r[0]) & 0x7FFFFFFF for r in seed_rows]
+            for sid in used_ids:
                 conn.execute(
-                    "UPDATE reflection_seed_topics SET used=1 WHERE used=0"
+                    "UPDATE reflection_seed_topics SET used=1 "
+                    "WHERE used=0 AND rowid=(SELECT MIN(rowid) FROM reflection_seed_topics)"
                 )
-                conn.commit()
+            # 清理过旧的种子 (超过 50 条已用的就删)
+            conn.execute(
+                "DELETE FROM reflection_seed_topics WHERE used=1 "
+                "AND rowid NOT IN (SELECT rowid FROM reflection_seed_topics WHERE used=1 ORDER BY rowid DESC LIMIT 20)"
+            )
+            conn.commit()
             conn.close()
         except Exception:
             pass

@@ -254,16 +254,20 @@ class ReflectionEngine:
             return {}
 
     def _resolve_gaps(self, buffer: list[dict]) -> dict:
-        """Loop 2: 和 PredictionGapTracker 比对 — 哪些 gap 被消除了."""
+        """Loop 2: 和 PredictionGapTracker 比对 — 哪些 gap 被消除了.
+
+        修复: 原来调不存在的 get_recent_gaps() — 改用 emit_gap_hypothesis().
+        """
         result = {"resolved": 0, "remaining": []}
         try:
             from ocos.reasoning.curiosity import PredictionGapTracker
 
             tracker = PredictionGapTracker(db_path=self._db_path)
-            gaps = tracker.get_recent_gaps(limit=10)
+            hypotheses = tracker.emit_gap_hypothesis(top_n=5)
 
-            for gap in gaps:
-                target = getattr(gap, "target_pattern", "") or ""
+            for h in hypotheses:
+                # 用 task_text 做比对 (GapRecord.task_text)
+                target = h.get("task_text", "")
                 resolved = False
                 for b in buffer:
                     if target and target in b["statement"]:
@@ -272,7 +276,7 @@ class ReflectionEngine:
                 if resolved:
                     result["resolved"] += 1
                 else:
-                    gap_id = getattr(gap, "gap_id", None) or str(getattr(gap, "id", ""))
+                    gap_id = h.get("gap_id")
                     if gap_id:
                         result["remaining"].append(gap_id)
         except Exception:
