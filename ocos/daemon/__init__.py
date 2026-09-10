@@ -723,13 +723,14 @@ class ResidentRuntime:
                 except Exception:
                     logger.exception("auto approve pump failed")
                 # B1 管道打通: evolution_artifacts PENDING→APPROVED→goals
-                # 每次 tick 调，内部用 60s 节流（和 cognition loop 同节奏）
+                # 用时间戳（秒）做 60s 节流，重启后立即触发一次
                 try:
-                    now_ts = self._runtime._cycle_count * 5  # tick ≈ 5s
-                    last = getattr(self, "_last_evol_pump_tick", 0)
+                    import time as _time
+                    now_ts = int(_time.time())
+                    last = getattr(self, "_last_evol_pump_ts", 0)
                     if now_ts - last >= 60:
                         self._pump_evolution_artifacts()
-                        self._last_evol_pump_tick = now_ts
+                        self._last_evol_pump_ts = now_ts
                 except Exception:
                     logger.exception("evolution artifacts pump failed")
                 # U5: 每日学习摘要推送（每天一次，日期节流）
@@ -2105,13 +2106,12 @@ class ResidentRuntime:
             summary = "\n".join(lines)
             logger.info("Daily learning summary:\n%s", summary)
 
-            # 推送到 inbox（daemon 主动说话）
+            # 推送到 outbox（daemon 主动输出 → post_outbound，带 kind）
             try:
                 inbox = UserInbox(db_path=db_path)
-                inbox.post(sender="daemon", content=summary,
-                           kind="daily_summary")
+                inbox.post_outbound(content=summary, kind="report")
             except Exception:
-                logger.exception("Failed to push daily summary to inbox")
+                logger.exception("Failed to push daily summary to outbox")
 
             self._last_daily_summary_date = today
         except Exception:
