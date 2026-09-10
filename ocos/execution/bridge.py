@@ -1430,6 +1430,11 @@ class DecisionBridge:
             # 不 crash，但记录 error（Phase 2 纯重构，不应出现不等价）
             logger.error("Phase2-PARSE-DIVERGENCE: _lines vs _actions_to_lines differ! "
                          "lines=%d actions=%d", len(_lines), len(_reconstructed))
+        # Phase 3 (Mutation): Mutation Engine 硬否决层
+        # 位置: _parse_actions 之后, ANSWER_GUARD / _agent_forced_call / sandbox 之前
+        _actions = self._mutation_check(_actions, description)
+        # 同步更新 _lines（所有下游继续用 _lines，Phase 4 逐步切到 actions）
+        _lines = self._actions_to_lines(_actions)
         # UX-J+ 实测新增: ANSWER| — 认知型任务（复盘/总结/分析）所需信息
         # 已在注入上下文（如复盘素材）时，LLM 直接给出文字结论。此前只能
         # 用 NONE|（被判"无法执行→failed"）或违心跑系统采集命令（跑偏），
@@ -2237,6 +2242,241 @@ class DecisionBridge:
             elif t == "AGENT_INSTALL":
                 result.append(f"AGENT_INSTALL|{a.get('name', '')}")
         return result
+
+    # ── Phase 3 (Mutation): Mutation Engine — 硬否决已知失败策略 ──────
+
+    def _fetch_recent_mutation_lessons(self, description: str) -> list[dict]:
+        """Phase 3: 查近 7 天内带 mutation_policy 的 failure lessons。
+
+        返回 lessons 列表，每项含 id, context（含 failure_lesson + mutation_policy）。
+        无 DB / 无匹配 lesson → 返回 []（Mutation Engine 全放行）。
+        """
+        if not self._db_path:
+            return []
+        try:
+            import sqlite3 as _sqlite3
+            from datetime import datetime, timedelta, timezone as _tz
+            _cutoff = (datetime.now(_tz.utc) - timedelta(days=7)).isoformat()
+            conn = _sqlite3.connect(self._db_path)
+            conn.row_factory = _sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, context FROM episodes "
+                "WHERE source='lesson' AND action='failure_lesson' "
+                "AND context LIKE '%mutation_policy%' "
+                "AND created_at >= ? "
+                "ORDER BY created_at DESC LIMIT 20",
+                (_cutoff,)).fetchall()
+            conn.close()
+        except Exception:
+            return []
+
+        import json as _json
+        lessons = []
+        for r in rows:
+            try:
+                ctx = _json.loads(r["context"] or "{}")
+                if "mutation_policy" not in ctx:
+                    continue
+                lessons.append({"id": r["id"], "context": ctx})
+            except (ValueError, TypeError):
+                continue
+        return lessons
+
+    def _check_action_against_lessons(self, action: dict,
+                                       lessons: list[dict]) -> dict | None:
+        """Phase 3: 检查单个 Action 是否违反已知失败策略。
+
+        按 mutation_policy.level 逐层检查:
+          - action 级: command 字符串含 deny.patterns 中任一项?
+          - tool 级:   command 首词在 deny.commands 里?
+          - planning 级: 暂时不检查（defer BV5）
+
+        返回 veto dict 或 None。veto 结构:
+          {
+            "reason": "具体命中描述",
+            "policy_match": {"type": "action|tool|planning", "rule": "命中的具体值"},
+            "lesson_id": "..."
+          }
+        """
+        _action_type = action.get("type", "")
+        if _action_type != "RUN":
+            return None  # 只检查 RUN 类型（执行型动作）
+        cmd = action.get("command", "")
+        if not cmd:
+            return None
+
+        for lesson in lessons:
+            policy = lesson.get("context", {}).get("mutation_policy", {})
+            level = policy.get("level", "")
+            deny = policy.get("deny", {})
+
+            if level == "action":
+                for p in deny.get("patterns", []):
+                    if p and p in cmd:
+                        return {
+                            "reason": f"action deny pattern '{p}' hits command '{cmd}'",
+                            "policy_match": {"type": "action", "rule": p},
+                            "lesson_id": lesson.get("id", ""),
+                        }
+
+            elif level == "tool":
+                tool = cmd.split()[0] if cmd else ""
+                if tool and tool in deny.get("commands", []):
+                    return {
+                        "reason": f"tool '{tool}' unavailable (dependency_missing)",
+                        "policy_match": {"type": "tool", "rule": tool},
+                        "lesson_id": lesson.get("id", ""),
+                    }
+
+            elif level == "planning":
+                # Deferred — BV5+ 才接 SQL 表名检查
+                pass
+
+        return None
+
+    def _mutation_check(self, actions: list[dict],
+                        description: str) -> list[dict]:
+        """Phase 3: Mutation Engine 主入口 — 硬否决已知失败策略。
+
+        Architecture v1.2 Authority（仅此三种）:
+          1. Reject:  判断 action 是否违反 mutation_policy.deny
+          2. Retry:   允许 DENY + 要求重新规划一次（MAX_RETRY=1 per-Action transaction）
+          3. Audit:   记录完整轨迹
+
+        不拥有: 自动生成替代命令 / 自动修改 goal / 自动选择替代方案
+
+        Retry lifecycle（冻结，禁止归零）:
+          retry_count = 0
+          ── LLM → ActionParser → Mutation ──┐
+                PASS → execute              │
+                DENY → retry_count += 1     │
+                       LLM Retry →          │
+                       ActionParser →       │
+                       Mutation ────────────┘
+                         PASS → execute
+                         DENY → NONE|exhausted
+        """
+        lessons = self._fetch_recent_mutation_lessons(description)
+        if not lessons:
+            return actions  # 无 lesson → 全放行
+
+        result: list[dict] = []
+        for action in actions:
+            # NONE/ANSWER/FILE_WRITE/AGENT_INSTALL 不检查（只检查 RUN）
+            if action.get("type") != "RUN":
+                result.append(action)
+                continue
+
+            # 第一次检查
+            veto = self._check_action_against_lessons(action, lessons)
+            if veto is None:
+                result.append(action)
+                continue
+
+            # ── 命中 → DENY + Audit ──
+            self._audit_mutation_event(action, veto)
+
+            # ── 强制 Retry（MAX_RETRY=1）──
+            retry_prompt = self._build_mutation_retry_prompt(
+                action, veto, lessons)
+            try:
+                new_raw = self._first_line(self._convert(retry_prompt))
+                new_actions = self._parse_actions(new_raw)
+            except Exception as _e:
+                logger.error("MUTATION-RETRY-LLM-FAILED: %s", _e)
+                new_actions = []
+
+            if not new_actions or new_actions[0].get("type") != "RUN":
+                # Retry 后没有生成有效 RUN 命令 → NONE|exhausted
+                result.append({
+                    "type": "NONE",
+                    "reason": f"[Mutation exhausted] {veto['reason']}",
+                })
+                continue
+
+            # Retry 后再检查（retry_count 已经 == 1，不再 retry）
+            new_action = new_actions[0]
+            veto2 = self._check_action_against_lessons(new_action, lessons)
+            if veto2 is None:
+                result.append(new_action)
+            else:
+                # 第二次仍命中 → NONE|exhausted
+                self._audit_mutation_event(new_action, veto2, stage="retry-denied")
+                result.append({
+                    "type": "NONE",
+                    "reason": f"[Mutation exhausted] retry also denied: {veto2['reason']}",
+                })
+
+        return result
+
+    def _audit_mutation_event(self, action: dict, veto: dict,
+                               stage: str = "initial-denied") -> None:
+        """Phase 3: Mutation 审计 — logger + record_global metric。
+
+        event 结构（记录到 logger）:
+          {
+            "lesson_id": "...",
+            "action_before": {"type": "RUN", "command": "htop"},
+            "decision": "DENY",
+            "policy_match": {"type": "tool", "rule": "htop"},
+            "stage": "initial-denied" | "retry-denied"
+          }
+        """
+        logger.warning(
+            "MUTATION-VETO: stage=%s action=%s lesson_id=%s match=%s",
+            stage, action.get("command", action),
+            veto.get("lesson_id", ""), veto.get("policy_match", {}))
+        try:
+            from ocos.monitoring.manager import record_global
+            record_global(
+                "mutation_veto", 1.0,
+                labels={
+                    "type": veto.get("policy_match", {}).get("type", "unknown"),
+                    "rule": veto.get("policy_match", {}).get("rule", "unknown")[:60],
+                    "stage": stage,
+                })
+        except Exception:
+            pass
+
+    def _build_mutation_retry_prompt(self, action: dict, veto: dict,
+                                       lessons: list[dict]) -> str:
+        """Phase 3: 构造 mutation retry prompt（注入 deny patterns + 替代路径建议）。
+
+        关键点: 不生成具体替代命令（Mutation ≠ Planner），
+        只告诉 LLM "你之前的命令违反了什么约束" + "有哪些替代方向"。
+        """
+        cmd = action.get("command", "")
+        match = veto.get("policy_match", {})
+
+        # 收集替代建议（从所有相关 lessons 的 mutation_policy.deny 派生）
+        deny_lines = []
+        alt_lines = []
+        for lesson in lessons:
+            mp = lesson.get("context", {}).get("mutation_policy", {})
+            level = mp.get("level", "")
+            deny = mp.get("deny", {})
+            if level == "action":
+                for p in deny.get("patterns", []):
+                    if p:
+                        deny_lines.append(f"❌ 禁止路径: {p}")
+                alt_lines.append("✅ 建议: 使用公开替代资源（如 /etc/passwd）或诚实说明无法访问")
+            elif level == "tool":
+                for c in deny.get("commands", []):
+                    if c:
+                        deny_lines.append(f"❌ 不可用工具: {c}")
+                alt_lines.append("✅ 建议: 用 bash 内建 / python 标准库 / 系统自带替代工具")
+
+        deny_section = "\n".join(dict.fromkeys(deny_lines))  # 去重保序
+        alt_section = "\n".join(dict.fromkeys(alt_lines))
+
+        return (
+            f"你之前的命令: RUN|{cmd}\n"
+            f"已被拒绝（违反已知失败策略）\n"
+            f"拒绝原因: {veto.get('reason', '')}\n"
+            f"\n禁止的策略:\n{deny_section}\n"
+            f"\n替代方向:\n{alt_section}\n"
+            f"\n请输出一行新的 RUN| 命令（或 NONE|诚实说明），不要解释。"
+        )
 
     def _prior_task_results(self, description: str, limit: int = 2) -> str:
         """FIX-4: 同类任务历史结果 — 任务转换前的执行经验注入。
