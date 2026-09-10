@@ -357,13 +357,13 @@ class GoalGenesis:
         for agent in found_agents:
             try:
                 rows = conn.execute(
-                    """SELECT statement, confidence, tags FROM belief
-                       WHERE tags LIKE ? AND confidence <= 0.1""",
-                    (f"%\"{agent}\"%",)).fetchall()
+                    """SELECT statement, confidence, scope FROM belief
+                       WHERE scope = 'capability_offline'
+                         AND confidence <= 0.1""").fetchall()
             except Exception:
                 continue
 
-            for stmt, conf, tags in rows:
+            for stmt, conf, scope in rows:
                 if not (conf <= 0.1 and agent.lower() in stmt.lower()):
                     continue
 
@@ -373,9 +373,8 @@ class GoalGenesis:
                 last_probe = GoalGenesis._capability_probe_cooldown.get(cooldown_key, 0)
                 if now_ts - last_probe >= 60:
                     GoalGenesis._capability_probe_cooldown[cooldown_key] = now_ts
-                    dep = self._extract_dependency(stmt, tags)
+                    dep = self._extract_dependency(stmt, scope)
                     if dep and self._probe_dependency_available(dep):
-                        # 依赖恢复 → 删除 belief 标记
                         try:
                             conn.execute(
                                 "DELETE FROM belief WHERE confidence <= 0.1 AND statement = ?",
@@ -384,7 +383,7 @@ class GoalGenesis:
                             logger.warning(
                                 "P2b-capability-restored: agent[%s] dep='%s' recovered, "
                                 "deleted offline belief", agent.lower(), dep)
-                            return False  # 放行！
+                            return False
                         except Exception:
                             pass
 
@@ -395,21 +394,12 @@ class GoalGenesis:
         return False
 
     @staticmethod
-    def _extract_dependency(stmt: str, tags: str) -> str | None:
-        """从 belief statement / tags 提取依赖名."""
+    def _extract_dependency(stmt: str, scope: str) -> str | None:
+        """从 belief statement 提取依赖名."""
         import re
-        # belief 格式: "agent[writer] 在当前环境因依赖 'sqlite3' 不可用"
         m = re.search(r"依赖\s*['\"](\S+?)['\"]\s*不可用", stmt)
         if m:
             return m.group(1)
-        # 从 tags 里找
-        try:
-            tag_list = json.loads(tags) if tags else []
-            for t in tag_list:
-                if ":" in t:
-                    return t.split(":", 1)[1]
-        except Exception:
-            pass
         return None
 
     @staticmethod
