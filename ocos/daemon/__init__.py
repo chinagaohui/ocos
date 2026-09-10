@@ -661,30 +661,12 @@ class ResidentRuntime:
                         logger.exception("goal result push failed")
 
                 # P1-1: 周期性 dream 巩固（Episode → Belief/Pattern/Wisdom）
+                # 使用 ACT-R 产生式规则引擎动态选择要跑的模块
                 if self._hb_ticks % max(1, self.dream_interval_ticks) == 0:
                     try:
-                        self._consolidate()
+                        self._run_dream_cycle()
                     except Exception:
-                        logger.exception("Dream consolidation failed")
-
-                    # Phase S2-P1b: 经验自动摄入（UnifiedIngestor）
-                    try:
-                        self._ingest_experience()
-                    except Exception:
-                        logger.exception("UnifiedIngestor failed")
-
-                    # Phase S2-P1a: EpistemicDrive 触发外部调研
-                    try:
-                        self._epistemic_research()
-                    except Exception:
-                        logger.exception("Epistemic research failed")
-
-                    # Phase S2-P2: 每日自进化循环 — 双路径学习 + 自我总结
-                    # 每 2880 ticks (≈ 4h) 触发一次，避免每 tick 都跑
-                    try:
-                        self._daily_self_evolution()
-                    except Exception:
-                        logger.exception("Daily self-evolution failed")
+                        logger.exception("Dream cycle failed")
                 # Phase 33: 将队列中的目标导入 runtime 的 goal_store
                 self._drain_goal_queue()
                 # 全自动模式: 待批队列自动通过（ask 模式零开销空转）
@@ -1005,6 +987,54 @@ class ResidentRuntime:
         self._consolidation.run_dream_cycle(agent_obj)
 
     # ── 依赖注入 helpers ────────────────────────────────────────────
+
+    def _run_dream_cycle(self) -> None:
+        """ACT-R 产生式规则引擎驱动的 dream cycle.
+
+        旧逻辑: 固定顺序 consolidate → ingest → research → evolve
+        新逻辑: ActionSelector.snapshot_state → select_modules → 按 score 排序执行
+
+        好处:
+          - L0 braked 时只跑 consolidation (不浪费资源)
+          - curiosity 低时 research score 自动降到 0
+          - evolve 有 2880 tick cooldown → 自然不会每轮都跑
+        """
+        from ocos.autonomous.action_selector import ActionSelector
+
+        db_path = getattr(self, "_db_path", None)
+        if not db_path:
+            return
+
+        selector = ActionSelector(db_path)
+        state = selector.snapshot_state()
+        state.dream_cycle_tick = True
+
+        cycle = getattr(self._runtime, "_cycle_count", 0)
+        selected = selector.select_modules(
+            state, cycle_count=cycle, braked=self._braked,
+        )
+
+        logger.info(
+            "🎭 Dream cycle (cycle=%d): %d modules selected "
+            "[state=L%d expl=%d growth=%d gap=%.2f k=%d pending=%d]",
+            cycle, len(selected),
+            state.autonomy_level, state.curiosity_explore,
+            state.curiosity_growth, state.avg_prediction_gap,
+            state.knowledge_total, state.pending_evolutions,
+        )
+        for mod, score in selected:
+            try:
+                if mod == "consolidation":
+                    self._consolidate()
+                elif mod == "ingest_experience":
+                    self._ingest_experience()
+                elif mod == "epistemic_research":
+                    self._epistemic_research()
+                elif mod == "daily_self_evolution":
+                    self._daily_self_evolution()
+                logger.info("  ✅ %-25s score=%.2f done", mod, score)
+            except Exception:
+                logger.exception("  ❌ %s failed", mod)
 
     def _build_ingestor(self, db_path: str) -> "UnifiedIngestor":
         """构建完整注入的 UnifiedIngestor (KnowledgeRegistry + SemanticStore + AccessMatrix).
