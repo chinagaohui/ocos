@@ -699,10 +699,21 @@ class ResidentRuntime:
                         logger.info("🧠 Cognition Loop firing (gap=%.0fs, L%d braked=%s)", diff, self._autonomy_level, self._braked)
                         self._run_continuous_cognition()
                         self._last_cognition_ts = now_ts
+                        self._cognition_fail_streak = 0  # 成功 → 清零
                     elif diff > 0:
                         logger.debug("🧠 cognition cooldown: %.0fs since last, need 60s", diff)
                 except Exception as e:
-                    logger.warning("continuous cognition failed: %s", e, exc_info=True)
+                    # U1: 连续失败计数 — 3 轮以上 → 主动告警
+                    streak = getattr(self, "_cognition_fail_streak", 0) + 1
+                    self._cognition_fail_streak = streak
+                    if streak >= 3:
+                        logger.critical(
+                            "🧠⚠️ Cognition Loop has failed %d consecutive times! "
+                            "Last error: %s — cognition is DEGRADED",
+                            streak, e,
+                        )
+                    else:
+                        logger.warning("continuous cognition failed (%d/3): %s", streak, e, exc_info=True)
 
                 # Phase 33: 将队列中的目标导入 runtime 的 goal_store
                 self._drain_goal_queue()
