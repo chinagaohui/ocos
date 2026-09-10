@@ -45,15 +45,81 @@ python -m pytest ocos/tests/test_integration.py -v
 cat docs/ARCHITECTURE.md
 ```
 
-## 项目状态（2026-09-09 更新）
+## 项目状态（2026-09-10 更新）
 
-- **代码规模：** ~169,500 行 / ~840 modules / ~2,380 classes
-- **测试数量：** 4,366-4,367 passed（baseline 零回归）
-- **生产状态：** systemd 常驻 daemon 运行中（cycle ≥ 619 持续增长）
-- **当前阶段：** 落地方案 6 步全部落地 → 等时间积累验证端到端 checklist
-- **主链：** ResidentRuntime → RuntimeKernel → AgentRuntime.tick() → TaskDAG → DecisionBridge → Permission → Execution
-- **学习链路：** EpisodeStore → PatternExtractor(condition=agent=X,success=Y) → consolidate → wisdom_trigger → wisdom_context()/belief_context() → think() premises ✅ 全链路打通
-- **自治治理：** GoalGenesis 提案引擎 + 分级批准 (LOW/MEDIUM auto / HIGH reject) + 4 级自治阶梯 (L0-L3) + ShadowVerifier 沙箱验证 + CircuitBreaker 熔断降级 + 4 个 Prometheus 北极星指标
+- **代码规模：** ~170,000 行 / ~840 modules / ~2,380 classes
+- **测试数量：** **4,374 passed / 0 failed**（全量零回归，~11min）
+- **生产状态：** systemd 常驻 daemon 运行中（autonomy_level=2，60s 节流）
+- **当前阶段：** 生产级修复全部落地 → 持续运行验证 + 主动交互演进
+- **主链：** ResidentRuntime → RuntimeKernel → AgentRuntime.tick() → DecisionBridge → Permission → Execution
+- **学习链路：** EpisodeStore → PatternExtractor → consolidate → wisdom_trigger → think() premises ✅
+- **自治治理：** GoalGenesis 提案引擎 + 分级批准 + 4 级自治阶梯 (L0-L3) + ShadowVerifier + CircuitBreaker
+
+### 本轮生产修复（2026-09-10）
+
+| 优先级 | 编号 | 内容 | 状态 |
+|--------|------|------|------|
+| **P0** | B1 | evolution_artifacts PENDING→APPROVED→goals 管道打通 | ✅ |
+| **P0** | B2 | systemd autonomy_level=2 drop-in + override file | ✅ |
+| P1 | O2 | WAL checkpoint systemd timer（每 2min） | ✅ |
+| P1 | O3 | FailureDiagnoser DEPENDENCY_MISSING cause + GoalGenesis SKIP_DEPENDENTS | ✅ |
+| P2 | U1 | cognition loop fail streak counter（3 次连续→CRITICAL 告警） | ✅ |
+| P2 | U4 | LLM SQL 安全闸门（黑名单 9 种关键字） | ✅ |
+| **P2** | **O4** | **sqlite3 binary → Python sqlite3 降级（只读 SELECT/PRAGMA 拦截）** | ✅ |
+| **P3** | **U5** | **每日学习摘要推送（goals 表 → outbox kind='report'）** | ✅ |
+| — | — | **autonomy 降级双重闸门（10 次连续 + 滑窗成功率 < 30%）** | ✅ |
+| — | — | **Pump skip 精确去重 + 时间戳节流 + NameError desc 修复** | ✅ |
+| — | — | **lessons 视图（schema v7）+ WAL ratio 监控** | ✅ |
+| — | — | **4 test failures → 0（conftest 隔离 fixture + policy_engine/all_passed 语义）** | ✅ |
+| — | — | **lifecycle_manager signal handler 移除 sys.exit(0)（防 pytest 进程污染）** | ✅ |
+
+### 测试基础设施加固
+
+- `conftest.py` 新增 3 个 autouse fixture 隔离生产环境：
+  - `_isolated_autonomy` — override file → pytest tmp_path（monkeypatch env）
+  - `_isolated_active_interaction` — heartbeat→None + permission fail-closed
+  - `_isolated_llm_config` — 锁定无 LLM 路径，强制 mock
+- policy_engine `all_passed` 语义修正：WARN/ALLOW effect 的 passed=False 不阻断
+  （只有 DENY 必须全过），避免 autonomy_gate level=0 误伤测试
+- converse._state_reply mock 分支回显用户 message，让测试验证输入被保留
+
+### 关键生产路径
+
+```
+daemon tick (5s)
+├── _auto_approve_pending()        # ask 模式空转
+├── _pump_evolution_artifacts()    # ⏱ 60s 节流
+│   ├── Step 1: PENDING auto_generated + LOW risk → APPROVED
+│   └── Step 2: APPROVED (applied_at IS NULL) → goals 表 PENDING
+│       └── 精确去重: goals.metadata LIKE 'artifact_id'
+├── _push_daily_learning_summary() # 📅 每日一次
+│   └── lessons 视图聚合 → outbox kind='report'
+├── _claim_persisted_goals()
+├── kernel.tick_loop(1)            # agent driver 单次认知循环
+└── motivation.record_result()      # 双重闸门防跑飞降级
+    ├── FAILURE_DEMOTE_THRESHOLD=10
+    └── 滑窗成功率 < 30% 才降级
+```
+
+### sqlite3 降级拦截（O4）
+
+`DecisionBridge._handler_run_command` 前置 `_try_sqlite3_fallback()`：
+- **命中条件：** `sqlite3 path/to/db "SELECT ..."` 或无引号变体
+- **安全闸门：** 只读 SELECT/PRAGMA/EXPLAIN/WITH + 路径仅限 ~/.ocos 或 /tmp
+- **降级：** Python `sqlite3.connect()` 直接执行，绕开 binary 缺失
+- **写操作：** 走原 subprocess 路径（可能被沙盒/黑名单拦截）
+
+### autonomy 降级双重闸门
+
+原 `FAILURE_DEMOTE_THRESHOLD=3` 太激进 — writer/reviewer 偶发失败直接把
+autonomy 降到 0，导致整个"防跑飞"机制反过来"杀死"自主行为。
+
+修复为**双重闸门**（v2 抗噪）：
+1. 连续 10 次失败（原 3 → 10，抗 writer/reviewer 偶发失败噪声）
+2. 近 20 次 goal_result 滑窗成功率 < 30%
+
+两个条件**同时满足**才降级。`_result_window: list[bool]` 滑窗持久化于
+MotivationHub 实例。
 
 ## 落地方案（对齐 Coze 报告）
 
