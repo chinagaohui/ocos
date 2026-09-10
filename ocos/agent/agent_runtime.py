@@ -2445,9 +2445,7 @@ class AgentRuntime:
         limit: int = 5,
         min_confidence: float = 0.6,
     ) -> list[dict[str, Any]]:
-        """聚合检索决策可用学习产物（beliefs + knowledge）。
-
-        检索策略（中文短召回约束下的轻量方案）:
+        """聚合检索决策可用学习产物（beliefs + knowledge + skills + reflection + failure_lessons）。
           - beliefs: 置信度 >= min_confidence 的已持有信念，按与描述的关键
             词重叠度排序（重叠越多越相关），取 top-k。
           - knowledge: 全文 search(描述) 命中 + 置信度过滤。
@@ -2532,9 +2530,133 @@ class AgentRuntime:
         except Exception:
             pass
 
+        # P0-D (2026-09-10): Failure Lesson 主动注入 — 近 7 天 sql_schema_mismatch
+        # / non_retryable failure lessons 作为 type="failure_lesson" 注入决策 prompt。
+        # 这是打通 Lesson → Recall → Decision 管道的关键改动。之前 BV2 失败
+        # 证实: learning_artifacts 只返回 beliefs+knowledge+skills+reflection，
+        # 不返回 failure lessons，导致普通 goal 无法读到之前的 SQL 失败经验。
+        try:
+            self._inject_failure_lessons(artifacts, description)
+        except Exception:
+            pass
+
         artifacts.sort(key=lambda a: (a["score"], a["confidence"]),
                        reverse=True)
         return artifacts[:limit]
+
+    # ── P0-D (2026-09-10): Failure Lesson 主动注入 ─────────────────────
+
+    def _inject_failure_lessons(self, artifacts: list[dict],
+                                description: str) -> None:
+        """P0-D: 把近 7 天 failure lessons 注入 learning_artifacts。
+
+        BV2 失败证实: learning_artifacts 只返回 beliefs+knowledge+skills
+        + reflection，不返回 failure lessons → 普通 goal 读不到之前的 SQL
+        schema mismatch 经验 → 继续盲目幻觉 SQL。
+
+        这里只注入:
+          - source='lesson' 且 tags 含 sql_schema_mismatch / dependency_missing /
+            tool_unavailable / permission_denied（都是"值得 recall 的失败"）
+          - 近 7 天内
+          - 与 description 有目标重叠（或无重叠但 sql_schema_mismatch 是通用经验）
+
+        不注入答案 — 只注入事实，让 LLM 自己决定是否改变策略。
+        """
+        import sqlite3 as _sqlite3
+        from datetime import datetime, timezone as _tz, timedelta
+
+        db_path = getattr(self, "_db_path", None) or getattr(
+            getattr(self, "agent", None), "db_path", None)
+        if not db_path:
+            return
+        try:
+            since = (datetime.now(_tz.utc) - timedelta(days=7)).isoformat()
+            conn = _sqlite3.connect(db_path)
+            conn.row_factory = _sqlite3.Row
+            rows = conn.execute(
+                "SELECT rowid, tags, substr(decision,1,400) as d, goal, created_at "
+                "FROM episodes "
+                "WHERE action='failure_lesson' AND created_at >= ? "
+                "ORDER BY rowid DESC LIMIT 10",
+                (since,),
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return
+
+        _RECALLABLE_CAUSES = frozenset({
+            "sql_schema_mismatch", "dependency_missing",
+            "tool_unavailable", "permission_denied",
+        })
+        for r in rows:
+            try:
+                tags = json.loads(r["tags"] or "[]")
+            except Exception:
+                tags = []
+            cause = None
+            for t in tags:
+                if t in _RECALLABLE_CAUSES:
+                    cause = t
+                    break
+            if cause is None:
+                continue
+
+            text = (r["d"] or "").strip()
+            if not text:
+                continue
+            # 与当前任务描述的目标重叠度（sql_schema_mismatch 通用，低阈值也注入）
+            goal_match = (r["goal"] or "") and any(
+                g.strip() in description[:300]
+                for g in (r["goal"] or "").split("、")[:3]
+                if g.strip()
+            )
+            # sql_schema_mismatch 是跨任务通用经验 — 任何涉及 DB/SQL 的任务都该看
+            sql_related = any(kw in description.lower()
+                              for kw in ("sql", "sqlite", "episodes", "数据库", "schema", "表"))
+            if not goal_match and not sql_related and cause != "sql_schema_mismatch":
+                continue
+
+            # 简短摘要（hypothesis 已含关键信息）
+            artifacts.append({
+                "artifact_id": f"lesson:{r['rowid']}",
+                "type": "failure_lesson",
+                "text": text[:150],
+                "confidence": 0.95,  # FailureDiagnoser 确定性分类 = 高置信
+                "score": 2,  # 低于 skill(3) 但高于 belief(通常 <2)
+            })
+
+    # ── P0-C (2026-09-10): Schema Provider — DB schema 注入决策上下文 ──────
+
+    def _get_db_schema_context(self, db_path: str | None = None) -> str:
+        """P0-C: 目标 DB 的 episodes 表列名摘要。
+
+        只给列名和类型，不注入 PRAGMA 或修复建议 — 让 LLM 自己决定。
+        这是消灭 SQL 幻觉（no such column: content / artifact）的根因修复。
+
+        无 DB / 查询失败 → ""（优雅降级）。
+        """
+        import sqlite3 as _sqlite3
+
+        path = db_path or getattr(self, "_db_path", None)
+        if not path:
+            return ""
+        try:
+            conn = _sqlite3.connect(path)
+            cols = conn.execute(
+                "PRAGMA table_info(episodes)"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return ""
+        if not cols:
+            return ""
+        col_lines = [
+            f"  - {c[1]} ({c[2]})" for c in cols  # (cid, name, type)
+        ]
+        return (
+            "【DB Schema】episodes 表真实列结构（查询前请据此构造 SQL）:\n"
+            + "\n".join(col_lines)
+        )
 
     def get_stability_report(self) -> dict[str, Any]:
         """Phase 34D: 运行稳定性报告。

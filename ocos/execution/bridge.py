@@ -1291,6 +1291,13 @@ class DecisionBridge:
                 agents = self._prior_agents(description)
                 if agents:
                     prompt = f"{agents}\n\n{prompt}"
+                # P0-C (2026-09-10): DB Schema 注入 — sql_schema_mismatch 根因修复
+                # 只给列名，不给修复建议（让 LLM 自己决定）
+                if any(kw in description.lower()
+                       for kw in ("sql", "sqlite", "episodes", "数据库", "schema", "表", "查询", "统计")):
+                    schema_ctx = self._schema_context()
+                    if schema_ctx:
+                        prompt = f"{schema_ctx}\n\n{prompt}"
                 # UX-J+: 复盘/总结/学习类任务注入真实 goal_result 结论 —
                 # 此前 LLM 拿不到执行结果，跑偏到文件系统扫描来"复盘"
                 # （实测学习总结目标以 ls/扫目录代替记忆查询，部分达成）
@@ -1761,6 +1768,33 @@ class DecisionBridge:
         except Exception:
             pass
         return "\n".join(lines)
+
+    # ── P0-C (2026-09-10): Schema Context — episodes 表列名注入 ──────────
+
+    def _schema_context(self) -> str:
+        """P0-C: episodes 表真实列名摘要（只给事实，不给修复建议）。
+
+        只在 DB 路径已知时生效；无 DB / 查询失败 → ""（优雅降级）。
+        这是消灭 SQL 幻觉（LLM 编造 content / artifact 等不存在列）的根因修复。
+        """
+        if not getattr(self, "_db_path", None):
+            return ""
+        import sqlite3 as _sqlite3
+        try:
+            conn = _sqlite3.connect(self._db_path)
+            cols = conn.execute(
+                "PRAGMA table_info(episodes)"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return ""
+        if not cols:
+            return ""
+        col_lines = [f"  - {c[1]} ({c[2]})" for c in cols]
+        return (
+            "【DB Schema】episodes 表真实列结构（查询前请据此构造 SQL）:\n"
+            + "\n".join(col_lines)
+        )
 
     def _memory_conflict_hint(self, description: str) -> str:
         """记忆冲突回落: 记忆给出建议但世界模型无对应对象时显式回落。
