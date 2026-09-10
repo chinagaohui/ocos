@@ -1194,9 +1194,9 @@ class ResidentRuntime:
         import sqlite3
         from datetime import datetime, timezone
         db_path = getattr(self, "_db_path", None)
-        logger.info("🧠 cogni_enter db_path=%s", db_path)
+        logger.debug("🧠 cogni_enter db_path=%s", db_path)
         if not db_path:
-            logger.info("🧠 cogni_skip — no db_path")
+            logger.debug("🧠 cogni_skip — no db_path")
             return
 
         # ── 限频 LLM 调用 (60s 内只调一次) ──
@@ -1244,7 +1244,7 @@ class ResidentRuntime:
                                     knowledge_type="concept",
                                 )
                                 result = ingestor.ingest(art, owner="epistemic_llm")
-                                logger.info("🧠 cogni_ingest result=%s", result)
+                                logger.debug("🧠 cogni_ingest result=%s", result)
                                 # ingest 可能返回 IngestResult 对象或 dict
                                 stored_count = 0
                                 if hasattr(result, 'status'):
@@ -1260,7 +1260,7 @@ class ResidentRuntime:
                                 if stored_count > 0:
                                     logger.info("🧠 Cognition Loop Step② stored knowledge +%d", stored_count)
                         except Exception as e:
-                            logger.info("🧠 cogni_ingest err: %s", e)
+                            logger.debug("🧠 cogni_ingest err: %s", e)
             except Exception as e:
                 logger.debug("LLM cognition step failed: %s", e)
 
@@ -1289,9 +1289,9 @@ class ResidentRuntime:
                     store.save(art)
                     logger.info("🧠 Cognition Loop Step③ saved PENDING plan → %s", art.artifact_id)
                 except Exception as e:
-                    logger.info("🧠 cogni_plan_save failed: %s", e)
+                    logger.debug("🧠 cogni_plan_save failed: %s", e)
         except Exception as e:
-            logger.info("🧠 cogni_plan_step failed: %s", e)
+            logger.debug("🧠 cogni_plan_step failed: %s", e)
 
     def _pick_reflection_point(self, db_path: str) -> dict | None:
         """Step①: 挑一个值得反思的点."""
@@ -1316,9 +1316,9 @@ class ResidentRuntime:
                     "question": f"为什么 {g['task_text'][:60]} 预测准确率只有 {g['error_magnitude']:.2f}? 如何改进?",
                     "hint": g.get("hypothesis", "")[:100],
                 }
-            logger.info("🧠 pick_reflect (a) gap empty")
+            logger.debug("🧠 pick_reflect (a) gap empty")
         except Exception as e:
-            logger.info("🧠 pick_reflect (a) gap err: %s", e)
+            logger.debug("🧠 pick_reflect (a) gap err: %s", e)
 
         # (b) 最近 failed goal
         try:
@@ -1335,9 +1335,9 @@ class ResidentRuntime:
                     "question": f"这个目标为什么失败了? 有没有办法让下次成功? 目标: {row[0]}",
                     "hint": "失败原因分析",
                 }
-            logger.info("🧠 pick_reflect (b) no failed goal")
+            logger.debug("🧠 pick_reflect (b) no failed goal")
         except Exception as e:
-            logger.info("🧠 pick_reflect (b) err: %s", e)
+            logger.debug("🧠 pick_reflect (b) err: %s", e)
 
         # (c) 新知识 — 优先挑 agent 工作沉淀的 (lesson/principle/procedure),
         #     排除认知循环自己刚刚沉淀的 concept, 避免递归嵌套自激
@@ -1361,16 +1361,16 @@ class ResidentRuntime:
                     "question": f"新知识 [{row[1]}] 说 '{row[0]}' — 这个对 OCOS 架构意味着什么? 有什么可以落地的改进?",
                     "hint": "知识落地建议",
                 }
-            logger.info("🧠 pick_reflect (c) no knowledge")
+            logger.debug("🧠 pick_reflect (c) no knowledge")
         except Exception as e:
-            logger.info("🧠 pick_reflect (c) err: %s", e)
+            logger.debug("🧠 pick_reflect (c) err: %s", e)
 
         # (d) deepen topics
         try:
             row = conn.execute(
                 "SELECT topic FROM reflection_seed_topics WHERE used=0 ORDER BY rowid DESC LIMIT 1"
             ).fetchone()
-            logger.info("🧠 pick_reflect (d) row=%s", row)
+            logger.debug("🧠 pick_reflect (d) row=%s", row)
             if row:
                 conn.close()
                 logger.info("🧠 pick_reflect hit (d) deepen topic")
@@ -1380,10 +1380,10 @@ class ResidentRuntime:
                     "hint": "反思引导",
                 }
         except Exception as e:
-            logger.info("🧠 pick_reflect (d) err: %s", e)
+            logger.debug("🧠 pick_reflect (d) err: %s", e)
 
         conn.close()
-        logger.info("🧠 pick_reflect ALL branches missed → None")
+        logger.debug("🧠 pick_reflect ALL branches missed → None")
         return None
 
     def _build_plan_from_reflection(
