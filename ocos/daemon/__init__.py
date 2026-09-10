@@ -1278,14 +1278,8 @@ class ResidentRuntime:
             logger.debug("cognition plan step failed: %s", e)
 
     def _pick_reflection_point(self, db_path: str) -> dict | None:
-        """Step①: 挑一个值得反思的点.
-
-        优先级:
-          a. PredictionGapTracker 有新 gap (还没被消化)
-          b. 最近 failed episode (agent 某件事没做成)
-          c. 新知识入库了 (值得深入)
-          d. deepen_topics 里还有没消费的
-        """
+        """Step①: 挑一个值得反思的点."""
+        import traceback as _tb
         try:
             conn = sqlite3.connect(db_path)
         except Exception:
@@ -1299,13 +1293,15 @@ class ResidentRuntime:
             if gaps:
                 g = gaps[0]
                 conn.close()
+                logger.info("🧠 pick_reflect hit (a) gap: %s", g.get('hypothesis','')[:60])
                 return {
                     "source": "prediction_gap",
                     "question": f"为什么 {g['task_text'][:60]} 预测准确率只有 {g['error_magnitude']:.2f}? 如何改进?",
                     "hint": g.get("hypothesis", "")[:100],
                 }
-        except Exception:
-            pass
+            logger.info("🧠 pick_reflect (a) gap empty")
+        except Exception as e:
+            logger.info("🧠 pick_reflect (a) gap err: %s", e)
 
         # (b) 最近 failed goal
         try:
@@ -1316,13 +1312,15 @@ class ResidentRuntime:
             ).fetchone()
             if row:
                 conn.close()
+                logger.info("🧠 pick_reflect hit (b) failed goal")
                 return {
                     "source": "failed_goal",
                     "question": f"这个目标为什么失败了? 有没有办法让下次成功? 目标: {row[0]}",
                     "hint": "失败原因分析",
                 }
-        except Exception:
-            pass
+            logger.info("🧠 pick_reflect (b) no failed goal")
+        except Exception as e:
+            logger.info("🧠 pick_reflect (b) err: %s", e)
 
         # (c) 新知识
         try:
@@ -1332,30 +1330,35 @@ class ResidentRuntime:
             ).fetchone()
             if row and row[0]:
                 conn.close()
+                logger.info("🧠 pick_reflect hit (c) knowledge")
                 return {
                     "source": "new_knowledge",
                     "question": f"新知识 [{row[1]}] 说 '{row[0]}' — 这个对 OCOS 架构意味着什么? 有什么可以落地的改进?",
                     "hint": "知识落地建议",
                 }
-        except Exception:
-            pass
+            logger.info("🧠 pick_reflect (c) no knowledge")
+        except Exception as e:
+            logger.info("🧠 pick_reflect (c) err: %s", e)
 
         # (d) deepen topics
         try:
             row = conn.execute(
                 "SELECT topic FROM reflection_seed_topics WHERE used=0 ORDER BY rowid DESC LIMIT 1"
             ).fetchone()
+            logger.info("🧠 pick_reflect (d) row=%s", row)
             if row:
                 conn.close()
+                logger.info("🧠 pick_reflect hit (d) deepen topic")
                 return {
                     "source": "deepen_topic",
                     "question": f"深入学习: {row[0]}",
                     "hint": "反思引导",
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.info("🧠 pick_reflect (d) err: %s", e)
 
         conn.close()
+        logger.info("🧠 pick_reflect ALL branches missed → None")
         return None
 
     def _build_plan_from_reflection(
