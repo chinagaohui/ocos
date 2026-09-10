@@ -2233,8 +2233,6 @@ class ResidentRuntime:
 
             db.close()
         except Exception:
-            import traceback as _tb
-            _tb.print_exc()  # debug: traceback 直接打 stderr
             logger.exception("pump step 2 (adopt as goals) failed")
 
         if auto_approved or goals_created:
