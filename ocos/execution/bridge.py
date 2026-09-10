@@ -2380,7 +2380,16 @@ class DecisionBridge:
             retry_prompt = self._build_mutation_retry_prompt(
                 action, veto, lessons)
             try:
-                new_raw = self._first_line(self._convert(retry_prompt))
+                import asyncio as _asyncio
+                _tg = self._get_textgen()
+                new_raw_text = _asyncio.run(_tg._provider.generate(
+                    retry_prompt,
+                    system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的单行动作。",
+                    temperature=0.1, max_tokens=2000))
+                _nl = new_raw_text.strip()
+                if _nl.startswith("```"):
+                    _nl = _nl.strip("`").lstrip()
+                new_raw = _nl.splitlines()[0].strip() if _nl else ""
                 new_actions = self._parse_actions(new_raw)
             except Exception as _e:
                 logger.error("MUTATION-RETRY-LLM-FAILED: %s", _e)
