@@ -1422,6 +1422,14 @@ class DecisionBridge:
         # FIX-5b: planning NONE| 只允许重试一次（防无限重规划烧 token）
         _retried_none = False
         _lines = [ln.strip().strip("`") for ln in raw.splitlines() if ln.strip()]
+        # Phase 2 (Mutation): 同时用 ActionParser 解析，assert 等价性
+        # 确保提炼前后行为完全一致（Phase 3 接 Mutation Engine 时 actions 将成为消费入口）
+        _actions = self._parse_actions(raw)
+        _reconstructed = self._actions_to_lines(_actions)
+        if _reconstructed != _lines:
+            # 不 crash，但记录 error（Phase 2 纯重构，不应出现不等价）
+            logger.error("Phase2-PARSE-DIVERGENCE: _lines vs _actions_to_lines differ! "
+                         "lines=%d actions=%d", len(_lines), len(_reconstructed))
         # UX-J+ 实测新增: ANSWER| — 认知型任务（复盘/总结/分析）所需信息
         # 已在注入上下文（如复盘素材）时，LLM 直接给出文字结论。此前只能
         # 用 NONE|（被判"无法执行→failed"）或违心跑系统采集命令（跑偏），
@@ -2174,6 +2182,61 @@ class DecisionBridge:
         return ("注：目标引用的对象不在当前世界模型中"
                 f"（已知实体: {', '.join(sorted(names)[:5])}）— "
                 "若任务依赖该对象，请说明无法获取而非编造结果")
+
+    # ── Phase 2 (Mutation): ActionParser — 结构化 LLM 输出 ──────────
+
+    def _parse_actions(self, raw_text: str) -> list[dict]:
+        """Phase 2: 从 LLM raw 输出解析结构化 Action 列表。
+
+        冻结约束 (Architecture v1.2):
+          - Parsing only. No inference. No completion. No planning.
+          - 只识别 RUN|/NONE|/ANSWER|/FILE_WRITE|/AGENT_INSTALL 五种类型。
+          - 未知类型 → 忽略（保持和现有 _lines 循环一致）。
+          - 与 bridge.py line 1424 原有 _lines 循环行为 1:1 等价。
+
+        返回: [{"type":"RUN", "command":"..."}, {"type":"NONE", "reason":"..."}, ...]
+        """
+        lines = [ln.strip().strip("`") for ln in (raw_text or "").splitlines()
+                 if ln.strip()]
+        actions: list[dict] = []
+        for ln in lines:
+            if ln.startswith("RUN|"):
+                actions.append({"type": "RUN", "command": ln[4:].strip()})
+            elif ln.startswith("NONE|"):
+                actions.append({"type": "NONE", "reason": ln[5:].strip()})
+            elif ln.startswith("ANSWER|"):
+                actions.append({"type": "ANSWER", "content": ln[7:].strip()})
+            elif ln.startswith("FILE_WRITE|"):
+                parts = ln.split("|", 2)
+                actions.append({
+                    "type": "FILE_WRITE",
+                    "path": parts[1].strip() if len(parts) > 1 else "",
+                    "content": parts[2].strip() if len(parts) > 2 else "",
+                })
+            elif ln.startswith("AGENT_INSTALL|"):
+                actions.append({
+                    "type": "AGENT_INSTALL",
+                    "name": ln.split("|", 1)[1].strip(),
+                })
+            # 未知类型 → 忽略
+        return actions
+
+    def _actions_to_lines(self, actions: list[dict]) -> list[str]:
+        """Phase 2: Action dict 列表 → _lines 格式（临时，Phase 3 后逐步替换）。"""
+        result = []
+        for a in actions:
+            t = a.get("type", "")
+            if t == "RUN":
+                result.append(f"RUN|{a.get('command', '')}")
+            elif t == "NONE":
+                result.append(f"NONE|{a.get('reason', '')}")
+            elif t == "ANSWER":
+                result.append(f"ANSWER|{a.get('content', '')}")
+            elif t == "FILE_WRITE":
+                result.append(f"FILE_WRITE|{a.get('path', '')}|{a.get('content', '')}")
+            elif t == "AGENT_INSTALL":
+                result.append(f"AGENT_INSTALL|{a.get('name', '')}")
+        return result
 
     def _prior_task_results(self, description: str, limit: int = 2) -> str:
         """FIX-4: 同类任务历史结果 — 任务转换前的执行经验注入。
