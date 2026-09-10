@@ -72,3 +72,4 @@ projects/
 
 # S1 运行时数据（PersistenceManager 相对路径默认值写入仓库目录）
 ocos_data/
+*.deb
