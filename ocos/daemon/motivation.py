@@ -737,12 +737,20 @@ class MotivationHub:
 
         连续 FAILURE_DEMOTE_THRESHOLD 次失败 → 自动降级 LEVEL 并 audit，
         返回降级信息 dict（daemon 负责 outbox 如实上报）；成功重置计数。
+
+        M1 修复 (2026-09-10): success=True 且最近没新 goal 产出时,
+        自动注入一个 follow-up goal 避免 goal 供给断档 (active=0 空转).
         """
         from ocos.execution.autonomy import (
             audit_level_change, get_autonomy_level, set_autonomy_level)
 
         if success:
             self._consecutive_failures = 0
+            # ── M1: 成功后自动续 goal ────────────────────────────
+            try:
+                self._inject_followup_if_idle()
+            except Exception:
+                logger.debug("followup injection failed", exc_info=True)
             return None
         self._consecutive_failures += 1
         if self._consecutive_failures < FAILURE_DEMOTE_THRESHOLD:
@@ -770,6 +778,107 @@ class MotivationHub:
             except Exception:
                 logger.debug("demote notify failed", exc_info=True)
         return info
+
+    # ── M1: goal 供给自修复 ──────────────────────────────────────────
+
+    def _inject_followup_if_idle(self) -> None:
+        """goal 完成后自动注入下一个 — 避免 active=0 空转.
+
+        触发条件:
+          1. 上一个 goal 成功了 (caller 已保证 success=True)
+          2. 当前没有 active/pending goal
+          3. autonomy_level >= 1
+
+        注入策略 (优先级):
+          a. reflection_seed_topics 里有 used=0 的 deepen_topic → 用它
+          b. EpistemicDrive.suggest_explore 有建议 → 用它
+          c. 默认 "学习 OCOS 架构 + 沉淀知识" (种子 fallback)
+        """
+        from ocos.execution.autonomy import get_autonomy_level
+        try:
+            lvl = get_autonomy_level()
+        except Exception:
+            lvl = 2
+        if lvl < 1:
+            return
+
+        # 检查当前有没有 active goal
+        try:
+            conn = sqlite3.connect(self._db_path)
+            active = conn.execute(
+                "SELECT COUNT(*) FROM goals WHERE status IN ('active','pending')"
+            ).fetchone()[0]
+            conn.close()
+        except Exception:
+            active = 1  # 查不到就假设非空, 保守跳过
+
+        if active > 0:
+            return  # 有活干, 不注入
+
+        # 选 follow-up 描述
+        description = self._pick_followup()
+        if not description:
+            return
+
+        # 用 _propose 的底层逻辑直接 save goal (绕过 GoalGenesis 限速)
+        try:
+            uuid_mod = __import__("uuid")
+            goal_id = f"GOAL-FOLLOWUP-{uuid_mod.uuid4().hex[:12]}"
+            if self._goal_store is not None:
+                self._goal_store.save(
+                    goal_id=goal_id, level="TASK", status="PENDING",
+                    description=description,
+                    source="motivation_followup",
+                    source_id="",
+                    metadata={"autonomous": True, "kind": "followup",
+                              "domain": "research", "score": 0.6},
+                    origin_level="SELF",
+                    authority="AUTONOMOUS")
+                logger.info(
+                    "MotivationHub: follow-up goal injected → %s",
+                    description[:60])
+                self._consecutive_failures = 0
+        except Exception as e:
+            logger.debug("followup inject failed: %s", e)
+
+    def _pick_followup(self) -> str:
+        """挑一个 follow-up 描述 — 三级 fallback."""
+        # (a) ReflectionEngine deepen_topics
+        try:
+            conn = sqlite3.connect(self._db_path)
+            row = conn.execute(
+                "SELECT topic FROM reflection_seed_topics WHERE used=0 "
+                "ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE reflection_seed_topics SET used=1 "
+                    "WHERE rowid=(SELECT MIN(rowid) FROM reflection_seed_topics WHERE used=0)"
+                )
+                conn.commit()
+                conn.close()
+                return f"【深入学习】{row[0]}"
+            conn.close()
+        except Exception:
+            pass
+
+        # (b) EpistemicDrive suggest_explore
+        try:
+            from ocos.reasoning.curiosity import EpistemicDrive, PredictionGapTracker
+            tracker = PredictionGapTracker(db_path=self._db_path)
+            drive = EpistemicDrive(tracker=tracker, db_path=self._db_path, top_n=3)
+            sug = list(drive.suggest_explore())
+            if sug:
+                return sug[0]
+        except Exception:
+            pass
+
+        # (c) 默认 fallback
+        now = datetime.now(timezone.utc).isoformat()[:16]
+        return (
+            f"【每日学习】{now} 自我进化循环 — 用 LLMTutor 学习一个新主题 "
+            f"(认知架构/Agent理论/数字生命), 沉淀到 knowledge 表"
+        )
 
     # ── 工具 ──────────────────────────────────────────────────────────
 
