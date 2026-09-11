@@ -148,11 +148,13 @@ class EventNormalizer:
         if raw.source == EventSource.USER_INPUT:
             return "user_input"
         if raw.source == EventSource.SYSTEM:
-            # P5.1: Host 细粒度分类 — 读 payload 的 type/operation 字段
-            # EnvironmentSensor 用 "type" (memory_critical/memory_high/memory_spike)
-            # StimulusScanner 用 "operation" 或 "source"
-            subtype = (raw.payload.get("operation")
-                       or raw.payload.get("type")
+            # P5.1: Host/Process 细粒度分类
+            # 优先级: type (领域特定) > operation (通用动作) > source (fallback)
+            # EnvironmentSensor: type="memory_critical" (无 operation)
+            # ProcessSensor:      type="process_started", operation="started"
+            # StimulusScanner:    source="disk", operation="..."
+            subtype = (raw.payload.get("type")
+                       or raw.payload.get("operation")
                        or raw.payload.get("source")
                        or None)
             if subtype:
@@ -172,9 +174,9 @@ class EventNormalizer:
         if raw.source == EventSource.USER_INPUT:
             return f"User says: {raw.payload.get('content', '?')}"
         if raw.source == EventSource.SYSTEM:
-            # P5.1: Host 细粒度摘要 — 从 subtype + payload 组装
-            subtype = (raw.payload.get("operation")
-                       or raw.payload.get("type")
+            # P5.1/P5.2: 与 _classify 保持相同优先级 type > operation > source
+            subtype = (raw.payload.get("type")
+                       or raw.payload.get("operation")
                        or None)
             if subtype == "memory_critical":
                 return f"CRITICAL memory usage: {raw.payload.get('used_mb', '?')} MB"
@@ -186,6 +188,11 @@ class EventNormalizer:
                 return f"CPU spike detected"
             if subtype == "disk_low":
                 return f"Low disk space"
+            # P5.2: Process 感知摘要
+            if subtype == "process_started":
+                return f"Process started: pid={raw.payload.get('pid', '?')} name={raw.payload.get('name', '')}"
+            if subtype == "process_stopped":
+                return f"Process stopped: pid={raw.payload.get('pid', '?')}"
             if subtype:
                 return f"System {subtype}: {raw.payload}"
             return f"System event: {raw.payload}"
