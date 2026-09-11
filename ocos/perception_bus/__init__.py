@@ -193,6 +193,11 @@ class EventNormalizer:
                 return f"Process started: pid={raw.payload.get('pid', '?')} name={raw.payload.get('name', '')}"
             if subtype == "process_stopped":
                 return f"Process stopped: pid={raw.payload.get('pid', '?')}"
+            # P5.3: Network 感知摘要
+            if subtype == "network_reachable":
+                return f"Network reachable: {raw.payload.get('target', '?')}"
+            if subtype == "network_unreachable":
+                return f"Network UNREACHABLE: {raw.payload.get('target', '?')}"
             if subtype:
                 return f"System {subtype}: {raw.payload}"
             return f"System event: {raw.payload}"
