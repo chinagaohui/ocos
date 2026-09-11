@@ -2882,6 +2882,7 @@ class AgentRuntime:
 
         不注入答案 — 只注入事实，让 LLM 自己决定是否改变策略。
         """
+        import json as _json
         import sqlite3 as _sqlite3
         from datetime import datetime, timezone as _tz, timedelta
 
@@ -2910,7 +2911,7 @@ class AgentRuntime:
         })
         for r in rows:
             try:
-                tags = json.loads(r["tags"] or "[]")
+                tags = _json.loads(r["tags"] or "[]")
             except Exception:
                 tags = []
             cause = None
