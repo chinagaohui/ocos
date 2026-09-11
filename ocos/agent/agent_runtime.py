@@ -652,6 +652,31 @@ class AgentRuntime:
             if isinstance(result, dict):
                 status = str(result.get("status", ""))
                 error = str(result.get("error", ""))[:200]
+                # C1.1: status 派生 — 观测层 only, 不改 step 函数返回值
+                # planning_trigger/core_loop 等返回 dict 不带 "status" 字段时,
+                # 从已有字段推导语义标签, 让因果链可观测
+                if not status:
+                    if result.get("gated"):
+                        status = f"gated:{result.get('reason','?')}"
+                    elif result.get("decomposed", 0):
+                        status = f"decomposed_{result['decomposed']}"
+                    elif result.get("strategy"):
+                        status = str(result["strategy"])
+                    elif result.get("phase") and "pending_total" in result:
+                        p = result.get("pending_total", 0)
+                        status = f"scan_pending_{p}"
+                    elif "controller_blocked" in result:
+                        status = (
+                            "blocked" if result.get("controller_blocked")
+                            else "ok"
+                        )
+                    elif isinstance(result.get("task_id"), str) and result.get(
+                        "success"
+                    ) is not None:
+                        status = (
+                            "success" if result.get("success")
+                            else "failed"
+                        )
             conn = sqlite3.connect(db_path)
             conn.execute(
                 "INSERT INTO tick_trace "
