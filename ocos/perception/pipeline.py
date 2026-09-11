@@ -22,7 +22,9 @@ from ocos.perception.perception_engine import PerceptionEngine
 from ocos.perception.sensor_types import (
     Observation as PerceptionObservation,
     PerceptionEvent,
+    SensorModality,
 )
+from ocos.perception_bus import EventBus, EventSource, RawEvent
 from ocos.world_model.world_store import WorldStore
 from ocos.world_model.world_types import (
     CausalityLink,
@@ -36,7 +38,11 @@ logger = logging.getLogger(__name__)
 
 
 class PerceptionPipeline:
-    """感知 → 世界模型 全链路 — 生产入口（daemon factory 注入）。"""
+    """感知 → 世界模型 + 认知事件 全链路 — 生产入口（daemon factory 注入）。
+
+    GAP-P1-4 (2026-09-11): 同时 publish 到 perception_bus（此前只写 WorldStore，
+    Observation → CognitiveEvent 断链）。
+    """
 
     def __init__(
         self,
@@ -45,9 +51,11 @@ class PerceptionPipeline:
         infer_causality: bool = True,
         entity_resolver: Optional[Any] = None,
         state_resolver: Optional[Any] = None,
+        event_bus: Optional[Any] = None,
     ) -> None:
         """entity_resolver: callable(感知 Observation) -> entity_id（领域语义归属）。
         state_resolver: callable(感知 Observation) -> dict（实体状态属性）。
+        event_bus: perception_bus.EventBus 实例（可选；不传时只写 WorldStore）。
 
         传感器本身不带实体/状态语义（FileSensor 只报"文件变了"）——实体与
         状态归属是感知管线的职责。无 resolver 且观察无 metadata 携带 →
@@ -58,9 +66,22 @@ class PerceptionPipeline:
         self._infer_causality = infer_causality
         self._entity_resolver = entity_resolver
         self._state_resolver = state_resolver
+        self._event_bus = event_bus
         self._last_states: dict[str, EntityState] = {}
         self._accepted: int = 0
         self._rejected: int = 0
+        self._published: int = 0
+
+    # ── EventBus 注入（GAP-P1-4） ──
+
+    def set_event_bus(self, event_bus: Any) -> None:
+        """注入 perception_bus.EventBus 实例（装配后注入用）。"""
+        self._event_bus = event_bus
+
+    @property
+    def published_count(self) -> int:
+        """已 publish 到 EventBus 的事件数（GAP-P1-4 统计）。"""
+        return self._published
 
     # ── 对外只读视图 ──
 
@@ -91,7 +112,11 @@ class PerceptionPipeline:
     # ── 感知周期 ──
 
     def tick(self) -> list[PerceptionEvent]:
-        """执行一次感知周期: 感知 → 验证 → 落世界模型 → 因果推断。"""
+        """执行一次感知周期: 感知 → 验证 → 落世界模型 → 因果推断 → publish EventBus.
+
+        GAP-P1-4 (2026-09-11): 同时 publish PerceptionEvent 到 perception_bus.
+        这是唯一的 publish 点——所有经过本 Pipeline 的 Sensor 自动受益。
+        """
         events = self._engine.tick()
         for ev in events:
             obs = ev.observation
@@ -102,6 +127,17 @@ class PerceptionPipeline:
                 self._accepted += 1
             else:
                 self._rejected += 1
+
+            # GAP-P1-4: 同时 publish 到 perception_bus（Observation → CognitiveEvent 断链修复）
+            if self._event_bus is not None:
+                try:
+                    raw = self._convert_to_raw_event(ev)
+                    if raw is not None:
+                        self._event_bus.push(raw)
+                        self._published += 1
+                except Exception as e:
+                    logger.debug("EventBus publish failed for %s: %s",
+                                 ev.sensor_name, e, exc_info=True)
         return events
 
     # ── 桥接: 感知 Observation → 世界 Observation ──
@@ -185,3 +221,39 @@ class PerceptionPipeline:
             except ValueError:
                 logger.debug("duplicate causality link skipped: %s", link.link_id)
         self._last_states[world_obs.entity_id] = state
+
+    # ── GAP-P1-4: PerceptionEvent → RawEvent 转换 ──
+
+    # SensorModality → EventSource 映射（确定性，无 LLM）
+    _MODALITY_TO_SOURCE: dict[SensorModality, EventSource] = {
+        SensorModality.FILE: EventSource.FILE_CHANGE,
+        SensorModality.ENV: EventSource.SYSTEM,
+        SensorModality.TEXT: EventSource.USER_INPUT,
+        SensorModality.API: EventSource.WEBHOOK,
+    }
+
+    def _convert_to_raw_event(self, ev: PerceptionEvent) -> Optional[RawEvent]:
+        """PerceptionEvent → RawEvent（确定性转换，不做语义判断）。
+
+        EventNormalizer 后续会根据 source 自动归一化:
+          FILE_CHANGE → _classify 提取 operation → file_created/file_modified 等
+          SYSTEM     → fallback "system_event"
+        """
+        obs = ev.observation
+        if obs is None:
+            return None
+
+        # modality → EventSource
+        source = self._MODALITY_TO_SOURCE.get(obs.modality, EventSource.SYSTEM)
+
+        # payload: content (dict) + metadata + 来源信息
+        payload: dict[str, Any] = {}
+        if isinstance(obs.content, dict):
+            payload.update(obs.content)
+        if isinstance(obs.metadata, dict):
+            payload.update(obs.metadata)
+        payload.setdefault("source_sensor", obs.source_sensor)
+        payload.setdefault("confidence", obs.confidence)
+        payload.setdefault("observation_type", obs.type.value)
+
+        return RawEvent(source=source, payload=payload)

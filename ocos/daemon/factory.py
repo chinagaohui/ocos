@@ -300,8 +300,13 @@ def build_health_loop(runtime=None, interval_ticks: int = 100):
 
 
 def build_perception_pipeline(sensors: Optional[list] = None,
-                              file_semantics: bool = False):
-    """GAP-P1-3: 组装感知链 — PerceptionEngine + WorldStore + 可选传感器。
+                              file_semantics: bool = False,
+                              event_bus: Optional[Any] = None):
+    """GAP-P1-3+P1-4: 组装感知链 — PerceptionEngine + WorldStore + EventBus publish.
+
+    GAP-P1-4 (2026-09-11): event_bus 注入后，PerceptionPipeline.tick() 会同时
+    publish PerceptionEvent → RawEvent → perception_bus._pending（此前只写 WorldStore，
+    Observation → CognitiveEvent 断链）。
 
     默认零传感器（零噪音）— sensors 由调用方按环境注入
     （如 FileSensor.watch(数据目录)）。
@@ -333,7 +338,8 @@ def build_perception_pipeline(sensors: Optional[list] = None,
 
     pipeline = PerceptionPipeline(world=WorldStore(), infer_causality=True,
                                   entity_resolver=entity_resolver,
-                                  state_resolver=state_resolver)
+                                  state_resolver=state_resolver,
+                                  event_bus=event_bus)
     for sensor in sensors or []:
         pipeline.register_sensor(sensor)
     return pipeline
