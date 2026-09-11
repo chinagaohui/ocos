@@ -37,6 +37,8 @@ class EventSource(Enum):
     AGENT_RESULT = auto()    # Agent 执行结果（内部）
     SYSTEM = auto()          # 系统级事件（内存/CPU 告警）
     USER_INPUT = auto()      # UX-P2: 用户消息（ocos say / REPL /say）
+    VISUAL = auto()          # P5.5: 图像/视频事件 (Contract-ready)
+    AUDIO = auto()           # P5.5: 音频/语音事件 (Contract-ready)
 
 
 class EventSeverity(Enum):
@@ -147,6 +149,10 @@ class EventNormalizer:
             return "agent_result"
         if raw.source == EventSource.USER_INPUT:
             return "user_input"
+        if raw.source == EventSource.VISUAL:
+            return f"visual_{raw.payload.get('type', 'event')}"
+        if raw.source == EventSource.AUDIO:
+            return f"audio_{raw.payload.get('type', 'event')}"
         if raw.source == EventSource.SYSTEM:
             # P5.1: Host/Process 细粒度分类
             # 优先级: type (领域特定) > operation (通用动作) > source (fallback)
@@ -173,6 +179,10 @@ class EventNormalizer:
             return f"Webhook received at {raw.payload.get('endpoint', '?')}"
         if raw.source == EventSource.USER_INPUT:
             return f"User says: {raw.payload.get('content', '?')}"
+        if raw.source == EventSource.VISUAL:
+            return f"Visual {raw.payload.get('type', 'event')}: {raw.payload.get('description', raw.payload)}"
+        if raw.source == EventSource.AUDIO:
+            return f"Audio {raw.payload.get('type', 'event')}: {raw.payload.get('description', raw.payload)}"
         if raw.source == EventSource.SYSTEM:
             # P5.1/P5.2: 与 _classify 保持相同优先级 type > operation > source
             subtype = (raw.payload.get("type")

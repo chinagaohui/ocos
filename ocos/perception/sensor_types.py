@@ -34,6 +34,8 @@ class SensorModality(Enum):
         API     = 外部 API 响应
         ENV     = 环境信号 (系统指标、时间变化)
         EVENT   = 内部事件流
+        VISION  = 图像/视频 (Contract-ready, 未实现)
+        AUDIO   = 音频/语音 (Contract-ready, 未实现)
         UNKNOWN = 未识别输入
     """
     TEXT = "text"
@@ -41,6 +43,8 @@ class SensorModality(Enum):
     API = "api"
     ENV = "env"
     EVENT = "event"
+    VISION = "vision"
+    AUDIO = "audio"
     UNKNOWN = "unknown"
 
 

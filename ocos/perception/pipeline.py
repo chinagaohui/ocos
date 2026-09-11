@@ -230,6 +230,8 @@ class PerceptionPipeline:
         SensorModality.ENV: EventSource.SYSTEM,
         SensorModality.TEXT: EventSource.USER_INPUT,
         SensorModality.API: EventSource.WEBHOOK,
+        SensorModality.VISION: EventSource.VISUAL,
+        SensorModality.AUDIO: EventSource.AUDIO,
     }
 
     def _convert_to_raw_event(self, ev: PerceptionEvent) -> Optional[RawEvent]:
