@@ -42,6 +42,11 @@ _CAUSE_TO_REPLAN = {
     "ambiguous_task": ReplanAction.AMBIGUOUS_BLOCK,
     "execution_error": ReplanAction.RETRY,
     "timeout": ReplanAction.RETRY,
+    # BV5-2026-09-11: sql_schema_mismatch 可修复 → RETRY
+    # Schema Provider 已注入真实列名，但 LLM 仍可能幻觉不存在列；
+    # retry 走 FIX-9 _revise_task_description 回注失败原因 →
+    # LLM 应该会先查 PRAGMA table_info 再用真实列重建 SQL
+    "sql_schema_mismatch": ReplanAction.RETRY,
     "permission_denied": ReplanAction.CONTINUE_NEXT,  # 待批不阻塞其余
     "tool_unavailable": ReplanAction.SKIP_DEPENDENTS,
     # P0-2026-09-10: 硬依赖缺失 → 终态跳过（不是软错误重试能解决的）
