@@ -368,6 +368,30 @@ class ResidentRuntime:
                 logger.warning(
                     "Failed to wire EventBus into PerceptionPipeline: %s", e)
 
+            # GAP-P1-5 (2026-09-11): 同时注入 TickPipeline.EventIngestionStage
+            # 生产消费侧 identity — TickPipeline 是生产 tick 的真实 ingest 入口
+            # (手动 ingest 能通但生产不走那条路)
+            try:
+                from ocos.runtime.pipeline_protocol import PipelineStage
+                kernel = getattr(self, '_kernel', None)
+                if kernel is not None:
+                    kernel_pipe = getattr(kernel, '_pipeline', None)
+                    if kernel_pipe is not None:
+                        ei_stage = kernel_pipe._stages.get(
+                            PipelineStage.EVENT_INGESTION)
+                        if ei_stage is not None:
+                            ei_stage._event_bus = self._event_bus
+                            logger.info(
+                                "TickPipeline EventIngestionStage ↔ EventBus wired")
+            except Exception as e:
+                logger.debug(
+                    "TickPipeline wiring skipped (not yet assembled): %s", e)
+
+            # AgentRuntime._event_bus 也在这里注入（避免 start() 里单独一处）
+            runtime = getattr(self, '_runtime', None)
+            if runtime is not None:
+                runtime._event_bus = self._event_bus
+
         # L3-B: agent.world_context() 经此消费世界状态
         world = getattr(pipeline, "world", None)
         agent_obj = getattr(
@@ -470,6 +494,8 @@ class ResidentRuntime:
             if self._kernel.state.name != "RUNNING":
                 self._kernel.start()
             self._kernel.attach_agent_driver(lambda tick_id: self._runtime.tick())
+            # TickPipeline.EventIngestionStage 注入已在 attach_perception_pipeline 完成
+
             # L4-3 (升级方案 v1.0): boot 时 V5 跨重启一致性校验 —
             # 身份参数 hash（锚+宪法）+ 记忆计数断言；漂移即告警。
             try:
