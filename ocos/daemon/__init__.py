@@ -412,6 +412,13 @@ class ResidentRuntime:
             self._state = DaemonState.STARTING
             self._stop_event.clear()
             self._runtime.boot()
+            # B1 FIX (C1.1-C.2): ONE RUNTIME ONE EVENT BUS — 把 daemon 侧的
+            # perception_bus.EventBus 注入 AgentRuntime, 避免两个独立实例
+            # (daemon 持有 Instance X 供 StimulusScanner.push, AgentRuntime
+            # 延迟初始化 Instance Y 供 tick Step 1 event_ingestion.ingest,
+            # 两者不共享队列 → Observe 永远 no_events)
+            if self._event_bus is not None:
+                self._runtime._event_bus = self._event_bus
             # Phase E: SelfMonitor 装配（boot 后 memory hub 就绪才可能成功）
             self._init_self_monitor()
             # S2.2 (修复方案评审 R3): auto 模式下 ASK 类动作自动执行——

@@ -677,6 +677,12 @@ class AgentRuntime:
                             "success" if result.get("success")
                             else "failed"
                         )
+                    # Step 9 result_ingest: {"ingested": bool, "memory": {...}}
+                    elif "ingested" in result:
+                        status = "ingested" if result["ingested"] else "no_result"
+                    # Step 10 consolidation: {"cycle": N}
+                    elif "cycle" in result and result.get("cycle", 0) > 0:
+                        status = "cycle_ok"
             conn = sqlite3.connect(db_path)
             conn.execute(
                 "INSERT INTO tick_trace "

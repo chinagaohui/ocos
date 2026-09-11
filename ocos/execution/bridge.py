@@ -1762,43 +1762,96 @@ class DecisionBridge:
             logger.debug("memory decision context failed: %s", e)
             return ""
         artifacts = [a for a in artifacts if a and a.get("text")]
-        if not artifacts:
-            return ""
-        # 量化摘要: 命中数 / 类型分布 / 高置信计数 / 平均置信度
-        n = len(artifacts)
-        by_type: dict[str, int] = {}
-        high_conf = 0
-        conf_sum = 0.0
-        for a in artifacts:
-            t = a.get("type", "?")
-            by_type[t] = by_type.get(t, 0) + 1
-            c = float(a.get("confidence", 0.0))
-            conf_sum += c
-            if c >= 0.7:
-                high_conf += 1
-        # 依 score（技能>信念>知识>反思）排序，取 top-k
-        ordered = sorted(artifacts,
-                         key=lambda a: (a.get("score", 0), a.get("confidence", 0)),
-                         reverse=True)[:limit]
-        type_desc = ", ".join(f"{k}={v}" for k, v in
-                              sorted(by_type.items(), key=lambda x: -x[1]))
-        head = (f"【记忆决策上下文】命中{n}条相关记忆 "
-                f"(类型: {type_desc}; 高置信≥0.7: {high_conf}; "
-                f"平均置信 {conf_sum / max(n, 1):.2f})")
-        lines = [head]
-        for a in ordered:
-            aid = str(a.get("artifact_id", ""))[:40]
-            text = str(a.get("text", ""))[:110]
-            c = float(a.get("confidence", 0.0))
-            lines.append(
-                f"- [{a.get('type', '?')}] {text} "
-                f"(conf={c:.2f}, artifact={aid})")
+        # B4 FIX: learning_artifacts 为空时不立即 return — WM 是独立数据源,
+        # 即使没有长期经验也应该能注入短期焦点. 改为只跳过 learning artifacts
+        # 段, 继续尝试 WM 段.
+        lines: list[str] = []
+        if artifacts:
+            # 量化摘要: 命中数 / 类型分布 / 高置信计数 / 平均置信度
+            n = len(artifacts)
+            by_type: dict[str, int] = {}
+            high_conf = 0
+            conf_sum = 0.0
+            for a in artifacts:
+                t = a.get("type", "?")
+                by_type[t] = by_type.get(t, 0) + 1
+                c = float(a.get("confidence", 0.0))
+                conf_sum += c
+                if c >= 0.7:
+                    high_conf += 1
+            # 依 score（技能>信念>知识>反思）排序，取 top-k
+            ordered = sorted(artifacts,
+                             key=lambda a: (a.get("score", 0), a.get("confidence", 0)),
+                             reverse=True)[:limit]
+            type_desc = ", ".join(f"{k}={v}" for k, v in
+                                  sorted(by_type.items(), key=lambda x: -x[1]))
+            head = (f"【记忆决策上下文】命中{n}条相关记忆 "
+                    f"(类型: {type_desc}; 高置信≥0.7: {high_conf}; "
+                    f"平均置信 {conf_sum / max(n, 1):.2f})")
+            lines.append(head)
+            for a in ordered:
+                aid = str(a.get("artifact_id", ""))[:40]
+                text = str(a.get("text", ""))[:110]
+                c = float(a.get("confidence", 0.0))
+                lines.append(
+                    f"- [{a.get('type', '?')}] {text} "
+                    f"(conf={c:.2f}, artifact={aid})")
         try:
             from ocos.monitoring.manager import record_global
-            record_global("memory_decision_injected", float(n))
+            record_global("memory_decision_injected", float(len(artifacts)))
         except Exception:
             pass
+
+        # ── B4 FIX: Working Memory 直接参与决策 (独立于 learning_artifacts) ──
+        wm_ctx = self._wm_decision_context()
+        if wm_ctx:
+            lines.append(wm_ctx)
+        if not lines:
+            return ""
         return "\n".join(lines)
+
+    def _wm_decision_context(self, max_items: int = 5) -> str:
+        """B4 FIX: 从 working_memory 表读取当前焦点, 注入决策 prompt.
+
+        WM 是短期工作记忆 (Attention 刚分配的焦点 + Step 9 result_ingest
+        刚写入的执行上下文), 与 learning_artifacts 的长期经验互补.
+        只取 importance>=0.6 的 items, 避免低价值条目干扰 prompt.
+
+        无 WM / DB 不可用 → "" (优雅降级, 基线路径行为不变).
+        """
+        if not getattr(self, "_db_path", None):
+            return ""
+        import sqlite3 as _sqlite3
+        try:
+            conn = _sqlite3.connect(self._db_path)
+            row = conn.execute(
+                "SELECT value FROM working_memory WHERE key = 'wm:working' LIMIT 1"
+            ).fetchone()
+            conn.close()
+            if not row:
+                return ""
+            import json as _json
+            data = _json.loads(row[0])
+            items = data.get("items", [])
+            if not items:
+                return ""
+            # 只取 importance >= 0.6 的 (高价值焦点)
+            high_items = [it for it in items if float(it.get("importance", 0)) >= 0.6]
+            high_items.sort(key=lambda it: float(it.get("importance", 0)), reverse=True)
+            top = high_items[:max_items] or items[:max_items]
+            if not top:
+                return ""
+            head = f"【当前工作记忆】{len(top)}条近期焦点 (WM Sync Step 3 + Result Ingest Step 9 写入)"
+            wm_lines = [head]
+            for it in top:
+                content = str(it.get("content", ""))[:120]
+                imp = float(it.get("importance", 0))
+                tags = it.get("tags", [])
+                tag_str = f" tags={tags}" if tags else ""
+                wm_lines.append(f"- [wm] {content} (importance={imp:.2f}{tag_str})")
+            return "\n".join(wm_lines)
+        except Exception:
+            return ""
 
     # ── P0-C (2026-09-10): Schema Context — episodes 表列名注入 ──────────
 
