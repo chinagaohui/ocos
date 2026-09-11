@@ -74,7 +74,13 @@ class TextSensor:
                 id=f"txt-{self._cursor}",
                 modality=SensorModality.TEXT,
                 type=ObservationType.RAW,
-                content=text,
+                # P5.4: content 必须是 dict —— PerceptionPipeline._convert_to_raw_event
+                # 只处理 isinstance(obs.content, dict) 的场景。此前纯字符串被丢弃。
+                content={
+                    "content": text,
+                    "type": "text",
+                    "length": len(text.strip()),
+                },
                 confidence=self._estimate_confidence(text),
                 source_sensor=self.config.sensor_name,
                 raw_payload={"length": len(text)},

@@ -70,6 +70,8 @@ MIGRATIONS: dict[int, tuple[str, list[str]]] = {
         # S2.6 (白皮书 P2): goal 双表并存治理 —— schema v3 建的 goal 表
         # 全程无生产读写（生产走 goal/store.py 自建的 goals 表），
         # 重命名为 goal_legacy 留一个版本周期后由 v7 删除。
+        # NOTE: _apply_migration 对 v6 做了条件化 —— 仅旧 schema goal 表
+        # （无 domain 列）才 rename, GoalSQLiteStore 新 goal 表不会被覆盖。
         "S2.6: goal → goal_legacy（双目标表并存治理）",
         [
             "ALTER TABLE goal RENAME TO goal_legacy",
@@ -123,6 +125,22 @@ def _get_current_version(conn: sqlite3.Connection) -> Optional[int]:
 def _apply_migration(conn: sqlite3.Connection, version: int, migration: tuple[str, list[str]]) -> None:
     """执行单个迁移版本。"""
     description, sql_statements = migration
+
+    # v6 特殊：只 rename 旧 schema（无 domain 列）的 goal 表
+    # GoalSQLiteStore 新 goal 表带 domain, 不应被误 rename
+    if version == 6:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "goal" not in tables:
+            conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+            conn.commit()
+            return
+        # 检查是否带 domain 列 —— 有则是 GoalSQLiteStore 新表, 跳过 rename
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(goal)").fetchall()}
+        if "domain" in cols:
+            conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+            conn.commit()
+            return
+
     for stmt in sql_statements:
         conn.execute(stmt)
     conn.commit()

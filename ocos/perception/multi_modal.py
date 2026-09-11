@@ -126,10 +126,11 @@ class ApiSensor:
     def poll(self) -> list[Observation]:
         observations = []
         for resp in self._buffer[:self.config.max_observations_per_poll]:
+            # P5.4: content 必须是 dict —— 和 TextSensor 统一
             obs = Observation(
                 modality=SensorModality.API,
                 type=ObservationType.RAW,
-                content=str(resp),
+                content=resp if isinstance(resp, dict) else {"content": str(resp), "type": "api"},
                 confidence=0.8,
                 source_sensor="api_sensor",
                 raw_payload=resp,

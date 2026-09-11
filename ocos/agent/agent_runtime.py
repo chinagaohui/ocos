@@ -1008,7 +1008,7 @@ class AgentRuntime:
                 # 写入 WorkingMemory Store
                 if hasattr(self, "_wm_store") and self._wm_store is not None:
                     try:
-                        self._wm_store.put(
+                        self._wm_store.store(
                             key=f"attention:{slot}:{event_id}",
                             value={
                                 "event_id": event_id,
@@ -1020,9 +1020,7 @@ class AgentRuntime:
                         )
                         wm_writes += 1
                     except Exception as _wm_e:
-                        # BR-04 B批（2026-08-25）：工作记忆写入失败留痕，
-                        # 否则缓存缺失无感知。
-                        logger.warning("wm_store.put failed (attention): %s", _wm_e)
+                        logger.warning("wm_store.store failed (attention): %s", _wm_e)
 
             # 清空 decisions cache
             self._last_attention_decisions = []
