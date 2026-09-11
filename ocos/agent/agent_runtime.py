@@ -1990,9 +1990,11 @@ class AgentRuntime:
             self._dag_total = 0
 
         # ── Fallback: original cognitive loop (or idle if not booted) ──
-        # FIX-01: 生产默认停用 idle 兜底认知循环（空转无输出，白耗 CPU）
-        # OCOS_ENABLE_COGNITIVE_LOOP=1 可重新启用（调试/未来用途）
-        _enable_cognitive_loop = os.environ.get("OCOS_ENABLE_COGNITIVE_LOOP", "0") == "1"
+        # FIX-01 + P0-C (2026-09-11): **永久停用** legacy cognitive loop fallback.
+        # 违反 P1 单一认知 Runtime 原则 — 不允许通过环境变量恢复旧 Runtime.
+        # 任何 Observe/Recall/Think/Reflect 必须 re-host 到 AgentRuntime 主链 (C1 scope).
+        # 环境变量开关已删除 — 不存在的开关才能保证不会被重新启用.
+        _enable_cognitive_loop = False
         if _enable_cognitive_loop and hasattr(self, "loop") and self.loop is not None:
             try:
                 result = self.loop.execute_single()

@@ -25,10 +25,22 @@ ARCHIVE_DIR = OCOS_DIR / "_archive"
 
 
 def test_cognitive_loop_switch_defaults_to_off():
-    """旧五步认知循环（MasterAgent/DecisionLoop）必须默认关闭。"""
+    """P0-C (2026-09-11): OCOS_ENABLE_COGNITIVE_LOOP 开关必须被删除.
+
+    冻结令 3 升级: 从"默认关闭"升级为"开关不存在".
+    任何 os.environ.get("OCOS_ENABLE_COGNITIVE_LOOP") 出现都违反 P1 —
+    不允许通过环境变量恢复旧 CognitiveLoop Runtime.
+    legacy fallback 已永久 _enable_cognitive_loop = False,
+    任何 Observe/Recall/Think/Reflect 必须 re-host 到 AgentRuntime 主链.
+    """
     src = (OCOS_DIR / "agent" / "agent_runtime.py").read_text(encoding="utf-8")
-    assert 'os.environ.get("OCOS_ENABLE_COGNITIVE_LOOP", "0") == "1"' in src, (
-        "OCOS_ENABLE_COGNITIVE_LOOP 默认值被改动 — 双认知循环风险（冻结令 3）")
+    # P0-C: 开关已删除 — 代码里不应出现任何 OCOS_ENABLE_COGNITIVE_LOOP 字符串
+    assert "OCOS_ENABLE_COGNITIVE_LOOP" not in src, (
+        "OCOS_ENABLE_COGNITIVE_LOOP 开关仍存在 — P1 单一 Runtime 原则违规 "
+        "(删除环境变量开关, legacy fallback 永久 disable)")
+    # legacy fallback 必须硬编码 disable
+    assert "_enable_cognitive_loop = False" in src, (
+        "legacy cognitive loop fallback 必须永久 disable")
 
 
 def test_archive_modules_not_importable_from_production():
