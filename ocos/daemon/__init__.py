@@ -1336,16 +1336,76 @@ class ResidentRuntime:
 
     # ── R5: 持续认知循环 (continuous cognition loop) ──────────────────
 
+    def _ensure_cognition_consumed_table(self, db_path: str) -> None:
+        """P0-B: 幂等消费记录表 — 确保同一 reflection 只被完整处理一次."""
+        import sqlite3
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS cognition_consumed ("
+                "  reflection_key TEXT PRIMARY KEY,"
+                "  source TEXT NOT NULL,"
+                "  consumed_at TEXT NOT NULL"
+                ")"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cog_consumed_at ON cognition_consumed(consumed_at)")
+            # P0-B 清理: 保留 7 天内的记录（防止表无限增长）
+            conn.execute("DELETE FROM cognition_consumed WHERE consumed_at < datetime('now','-7 days')")
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.debug("🧠 cogni_ensure_table err: %s", e)
+
+    @staticmethod
+    def _make_consumption_key(reflection_point: dict) -> str:
+        """P0-B: 生成幂等消费键 — (source + question_prefix + hint_prefix)."""
+        import hashlib
+        src = reflection_point.get("source", "unknown")
+        q = reflection_point.get("question", "")[:60]
+        h = reflection_point.get("hint", "")[:40]
+        raw = f"{src}|{q}|{h}"
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+        return f"R:{digest}"
+
+    def _is_consumed(self, db_path: str, key: str) -> bool:
+        """P0-B: 检查某 reflection_key 是否已被完整消费过."""
+        import sqlite3
+        try:
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "SELECT 1 FROM cognition_consumed WHERE reflection_key = ?", (key,)
+            ).fetchone()
+            conn.close()
+            return row is not None
+        except Exception:
+            return False
+
+    def _mark_consumed(self, db_path: str, key: str, source: str) -> None:
+        """P0-B: 标记某 reflection_key 为已消费."""
+        import sqlite3
+        from datetime import datetime, timezone
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "INSERT OR IGNORE INTO cognition_consumed(reflection_key, source, consumed_at) "
+                "VALUES (?, ?, ?)",
+                (key, source, datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.debug("🧠 cogni_mark_consumed err: %s", e)
+
     def _run_continuous_cognition(self) -> None:
         """每 ≈ 60s 做一次: 反思 → LLM验证学习 → 制定计划.
 
-        这是 OCOS 作为数字生命必须时刻做的三件事:
-          ① 对自身优化思考 — 从最近 episodes/gaps 里挑一个值得反思的点
-          ② 思考后找 LLM 知识库验证学习 — LLMTutor 问一个聚焦问题
-          ③ 制定计划 — 把学习结果存 PENDING evolution_artifact + 注入 follow-up
+        P0-B (2026-09-11): 加 consumption_key 幂等闸 —
+          同一 reflection (source+question+hint) 只能被完整处理一次,
+          防止每 60s 重复 pick 同一条 knowledge → 重复 LLM 调用 →
+          重复 knowledge 写入 → 重复 plan 生成, 污染 knowledge 表.
 
-        独立于 dream cycle (200 ticks) 和 evolution cycle (2880 ticks),
-        让大脑在任何 tick 都保持活跃思考状态。
+        不动 Step①②③ 的功能逻辑, 只在入口处做幂等拦截.
+        功能 re-host 到 AgentRuntime 主链是 C1 scope, P0-B 不涉及.
         """
         import sqlite3
         from datetime import datetime, timezone
@@ -1354,6 +1414,9 @@ class ResidentRuntime:
         if not db_path:
             logger.debug("🧠 cogni_skip — no db_path")
             return
+
+        # P0-B: 确保幂等消费表存在
+        self._ensure_cognition_consumed_table(db_path)
 
         # ── 限频 LLM 调用 (60s 内只调一次) ──
         now_ts = datetime.now(timezone.utc).timestamp()
@@ -1370,6 +1433,16 @@ class ResidentRuntime:
             return
 
         logger.info("🧠 Cognition Loop Step① reflection: %s", reflection_point.get("question", "")[:80])
+
+        # ── P0-B: 幂等消费闸 ──
+        consumption_key = self._make_consumption_key(reflection_point)
+        if self._is_consumed(db_path, consumption_key):
+            logger.debug(
+                "🧠 cogni_idempotent_skip — reflection already consumed "
+                "(key=%s source=%s)",
+                consumption_key, reflection_point.get("source", ""),
+            )
+            return  # ← P0-B: 直接返回, 不调 LLM, 不写 knowledge, 不生成 plan
 
         # ═══════════════════════════════════════════════════════════
         # Step ②: LLM 验证学习 — 把反思疑问喂给 LLMTutor
@@ -1448,6 +1521,16 @@ class ResidentRuntime:
                     logger.debug("🧠 cogni_plan_save failed: %s", e)
         except Exception as e:
             logger.debug("🧠 cogni_plan_step failed: %s", e)
+
+        # ── P0-B: 标记为已消费 ──
+        # 无论 Step②/③ 成功与否都标记 — 幂等闸的目的是防止
+        # 同一条 reflection 被反复处理, 不是保证每次都成功.
+        # 如果 Step② LLM 调用抛异常, 下次再来还是同一条,
+        # 继续失败继续污染 knowledge 表没有意义.
+        self._mark_consumed(
+            db_path, consumption_key,
+            reflection_point.get("source", "unknown"),
+        )
 
     def _pick_reflection_point(self, db_path: str) -> dict | None:
         """Step①: 挑一个值得反思的点."""
