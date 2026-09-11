@@ -460,29 +460,43 @@ class DecisionBridge:
             # Phase 1 (Mutation): command 字段提升到顶层 — agent_runtime
             # 用 dag_result.get("command") 取，llm 内部有 command（_run_one 回传）
             _cmd = llm.get("command", "") or ""
+            # FIX-V1: veto_meta 从 _handler_dag_task 透传到所有返回路径
+            _veto = llm.get("veto_meta") or {}
             if llm.get("ok"):
                 self._audit_record(
                     contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
                     status="completed",
                     summary=f"dag_{task_type}: {str(llm.get('stdout', llm.get('applied', '')))[:150]}")
-                return {"status": "completed", "result": llm, "command": _cmd}
+                _ret = {"status": "completed", "result": llm, "command": _cmd}
+                if _veto.get("occurred"):
+                    _ret["veto_meta"] = _veto
+                return _ret
             if llm.get("pending"):
                 # S1.1: FILE_WRITE 强制审批 — 待批而非失败/执行
                 self._audit_record(
                     contract_id=f"DAG-{uuid.uuid4().hex[:8]}",
                     status="pending",
                     summary=f"dag_{task_type}: {str(llm.get('error', ''))[:150]}")
-                return {"status": "pending_approval",
+                _ret = {"status": "pending_approval",
                         "reason": str(llm.get("error", "file_write requires approval")),
                         "command": _cmd}
+                if _veto.get("occurred"):
+                    _ret["veto_meta"] = _veto
+                return _ret
             # UX-G: LLM 判定不可执行（描述模糊/无动作）→ 诚实 failed，
             # 落入 goal_result 摘要；不再堆无法批准的待批噪音
             # FIX-失败遮蔽: 真实原因若藏在 blocked/stderr/exit_code 里，
             # 会被默认兜底掩盖成 "LLM 无法执行此任务"— 用显式提取函数,
             # 让执行者/用户看到真实失败原因而非模糊文案。
-            return {"status": "failed",
+            # FIX-B2: 透传 MUTATION-VETO 产生的 blocked_action + provenance
+            _ret = {"status": "failed",
                     "reason": self._execution_failure_reason(llm, description),
-                    "command": _cmd}
+                    "command": _cmd,
+                    "blocked_action": llm.get("blocked_action", ""),
+                    "provenance": llm.get("provenance", {}),}
+            if _veto.get("occurred"):
+                _ret["veto_meta"] = _veto
+            return _ret
 
         if task_type in _DAG_ASK_TYPES:
             # 审批关闭: 无 LLM 且写类动作无执行器（批准也只能 blocked）→ 诚实失败
@@ -1355,7 +1369,10 @@ class DecisionBridge:
                     prompt = f"{hint}\n\n{prompt}"
                 raw = asyncio.run(tg._provider.generate(
                     prompt,
-                    system_prompt="你是 OCOS 的任务执行规划器。只输出指定格式的动作行。",
+                    system_prompt=(
+                        "你是 OCOS 的任务执行规划器。只输出指定格式的动作行。"
+                        "在第一行先写 # reason: <50字内简短推理>"
+                    ),
                     temperature=0.1, max_tokens=2000))
                 raw = raw.strip()
                 # P3 (2026-09-08 事件复盘): 规划原始输出落日志 — 此前规划/
@@ -1442,7 +1459,8 @@ class DecisionBridge:
         _auto_ro = bool(payload.get("auto_readonly"))
         # FIX-5b: planning NONE| 只允许重试一次（防无限重规划烧 token）
         _retried_none = False
-        _lines = [ln.strip().strip("`") for ln in raw.splitlines() if ln.strip()]
+        _lines = [ln.strip().strip("`") for ln in raw.splitlines()
+                  if ln.strip() and not ln.strip().startswith("#")]
         # Phase 2 (Mutation): 同时用 ActionParser 解析，assert 等价性
         # 确保提炼前后行为完全一致（Phase 3 接 Mutation Engine 时 actions 将成为消费入口）
         _actions = self._parse_actions(raw)
@@ -1453,9 +1471,23 @@ class DecisionBridge:
                          "lines=%d actions=%d", len(_lines), len(_reconstructed))
         # Phase 3 (Mutation): Mutation Engine 硬否决层
         # 位置: _parse_actions 之后, ANSWER_GUARD / _agent_forced_call / sandbox 之前
+        _actions_before = [dict(a) for a in _actions]  # FIX-V1: veto 检测快照
         _actions = self._mutation_check(_actions, description)
         # 同步更新 _lines（所有下游继续用 _lines，Phase 4 逐步切到 actions）
         _lines = self._actions_to_lines(_actions)
+        # FIX-B: 从 MUTATION-VETO 产生的 NONE action 提取元数据（blocked_action + provenance）
+        # 让下游 AgentRuntime 能看到"具体哪个 curl 命令被 VETO + 为什么"
+        _none_meta = {}
+        for _a in _actions:
+            if _a.get("type") == "NONE" and _a.get("blocked_action"):
+                _none_meta = {
+                    "blocked_action": _a.get("blocked_action", ""),
+                    "provenance": _a.get("provenance", {}),
+                }
+                break
+        # FIX-V1: 检测 veto 事件（即使 retry 成功绕过了 deny）
+        # 对比 mutation_check 前后：原始 RUN 的 command 是否消失/变成 NONE/换了首词
+        _veto_meta = self._detect_mutation_veto(_actions_before, _actions, _none_meta)
         # UX-J+ 实测新增: ANSWER| — 认知型任务（复盘/总结/分析）所需信息
         # 已在注入上下文（如复盘素材）时，LLM 直接给出文字结论。此前只能
         # 用 NONE|（被判"无法执行→failed"）或违心跑系统采集命令（跑偏），
@@ -1608,6 +1640,31 @@ class DecisionBridge:
             for _cmd in _run_cmds:
                 _rr = _run_one(_cmd, _auto_ro)
                 if not _rr.get("ok"):
+                    # Phase 1: sandbox 级 deny 检测 — FIX-V1 只覆盖 Mutation Engine
+                    # veto (sandbox 之前), 这里补 sandbox 内部 block (白名单外/
+                    # 敏感路径) 或 exit_code!=0 deny 信号, 让 agent_runtime 也录 lesson.
+                    if (_rr.get("blocked")
+                            or self._has_deny_signal(_rr.get("stderr", ""))):
+                        logger.info(
+                            "PHASE1 sandbox-deny: blocked=%s reason=%s "
+                            "stderr=%s",
+                            _rr.get("blocked"),
+                            str(_rr.get("block_reason", ""))[:100],
+                            str(_rr.get("stderr", ""))[:100],
+                        )
+                        if not _veto_meta.get("occurred"):
+                            _veto_meta = {
+                                "blocked_action": _cmd[:200],
+                                "provenance": {
+                                    "source": "sandbox",
+                                    "block_reason": _rr.get("block_reason", ""),
+                                },
+                                "original_command": _cmd[:200],
+                                "retried_command": "",
+                                "occurred": True,
+                            }
+                    if _veto_meta.get("occurred"):
+                        _rr["veto_meta"] = _veto_meta
                     return _rr
                 # UX-J+: 标签用实际执行的命令（拦截重试转换后 ≠ 原命令）
                 _label = _rr.pop("_executed_command", _cmd)
@@ -1622,10 +1679,13 @@ class DecisionBridge:
                 summary = self._summarize_execution(description, raw_out[:3000])
                 if summary:
                     final = f"【结论摘要】{summary}\n\n【原始输出】\n{raw_out[:3500]}"
-            return {"ok": True, "blocked": False, "exit_code": 0,
-                    # P2: 自我模型能力实测归因（shell 实测）
-                    "capability": "shell",
-                    "stdout": final[:4000]}
+            _rr = {"ok": True, "blocked": False, "exit_code": 0,
+                   # P2: 自我模型能力实测归因（shell 实测）
+                   "capability": "shell",
+                   "stdout": final[:4000]}
+            if _veto_meta.get("occurred"):
+                _rr["veto_meta"] = _veto_meta
+            return _rr
         raw = _lines[0] if _lines else raw
         # FIX-5b: planning LLM 偶发输出 "NONE|"（判定无法执行）→ 带反馈重规划一次。
         # 弱模型较易对中文多命令任务误判不可执行；复用它已输出的理由让模型
@@ -1705,7 +1765,14 @@ class DecisionBridge:
                 return _fw
             return {"ok": False, "error": f"FILE_WRITE 格式错误: {raw[:80]}"}
         if raw.startswith("NONE|"):
-            return {"ok": False, "error": f"任务无法执行: {raw[5:].strip()}"}
+            # FIX-B: 如果是 MUTATION-VETO 产生的 NONE，透传 blocked_action + provenance
+            _ret = {"ok": False, "error": f"任务无法执行: {raw[5:].strip()}"}
+            if _none_meta:
+                _ret["blocked_action"] = _none_meta["blocked_action"]
+                _ret["provenance"] = _none_meta["provenance"]
+            if _veto_meta.get("occurred"):
+                _ret["veto_meta"] = _veto_meta
+            return _ret
         return {"ok": False, "error": f"LLM 输出格式不符: {raw[:80]}"}
 
     def _execution_failure_reason(self, llm: dict, description: str) -> str:
@@ -1777,6 +1844,14 @@ class DecisionBridge:
                 logger.debug("memory decision context failed: %s", e)
                 artifacts = []
         artifacts = [a for a in artifacts if a and a.get("text")]
+        # FIX-V1: failure_lesson 进入 Brain prompt 的生产证据（P4 验收）
+        for _fa in artifacts:
+            if _fa.get("type") == "failure_lesson":
+                logger.info(
+                    "FIX-V1 MEM_CTX -> Brain prompt: %s conf=%s",
+                    str(_fa.get("text", ""))[:100], _fa.get("confidence"),
+                )
+                break
         # B4 FIX: learning_artifacts 为空时不立即 return — WM 是独立数据源,
         # 即使没有长期经验也应该能注入短期焦点. 改为只跳过 learning artifacts
         # 段, 继续尝试 WM 段.
@@ -1806,7 +1881,9 @@ class DecisionBridge:
             lines.append(head)
             for a in ordered:
                 aid = str(a.get("artifact_id", ""))[:40]
-                text = str(a.get("text", ""))[:110]
+                # FIX-V1: failure_lesson 需完整呈现 cause+建议+证据（110 不够）
+                _tlimit = 220 if a.get("type") == "failure_lesson" else 110
+                text = str(a.get("text", ""))[:_tlimit]
                 c = float(a.get("confidence", 0.0))
                 lines.append(
                     f"- [{a.get('type', '?')}] {text} "
@@ -2427,6 +2504,11 @@ class DecisionBridge:
                 ctx = _json.loads(r["context"] or "{}")
                 if "mutation_policy" not in ctx:
                     continue
+                # 网关实验: mp.active=False 表示这条 deny 已被 release,
+                # Mutation Engine 不再对其生效 — 活跃 deny 合集现在只剩 bash
+                mp = ctx.get("mutation_policy", {})
+                if mp.get("active", True) is False:
+                    continue
                 lessons.append({"id": r["id"], "context": ctx})
             except (ValueError, TypeError):
                 continue
@@ -2484,6 +2566,88 @@ class DecisionBridge:
 
         return None
 
+    @staticmethod
+    def _has_deny_signal(stderr: str) -> bool:
+        """Phase 1: sandbox stderr 里有没有策略拒绝信号。
+
+        sandbox block (白名单外命令/敏感路径) 返回 ok=False, blocked=True —
+        但还有一类: exit_code=127 (command not found) / permission denied /
+        curl 403 等环境级拒绝。这些也应该被录成 failure_lesson。
+        """
+        if not stderr:
+            return False
+        _s = stderr.lower()
+        return any(x in _s for x in (
+            "blocked", "denied", "command not found",
+            "exit_code=127", "not found",
+        ))
+
+    def _detect_mutation_veto(self, actions_before: list[dict],
+                                actions_after: list[dict],
+                                none_meta: dict) -> dict:
+        """FIX-V1: 检测 MUTATION-VETO 是否发生（即使 retry 成功绕过 deny）。
+
+        生产已证实: retry LLM 总能生成首词不在 deny.commands 里的命令
+        (python3 urllib / wget / bash / urllib.request ...), 导致
+        _mutation_check 永不产生 NONE|exhausted, 永不进 failed 路径。
+        但 "原始命令被 veto 过" 这个事实应该被 Brain 知道 — 下次规划时
+        MEM_CTX 里有 failure_lesson, 可能不再先试 curl。
+
+        对比逻辑:
+          - before 有 RUN, after 同位置变 NONE+blocked_action → veto
+          - before 有 RUN cmd="curl xxx", after 同位置 RUN cmd="python3 urllib xxx" → veto
+          - before 有 RUN cmd="curl xxx", after 消失/位置变了 → veto
+        """
+        if not actions_before or not actions_after:
+            return {}
+        veto_meta: dict = {}
+        _after_run_cmds = [a.get("command", "")
+                           for a in actions_after
+                           if a.get("type") == "RUN"]
+        _after_none = [a for a in actions_after if a.get("type") == "NONE"]
+        # Case 1: NONE in after → NONE.blocked_action IS the original blocked command
+        for _na in _after_none:
+            if _na.get("blocked_action"):
+                veto_meta = {
+                    "blocked_action": _na.get("blocked_action", ""),
+                    "provenance": _na.get("provenance", {}),
+                    "original_command": _na.get("blocked_action", ""),
+                    "retried_command": "",
+                    "occurred": True,
+                }
+                break
+        # Case 2: no NONE but original tool first-word disappeared from after
+        if not veto_meta:
+            for _ba in actions_before:
+                if _ba.get("type") != "RUN":
+                    continue
+                _orig_cmd = _ba.get("command", "")
+                _orig_tool = _orig_cmd.split()[0] if _orig_cmd else ""
+                if not _orig_tool:
+                    continue
+                _still_present = any(
+                    (a.get("command", "") or "").split()[0] == _orig_tool
+                    for a in actions_after if a.get("type") == "RUN")
+                if not _still_present:
+                    _retried = ""
+                    if _after_run_cmds:
+                        _retried = _after_run_cmds[0][:200]
+                    veto_meta = {
+                        "blocked_action": _orig_cmd,
+                        "provenance": none_meta.get("provenance", {}),
+                        "original_command": _orig_cmd,
+                        "retried_command": _retried,
+                        "occurred": True,
+                    }
+                    break
+        if veto_meta.get("occurred"):
+            logger.info(
+                "FIX-V1 MUTATION-VETO-DETECTED: blocked=%s retried=%s rule=%s",
+                str(veto_meta.get("blocked_action", ""))[:80],
+                str(veto_meta.get("retried_command", ""))[:80],
+                veto_meta.get("provenance", {}).get("policy_match", {}).get("rule", ""),
+            )
+        return veto_meta
     def _mutation_check(self, actions: list[dict],
                         description: str) -> list[dict]:
         """Phase 3: Mutation Engine 主入口 — 硬否决已知失败策略。
@@ -2550,6 +2714,11 @@ class DecisionBridge:
                 result.append({
                     "type": "NONE",
                     "reason": f"[Mutation exhausted] {veto['reason']}",
+                    "blocked_action": action.get("command", ""),   # FIX-A: 保留原始被阻断动作
+                    "provenance": {                                # FIX-A: 保留治理证据
+                        "policy_match": veto.get("policy_match", {}),
+                        "lesson_id": veto.get("lesson_id", ""),
+                    },
                 })
                 continue
 
@@ -2564,6 +2733,11 @@ class DecisionBridge:
                 result.append({
                     "type": "NONE",
                     "reason": f"[Mutation exhausted] retry also denied: {veto2['reason']}",
+                    "blocked_action": new_action.get("command", ""), # FIX-A: 保留 retry 被阻断动作
+                    "provenance": {                                   # FIX-A: 保留治理证据
+                        "policy_match": veto2.get("policy_match", {}),
+                        "lesson_id": veto2.get("lesson_id", ""),
+                    },
                 })
 
         return result
@@ -2735,11 +2909,27 @@ class DecisionBridge:
         if not dg:
             return ""
         registry: dict = {}
+        # FIX-V1: 被拒工具全集 — 与 Mutation Engine 同源（lessons 的
+        # mutation_policy.deny.commands），跨 cause 标签收集
+        denied_all: set = set()
         for r in rows:
             try:
                 tags = json.loads(r["tags"] or "[]")
             except (ValueError, TypeError):
                 tags = []
+            # FIX-V1: mutation_policy 黑名单跨 cause 收集 — 必须在 cause
+            # 过滤之前（legacy deny lessons 标签是 dependency_missing，
+            # 不在 _CAUSE_PROCEDURES，过滤后收集会漏掉 wget/bash）
+            try:
+                _ctx0 = json.loads(r["context"] or "{}")
+            except (ValueError, TypeError):
+                _ctx0 = {}
+            _mp = _ctx0.get("mutation_policy") or {}
+            # 网关实验: mp.active=False → 跳过 (deny 已被 release)
+            if _mp.get("active", True) is False:
+                continue
+            for _c in ((_mp.get("deny") or {}).get("commands") or []):
+                denied_all.add(str(_c))
             cause = next((t for t in (tags if isinstance(tags, list) else [])
                           if t and t != "failure_lesson"), None)
             if not cause or cause not in self._CAUSE_PROCEDURES:
@@ -2750,11 +2940,13 @@ class DecisionBridge:
             if not info["seen"]:
                 info["seen"] = str(r["created_at"] or "")
             if not info["goal_pattern"]:
-                try:
-                    ctx = json.loads(r["context"] or "{}")
-                except (ValueError, TypeError):
-                    ctx = {}
-                info["goal_pattern"] = str(ctx.get("goal_pattern", "") or "")
+                info["goal_pattern"] = str(
+                    _ctx0.get("goal_pattern", "") or "")
+            # FIX-V1: policy_match.rule 是单条 lesson 的拒绝记录，并入黑名单
+            if cause == "tool_unavailable":
+                _pt = (_ctx0.get("policy_match") or {}).get("rule", "")
+                if _pt:
+                    denied_all.add(str(_pt))
         if not registry:
             return ""
         chosen: list = []                       # [(cause, mode)]
@@ -2771,11 +2963,18 @@ class DecisionBridge:
             if recurred:
                 recurred.sort(reverse=True)
                 chosen.append((recurred[0][1], "recurrence"))
+        # FIX-V1: 环境级策略拒绝最高优先 — 被拒工具集合是 policy 事实
+        # （MUTATION-VETO 记录 + mutation_policy 黑名单，对所有任务生效），
+        # 优先于其他 cause 的软模式匹配
+        _denied = sorted(denied_all)
+        if _denied:
+            chosen.insert(0, ("tool_unavailable", "policy"))
         if not chosen:
             return ""
         cause, mode = chosen[0]
+        _denied_str = ", ".join(_denied)
         self._audit_learning_mark("lesson_prior_injected", cause=cause,
-                                  mode=mode)
+                                  mode=mode, denied_tools=_denied_str)
         # Phase A0+: 优先用 cause_to_procedure(cause, goal_pattern) 动态生成，
         # fallback 静态 _CAUSE_PROCEDURES[cause]（确保非 timeout cause 也有退化）
         gp = registry.get(cause, {}).get("goal_pattern", "")
@@ -2789,6 +2988,17 @@ class DecisionBridge:
             procedure_text = self._CAUSE_PROCEDURES[cause]
         elif not procedure_text:
             return ""
+        # FIX-V1: 把通用"先探测可用性"落到具体被拒工具集合 — 生产实测只报
+        # 最新一个工具时，规划器避开它后转向其他被拒工具（python3→curl）。
+        # 工具名来自真实 lessons 的 provenance.policy_match.rule（事实陈述），
+        # 指令为矫正程序（非答案注入）。
+        if cause == "tool_unavailable" and _denied \
+                and not any(d in procedure_text for d in _denied):
+            procedure_text = (
+                f"本环境策略已拒绝以下工具命令: {_denied_str}——"
+                f"禁止规划以这些命令开头的动作；"
+                f"{procedure_text}"
+                f"（探测示例: command -v <tool>；无可用替代时诚实说明，勿硬试被拒命令）")
         return (f"【执行程序提示】针对{cause}类任务，请按以下程序执行：\n"
                 f"{procedure_text}")
 

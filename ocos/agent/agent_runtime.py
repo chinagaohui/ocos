@@ -1560,7 +1560,9 @@ class AgentRuntime:
                 logger.debug("attention source bind skipped: %s", _ase)
 
     def _replan_failed_task(self, task_id: str, task: Any,
-                            reason: str, cmd: str = "") -> dict[str, Any]:
+                            reason: str, cmd: str = "",
+                            blocked_action: str = "",
+                            provenance: dict | None = None) -> dict[str, Any]:
         """Phase 49-C (L4): 失败任务重规划决策。
 
         用 FailureDiagnoser 分类失败原因 → TaskReplanner 决定动作:
@@ -1580,8 +1582,11 @@ class AgentRuntime:
             # 构造最小 episode 形状供诊断器使用
             fake_ep = type("FailedTask", (), {
                 "id": task_id,
-                "outcome": {"success": False, "reason": reason,
-                            "error": reason},
+                "outcome": {
+                    "success": False, "reason": reason, "error": reason,
+                    "blocked_action": blocked_action,  # FIX-C: 透传被阻断动作
+                    "provenance": provenance or {},     # FIX-C: 透传治理证据
+                },
                 "decision": f"failed: {reason[:100]}",
             })()
             diag = FailureDiagnoser.diagnose(fake_ep)
@@ -1644,8 +1649,33 @@ class AgentRuntime:
             # P5.1 (AGI 计划): 不可修正/重试耗尽失败 → 教训回学习管道（feed G1）
             # （模糊任务/工具受限/重试耗尽 → honest failed + 教训入库）
             meta["lesson"] = self._record_failure_lesson(
-                task_id, task, diag, decision, reason, cmd=cmd)
+                task_id, task, diag, decision, reason, cmd=cmd,
+                blocked_action=blocked_action, provenance=provenance)
         return meta
+
+    def _derive_recommended_response(self, cause: str, diagnosis: Any) -> str:
+        """FIX-D: 从 cause-level procedure fallback 生成 recommended_response。
+
+        设计约束:
+          - 优先使用 diagnosis 自带的 procedure（如果 Recognition 层生成了）
+          - 否则 fallback 到 _CAUSE_PROCEDURES[cause]（bridge 类属性）
+          - 不做新的 Mutation-VETO → response 推理（当前阶段不扩张）
+        """
+        # 1. diagnosis 自带 procedure
+        if hasattr(diagnosis, "procedure"):
+            _p = getattr(diagnosis, "procedure", "") or ""
+            if _p:
+                return _p[:200]
+        # 2. cause-level fallback (复用 bridge.py _CAUSE_PROCEDURES)
+        try:
+            from ocos.execution.bridge import DecisionBridge
+            _procs = DecisionBridge._CAUSE_PROCEDURES
+            if cause in _procs:
+                return _procs[cause][:200]
+        except Exception:
+            pass
+        # 3. 兜底
+        return "检查失败原因，修正动作后重试"
 
     def _revise_task_description(self, base: str, reason: str,
                                  attempt: int) -> str:
@@ -1668,9 +1698,44 @@ class AgentRuntime:
         )
         return f"{_base}\n{note}" if _base else note.strip()
 
+    def _check_recent_lesson(self, task: Any, task_id: str, rule: str) -> bool:
+        """FIX-V1: 防洪水 — 同 policy_match.rule 的 failure_lesson 24h 内已存在 → True。
+
+        生产已证实 MUTATION-VETO 在 1 tick 内可重复发生 ~10 次（LLM 重试不同 curl query）,
+        不应每次都生成新 lesson。同 rule 24h 内只录一次。
+        """
+        hub = getattr(self, "_memory_hub", None)
+        if hub is None or not hub.is_initialized():
+            return False
+        try:
+            import sqlite3
+            from datetime import datetime, timedelta, timezone
+            db_path = getattr(hub, "_db_path", None) or getattr(hub, "db_path", None)
+            if not db_path:
+                return False
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            # 查同 rule 的 failure_lesson
+            rows = conn.execute(
+                "SELECT rowid FROM episodes "
+                "WHERE action='failure_lesson' "
+                "AND json_extract(context, '$.policy_match.rule') = ? "
+                "AND created_at >= ? "
+                "AND session_id NOT LIKE '%manual%' "
+                "AND session_id NOT LIKE '%phase2%' "
+                "ORDER BY rowid DESC LIMIT 1",
+                (rule, cutoff)).fetchall()
+            conn.close()
+            return len(rows) > 0
+        except Exception:
+            return False
+
     def _record_failure_lesson(self, task_id: str, task: Any,
                                diagnosis: Any, decision: Any,
-                               reason: str, cmd: str = "") -> dict[str, Any]:
+                               reason: str, cmd: str = "",
+                               blocked_action: str = "",
+                               provenance: dict | None = None) -> dict[str, Any]:
         """P5.1 (AGI 计划): 失败教训回学习管道 — 不可修正失败 → LESSON 入库。
 
         对齐 G5（失败归因重规划）: 归因已由 FailureDiagnoser 完成（确定性
@@ -1727,15 +1792,22 @@ class AgentRuntime:
                     "task_id": task_id,
                     "artifact_id": artifact.id,
                     "goal_pattern": description[:100],
-                    # P2: failure_signature — 精确检索键
-                    # 格式: "<normalized_goal>|<cause>"
-                    # 替代原来的 LIKE 模糊匹配，避免 30 字截断丢失语义
+                    # P2-FIX-D: FailureLesson v1.0 Canonical Contract
+                    # Semantic fields (Brain-consumable):
+                    "cause": _cause,
+                    "failure_evidence": (reason or diagnosis.evidence or "")[:300],
+                    "blocked_action": (blocked_action or cmd or "")[:500],
+                    "recommended_response": self._derive_recommended_response(
+                        _cause, diagnosis),
+                    # Provenance fields (trace only, NOT prompt):
+                    "policy_match": (provenance or {}).get("policy_match"),
+                    "lesson_id": (provenance or {}).get("lesson_id"),
+                    # Legacy (保持向后兼容):
                     "failure_signature": _signature,
-                    # Phase 1 (Mutation): failure_lesson（描述性，给 LLM 看）
                     "failure_lesson": {
                         "cause": _cause,
                         "evidence": {
-                            "command": (cmd or "")[:200],
+                            "command": (cmd or blocked_action or "")[:200],
                             "stderr": (reason or "")[:500],
                         },
                     },
@@ -2034,8 +2106,14 @@ class AgentRuntime:
                                 _cmd = str(
                                     dag_result.get("command")
                                     or "")[:200]
+                                # FIX-C: 透传 MUTATION-VETO 产生的 blocked_action + provenance
+                                _ba = str(
+                                    dag_result.get("blocked_action")
+                                    or "")[:500]
+                                _prov = dag_result.get("provenance") or {}
                                 replan_meta = self._replan_failed_task(
-                                    tid, task, reason, cmd=_cmd)
+                                    tid, task, reason, cmd=_cmd,
+                                    blocked_action=_ba, provenance=_prov)
                                 if replan_meta.get("decision") == "retry_pending":
                                     # 本 tick 不推进 cursor — 下 tick 重试同任务
                                     self._task_statuses[tid] = "retry_pending"
@@ -2070,6 +2148,8 @@ class AgentRuntime:
                                        if isinstance(_res, dict) else "")
                             _out = _truncate_text(
                                 str(_stdout or dag_result), 1600)
+                            # FIX-V1: 从 dag_result 取 veto_meta（Mutation veto 检测）
+                            _veto = dag_result.get("veto_meta") or {}
                             self._recent_results.append({
                                 "task_id": tid,
                                 "description": task.description,
@@ -2081,7 +2161,56 @@ class AgentRuntime:
                                 "capability": (_res.get("capability")
                                                if isinstance(_res, dict)
                                                else None),
+                                # FIX-V1: veto_meta 透传到结果记录
+                                "veto_meta": _veto if _veto.get("occurred") else None,
                             })
+                            # FIX-V1: MUTATION-VETO 发生 → 即使 success=True 也录制 lesson
+                            # 生产根因: retry LLM 总能绕过 deny.commands 首词匹配,
+                            # veto 事件不会升级到 NONE/exhausted → 永远不进 failed 路径
+                            # 但 veto 发生的事实需要 Brain 知道 → 下次 MEM_CTX 有 lesson
+                            if _veto.get("occurred"):
+                                # 防洪水: 同 policy_match.rule 24h 内已有 lesson → 跳过
+                                _rule = (_veto.get("provenance", {}).get("policy_match") or {}).get("rule", "")
+                                _recent = self._check_recent_lesson(task, tid, _rule) if _rule else False
+                                logger.info(
+                                    "FIX-V1 veto_meta detected: blocked=%s rule=%s recent_skip=%s",
+                                    str(_veto.get("blocked_action", ""))[:80],
+                                    _rule, _recent,
+                                )
+                                if not _recent:
+                                    logger.info(
+                                        "FIX-V1 recording failure_lesson: task=%s blocked=%s",
+                                        tid, str(_veto.get("blocked_action", ""))[:80],
+                                    )
+                                    # FIX-V1: 真 FailureDiagnosis（不用 _VD hack —
+                                    # build_lesson_artifact 访问 .hypothesis/.episode_id）
+                                    # 语义: policy 拒绝 tool → 该工具在本环境不可用
+                                    from ocos.learning.experience_learning import (
+                                        FailureCause, FailureDiagnosis,
+                                    )
+                                    _level = (_veto.get("provenance", {}).get("policy_match") or {}).get("type", "tool")
+                                    _cause_enum = (FailureCause.TOOL_UNAVAILABLE
+                                                   if _level == "tool"
+                                                   else FailureCause.EXECUTION_ERROR)
+                                    _diag = FailureDiagnosis(
+                                        episode_id=f"task:{tid}",
+                                        cause=_cause_enum,
+                                        hypothesis=(
+                                            f"mutation_veto: 工具被策略拒绝 "
+                                            f"rule={_rule}"),
+                                        evidence=(
+                                            f"mutation_veto: blocked="
+                                            f"{_veto.get('blocked_action', '')[:150]}"),
+                                        signals_hit=("mutation_veto",),
+                                    )
+                                    self._record_failure_lesson(
+                                        task_id=tid, task=task,
+                                        diagnosis=_diag, decision="veto_detected",
+                                        reason=f"mutation_veto: blocked={_veto.get('blocked_action','')[:100]} retried={_veto.get('retried_command','')[:100]}",
+                                        cmd=_veto.get("original_command", "") or _veto.get("blocked_action", ""),
+                                        blocked_action=_veto.get("blocked_action", ""),
+                                        provenance=_veto.get("provenance", {}),
+                                    )
                             self._dag_cursor += 1
                             return {
                                 "step": 7, "name": "core_loop",
@@ -2902,7 +3031,8 @@ class AgentRuntime:
             conn = _sqlite3.connect(db_path)
             conn.row_factory = _sqlite3.Row
             rows = conn.execute(
-                "SELECT rowid, tags, substr(decision,1,400) as d, goal, created_at "
+                "SELECT rowid, tags, substr(decision,1,400) as d, goal, "
+                "created_at, context "
                 "FROM episodes "
                 "WHERE action='failure_lesson' AND created_at >= ? "
                 "ORDER BY rowid DESC LIMIT 10",
@@ -2915,6 +3045,7 @@ class AgentRuntime:
         _RECALLABLE_CAUSES = frozenset({
             "sql_schema_mismatch", "dependency_missing",
             "tool_unavailable", "permission_denied",
+            "execution_error",
         })
         for r in rows:
             try:
@@ -2929,7 +3060,27 @@ class AgentRuntime:
             if cause is None:
                 continue
 
+            # FIX-V1: 注入文本带 canonical 字段（P4 验收要求 prompt 里可见
+            # cause/blocked_action/recommended_response）— 只注入事实，
+            # 不伪造。tool_unavailable 类 lesson 附带工具名 + 推荐程序。
             text = (r["d"] or "").strip()
+            try:
+                _ctx = _json.loads(r["context"] or "{}")
+            except Exception:
+                _ctx = {}
+            if cause == "tool_unavailable" and _ctx:
+                # 网关实验: mp.active=False → 这条 lesson 已过时 (工具已被 release)
+                _mp = _ctx.get("mutation_policy") or {}
+                if _mp.get("active", True) is False:
+                    continue
+                _rule = (_ctx.get("policy_match") or {}).get("rule", "")
+                _rec = _ctx.get("recommended_response", "")
+                _ba_first = (_ctx.get("blocked_action", "") or "").split()[:1]
+                _tool = _rule or (_ba_first[0] if _ba_first else "")
+                if _tool:
+                    text = (f"[{cause}] 工具'{_tool}'在本环境被策略拒绝不可用"
+                            + (f" | 建议: {_rec}" if _rec else "")
+                            + f" | 证据: {text[:80]}")
             if not text:
                 continue
             # 与当前任务描述的目标重叠度（sql_schema_mismatch 通用，低阈值也注入）
@@ -2938,20 +3089,28 @@ class AgentRuntime:
                 for g in (r["goal"] or "").split("、")[:3]
                 if g.strip()
             )
-            # sql_schema_mismatch 是跨任务通用经验 — 任何涉及 DB/SQL 的任务都该看
+            # sql_schema_mismatch / execution_error 是跨任务通用经验 — 任何任务都该看
             sql_related = any(kw in description.lower()
                               for kw in ("sql", "sqlite", "episodes", "数据库", "schema", "表"))
-            if not goal_match and not sql_related and cause != "sql_schema_mismatch":
+            # FIX-V1: tool_unavailable 也是环境级通用经验 — 本环境策略拒绝
+            # 某工具（如 curl）是全局事实，不随 goal 变化
+            _generic_cause = cause in ("sql_schema_mismatch", "execution_error",
+                                       "tool_unavailable")
+            if not goal_match and not sql_related and not _generic_cause:
                 continue
 
             # 简短摘要（hypothesis 已含关键信息）
             artifacts.append({
                 "artifact_id": f"lesson:{r['rowid']}",
                 "type": "failure_lesson",
-                "text": text[:150],
+                "text": text[:240],
                 "confidence": 0.95,  # FailureDiagnoser 确定性分类 = 高置信
                 "score": 2,  # 低于 skill(3) 但高于 belief(通常 <2)
             })
+            logger.info(
+                "FIX-V1 failure_lesson recalled into MEM_CTX: rowid=%s cause=%s text=%s",
+                r["rowid"], cause, text[:100],
+            )
 
     # ── P0-C (2026-09-10): Schema Provider — DB schema 注入决策上下文 ──────
 

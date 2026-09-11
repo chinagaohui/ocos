@@ -522,7 +522,9 @@ def build_lesson_artifact(
     return LearningArtifact(
         id=f"ART-{rid}",
         artifact_type=ArtifactType.LESSON,
-        hypothesis=f"[{diagnosis.cause.value}] {diagnosis.hypothesis}",
+        # FIX-D: hypothesis 改为 evidence 摘要优先 + cause 分类
+        # 不再用纯硬编码模板 "执行层发生错误"
+        hypothesis=f"[{diagnosis.cause.value}] {diagnosis.evidence[:200] or diagnosis.hypothesis}",
         confidence=confidence,
         status=ArtifactStatus.CANDIDATE,
         source_episodes=(diagnosis.episode_id,),

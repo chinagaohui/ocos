@@ -113,6 +113,44 @@ class ResidentRuntime:
         self._kernel: Any = kernel
         self._health_loop: Optional[Any] = health_loop  # GAP-P1-2
         self._perception_pipeline: Optional[Any] = perception_pipeline  # AUD-F1
+        # Phase 4: 默认挂接最小感知链 — ProcessSensor + FileSensor
+        # daemon 之前是零传感器 → pipeline.tick() 空转零事件 → Attention/WM 全空转.
+        # 现在挂两个最不具侵入性的传感器: 关键进程存活 + 配置目录变化.
+        # 外部显式传入 perception_pipeline 时不覆盖 (工厂装配优先级更高).
+        if self._perception_pipeline is None:
+            try:
+                from ocos.daemon.factory import build_perception_pipeline
+                from ocos.perception.process_sensor import ProcessSensor
+                from ocos.perception.file_sensor import FileSensor
+                from ocos.perception.sensor_types import SensorConfig, SensorModality
+                import os as _os
+                _sensors = [
+                    ProcessSensor(
+                        config=SensorConfig(
+                            sensor_name="process_monitor",
+                            poll_interval=15.0,
+                            modalities=[SensorModality.ENV],
+                        ),
+                    ),
+                    FileSensor(
+                        config=SensorConfig(
+                            sensor_name="config_watcher",
+                            poll_interval=5.0,
+                            modalities=[SensorModality.FILE],
+                        ),
+                        _watch_paths=[_os.path.expanduser("~/.ocos")],
+                    ),
+                ]
+                self._perception_pipeline = build_perception_pipeline(
+                    sensors=_sensors,
+                    event_bus=None,  # start() 里会通过 attach_perception_pipeline 注入
+                )
+                logger.info(
+                    "🧠 Phase 4: default perception pipeline wired "
+                    "(ProcessSensor + FileSensor[~/.ocos])")
+            except Exception as _p4e:
+                logger.warning(
+                    "🧠 Phase 4: default perception pipeline failed: %s", _p4e)
         # UX-1: 目标认领 — 扫 goals 表认领 CLI 创建的 PENDING 人类目标
         self._domain_goal_store: Any = None
         if db_path and db_path != ":memory:":
@@ -844,6 +882,88 @@ class ResidentRuntime:
                                         "MotivationHub scan: %s", stats)
                             except Exception:
                                 logger.exception("Motivation scan failed")
+
+                            # Phase 3-extra: 内生目标生成 (GoalSync Light)
+                            # 之前 daemon 只有人工 goal, 零自驱。这里用最简路径:
+                            # 从最近 failure_lesson 里自动生成一条探索型目标.
+                            # 不调 GoalManager.sync_from_homeostasis (需要完整
+                            # RegulateResult 对象 + GoalStore + 门控链),
+                            # 直接走 goal 表 INSERT — 和 CLI /goals-from-chat 同路径.
+                            try:
+                                import sqlite3 as _sqlite3
+                                import uuid as _uuid
+                                from datetime import datetime, timezone as _tz
+                                _db_path = getattr(self, "_db_path", None)
+                                if _db_path:
+                                    _conn = _sqlite3.connect(_db_path)
+                                    # 近 6h failure_lesson 数量 → curiosity 压力
+                                    _fl_count = _conn.execute(
+                                        "SELECT COUNT(*) FROM episodes "
+                                        "WHERE action='failure_lesson' "
+                                        "AND created_at >= datetime('now','-6 hours')"
+                                    ).fetchone()[0]
+                                    # 有没有活跃的 explore goal (避免重复)
+                                    _recent_explore = _conn.execute(
+                                        "SELECT goal_id FROM goal "
+                                        "WHERE (domain='exploration' OR "
+                                        "       description LIKE '%工具%' OR "
+                                        "       description LIKE '%probe%' OR "
+                                        "       description LIKE '%explore%') "
+                                        "AND status IN ('pending', 'running') "
+                                        "ORDER BY rowid DESC LIMIT 1"
+                                    ).fetchone()
+                                    _conn.close()
+
+                                    # curiosity 足够 + 没在 explore → 生成
+                                    if _fl_count >= 2 and _recent_explore is None:
+                                        _gid = f"GOAL-AUTO-{_uuid.uuid4().hex[:8]}"
+                                        _desc = (
+                                            f"[内生] 环境能力探索: 近 6h 有 {_fl_count} "
+                                            f"条 failure_lesson, 先探测宿主机工具可用性 "
+                                            f"(curl/python3/wget/git/node/sqlite3), "
+                                            f"再选可用工具做一次真实外部任务"
+                                        )
+                                        try:
+                                            _conn2 = _sqlite3.connect(_db_path)
+                                            # 写入 goals 表 (daemon scheduler 用),
+                                            # 双写 goal 表 (兼容 UX 层).
+                                            # metadata 带 domain+autonomous:
+                                            #   claim 路径按 metadata.domain 路由管线
+                                            #   (之前 '{}' → fallback 误判成 writing)
+                                            _now = datetime.now(_tz.utc).isoformat()
+                                            _meta = ('{"domain": "development", '
+                                                     '"autonomous": true}')
+                                            _conn2.execute(
+                                                "INSERT OR IGNORE INTO goals "
+                                                "(id, description, status, "
+                                                "origin_level, authority, "
+                                                "created_at, updated_at, "
+                                                "priority, metadata, level) "
+                                                "VALUES (?, ?, 'PENDING', "
+                                                "'SELF', 'AUTONOMOUS', "
+                                                "?, ?, 3, ?, 2)",
+                                                (_gid, _desc, _now, _now, _meta),
+                                            )
+                                            _conn2.execute(
+                                                "INSERT OR IGNORE INTO goal "
+                                                "(goal_id, description, status, "
+                                                "domain, created_at, origin_level, "
+                                                "authority, level, priority) "
+                                                "VALUES (?, ?, 1, 'exploration', "
+                                                "?, 'SELF', 'AUTONOMOUS', 2, 3)",
+                                                (_gid, _desc, _now),
+                                            )
+                                            _conn2.commit()
+                                            _conn2.close()
+                                            logger.info(
+                                                "🧠 Phase 3-extra 内生目标生成: "
+                                                "goal_id=%s curiosity=%.1f",
+                                                _gid, min(_fl_count / 5.0, 1.0))
+                                        except Exception as _ie:
+                                            logger.debug(
+                                                "🧠 endogenous goal insert err: %s", _ie)
+                            except Exception as _es_e:
+                                logger.debug("🧠 GoalSync-light skipped: %s", _es_e)
                             # V2 行为级验收扫描（REPAIR 完成后 6h 核对
                             # 复发/先验注入 → reflection_adoption_rate）
                             try:
@@ -1027,6 +1147,24 @@ class ResidentRuntime:
         except Exception:
             logger.exception("Failed to import queued goal: %s", description)
             return False
+
+    @staticmethod
+    def _classify_goal_domain(description: str) -> str:
+        """UX-fix: goals 表 metadata 无 domain 时按描述关键词粗分类.
+
+        之前硬编码 fallback 'writing' → '探测宿主机工具可用性' 被当成
+        writing 目标, daemon 开始写大纲/人物设定 (搞笑彩蛋).
+        关键词顺序: writing → research → development(命令执行类).
+        """
+        d = description or ""
+        if any(k in d for k in ("写", "大纲", "文章", "润色", "章节", "小说")):
+            return "writing"
+        if any(k in d for k in ("调研", "学习", "文献", "研究", "总结")):
+            return "research"
+        if any(k in d for k in ("探测", "探索", "工具", "curl", "API",
+                                "命令", "脚本", "git", "执行", "任务")):
+            return "development"
+        return "development"
 
     @staticmethod
     def _summarize_goal_result(decision: str, outcome: str) -> str:
@@ -1398,12 +1536,18 @@ class ResidentRuntime:
                 "CREATE TABLE IF NOT EXISTS cognition_consumed ("
                 "  reflection_key TEXT PRIMARY KEY,"
                 "  source TEXT NOT NULL,"
-                "  consumed_at TEXT NOT NULL"
+                "  consumed_at TEXT NOT NULL,"
+                "  knowledge_rowid INTEGER"
                 ")"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cog_consumed_at ON cognition_consumed(consumed_at)")
             # P0-B 清理: 保留 7 天内的记录（防止表无限增长）
             conn.execute("DELETE FROM cognition_consumed WHERE consumed_at < datetime('now','-7 days')")
+            # Phase 2: 向后兼容 — 旧表没有 knowledge_rowid, 懒加列
+            try:
+                conn.execute("ALTER TABLE cognition_consumed ADD COLUMN knowledge_rowid INTEGER")
+            except Exception:
+                pass
             conn.commit()
             conn.close()
         except Exception as e:
@@ -1411,12 +1555,14 @@ class ResidentRuntime:
 
     @staticmethod
     def _make_consumption_key(reflection_point: dict) -> str:
-        """P0-B: 生成幂等消费键 — (source + question_prefix + hint_prefix)."""
+        """P0-B: 生成幂等消费键 — (source + question_prefix + hint_prefix + episode_rowid)."""
         import hashlib
         src = reflection_point.get("source", "unknown")
         q = reflection_point.get("question", "")[:60]
         h = reflection_point.get("hint", "")[:40]
-        raw = f"{src}|{q}|{h}"
+        # V3-fix: 加入 episode_rowid 防止不同 rowid 截断碰撞
+        eid = reflection_point.get("_consumed_episode_rowid") or reflection_point.get("_knowledge_rowid") or ""
+        raw = f"{src}|{q}|{h}|{eid}"
         digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
         return f"R:{digest}"
 
@@ -1433,17 +1579,38 @@ class ResidentRuntime:
         except Exception:
             return False
 
-    def _mark_consumed(self, db_path: str, key: str, source: str) -> None:
-        """P0-B: 标记某 reflection_key 为已消费."""
+    def _mark_consumed(self, db_path: str, key: str, source: str,
+                       knowledge_rowid: int | None = None,
+                       consumed_episode_rowid: int | None = None) -> None:
+        """P0-B + Phase 2 + Phase 2-bugfix: 标记某 reflection_key 为已消费.
+
+        Phase 2: 如果 reflection 是从 knowledge 表 pick 的, 同时存
+        knowledge_rowid, 让 (c) 分支能排除已处理的 knowledge rowid.
+
+        Phase 2-bugfix: 如果 reflection 是从 episodes 表 pick 的 (b'),
+        同时存 consumed_episode_rowid, 让 (b') 分支能排除已处理的
+        failure_lesson episode rowid.
+        """
         import sqlite3
         from datetime import datetime, timezone
         try:
             conn = sqlite3.connect(db_path)
-            conn.execute(
-                "INSERT OR IGNORE INTO cognition_consumed(reflection_key, source, consumed_at) "
-                "VALUES (?, ?, ?)",
-                (key, source, datetime.now(timezone.utc).isoformat()),
-            )
+            if knowledge_rowid is not None or consumed_episode_rowid is not None:
+                conn.execute(
+                    "INSERT OR IGNORE INTO cognition_consumed"
+                    "(reflection_key, source, consumed_at, "
+                    "knowledge_rowid, consumed_episode_rowid) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (key, source, datetime.now(timezone.utc).isoformat(),
+                     knowledge_rowid, consumed_episode_rowid),
+                )
+            else:
+                conn.execute(
+                    "INSERT OR IGNORE INTO cognition_consumed"
+                    "(reflection_key, source, consumed_at) "
+                    "VALUES (?, ?, ?)",
+                    (key, source, datetime.now(timezone.utc).isoformat()),
+                )
             conn.commit()
             conn.close()
         except Exception as e:
@@ -1489,6 +1656,11 @@ class ResidentRuntime:
 
         # ── P0-B: 幂等消费闸 ──
         consumption_key = self._make_consumption_key(reflection_point)
+        logger.info(
+            "🧠 cogni_step15 — about to check idempotent gate "
+            "(key=%s source=%s)",
+            consumption_key, reflection_point.get("source", ""),
+        )
         if self._is_consumed(db_path, consumption_key):
             logger.debug(
                 "🧠 cogni_idempotent_skip — reflection already consumed "
@@ -1583,6 +1755,9 @@ class ResidentRuntime:
         self._mark_consumed(
             db_path, consumption_key,
             reflection_point.get("source", "unknown"),
+            knowledge_rowid=reflection_point.get("_knowledge_rowid"),
+            consumed_episode_rowid=reflection_point.get(
+                "_consumed_episode_rowid"),
         )
 
     def _pick_reflection_point(self, db_path: str) -> dict | None:
@@ -1631,27 +1806,146 @@ class ResidentRuntime:
         except Exception as e:
             logger.debug("🧠 pick_reflect (b) err: %s", e)
 
-        # (c) 新知识 — 优先挑 agent 工作沉淀的 (lesson/principle/procedure),
-        #     排除认知循环自己刚刚沉淀的 concept, 避免递归嵌套自激
+        # (b') 最近 failure_lesson Episodes (Phase 3 + Phase 2-bugfix V2)
+        # Planning 路径的真实失败 (MUTATION-VETO → canonical lesson)
+        # → 直接进 Cognition 候选池, 不隔 knowledge 表.
+        # Phase 2-bugfix V2: 同时排除:
+        #   a) consumed_episode_rowid 已记录的 rows (正常路径)
+        #   b) 幽灵 key hash: consumed_episode_rowid=None 但 reflection_key
+        #      存在的记录 (修复前的旧记录, _make_consumption_key 对同一个
+        #      episode rowid 会生成同一个 key → 幂等闸在 pick 阶段就该排除)
         try:
+            # Phase 2-bugfix: 确保表有 consumed_episode_rowid 列
+            try:
+                conn.execute(
+                    "ALTER TABLE cognition_consumed "
+                    "ADD COLUMN consumed_episode_rowid INTEGER")
+            except Exception:
+                pass
+            # 一次拉齐所有已消耗 episode rowid + 幽灵 rowid (从 key hash 反推)
+            # 幽灵 key 无法反推 rowid (key 是 hash), 所以用 NOT IN + 额外扫描
+            _all_consumed_keys = set()
+            _consumed_rows = conn.execute(
+                "SELECT reflection_key, consumed_episode_rowid "
+                "FROM cognition_consumed WHERE source='failure_lesson_episode'"
+            ).fetchall()
+            _explicit_eids = [r[1] for r in _consumed_rows if r[1] is not None]
+            _ghost_keys = [r[0] for r in _consumed_rows if r[1] is None]
+
+            # 优先用明确的 rowid NOT IN 排除
+            _params_excl = list(_explicit_eids)
+            _sql_extra = ""
+            if _params_excl:
+                _sql_extra = (f" AND e.rowid NOT IN "
+                              f"({','.join('?'*len(_params_excl))})")
+
             row = conn.execute(
-                "SELECT substr(statement,1,80) as s, scope_domain FROM knowledge "
-                "WHERE scope_domain IN ('lesson','principle','procedure','debug') "
-                "ORDER BY rowid DESC LIMIT 1"
+                f"SELECT e.rowid, e.context, e.created_at "
+                f"FROM episodes e "
+                f"WHERE e.action = 'failure_lesson' "
+                f"{_sql_extra} "
+                f"ORDER BY e.rowid DESC LIMIT 1",
+                _params_excl,
+            ).fetchone()
+
+            # V2-bugfix: 即使 SQL 层面没排除, 也用 key hash 二次确认.
+            # 用 while 循环逐条验 ghost key — 确保不会只跳一条就停.
+            while row and row[1] and _ghost_keys:
+                _test_point = {
+                    "source": "failure_lesson_episode",
+                    "question": "x",  # 占位, 下面用真实值
+                    "hint": "x",
+                }
+                import json as _json
+                try:
+                    _ctx_test = _json.loads(row[1])
+                except Exception:
+                    _ctx_test = {}
+                _cause_test = _ctx_test.get("cause", "?")
+                _blocked_test = str(_ctx_test.get("blocked_action", ""))[:60]
+                _test_point["question"] = (
+                    f"最近有一个 {_cause_test} 失败: "
+                    f"blocked_action='{_blocked_test}' → "
+                    f"从中学到了什么? 如何改进未来的规划?")
+                _test_point["hint"] = f"failure cause={_cause_test}"
+                _test_key = self._make_consumption_key(_test_point)
+                if _test_key in _ghost_keys:
+                    # 这条 rowid 对应的 key 已被幽灵记录 → 跳过, 找下一条
+                    logger.info(
+                        "🧠 pick_reflect (b') skip rowid=%d: ghost key=%s "
+                        "→ recursing to next rowid",
+                        row[0], _test_key)
+                    row = conn.execute(
+                        f"SELECT e.rowid, e.context, e.created_at "
+                        f"FROM episodes e "
+                        f"WHERE e.action = 'failure_lesson' "
+                        f"AND e.rowid < ? {_sql_extra} "
+                        f"ORDER BY e.rowid DESC LIMIT 1",
+                        [row[0]] + _params_excl,
+                    ).fetchone()
+                else:
+                    break  # 找到一条 key 不在 ghost_keys 里的 → 跳出循环
+
+            if row and row[1]:
+                _erowid, _ctx_str = row[0], row[1]
+                import json as _json
+                try:
+                    ctx = _json.loads(_ctx_str)
+                except Exception:
+                    ctx = {}
+                _cause = ctx.get("cause", "?")
+                _blocked = str(ctx.get("blocked_action", ""))[:60]
+                conn.close()
+                logger.info(
+                    "🧠 pick_reflect hit (b') failure_lesson rowid=%d", _erowid)
+                return {
+                    "source": "failure_lesson_episode",
+                    "question": (f"最近有一个 {_cause} 失败: "
+                                 f"blocked_action='{_blocked}' → "
+                                 f"从中学到了什么? 如何改进未来的规划?"),
+                    "hint": f"failure cause={_cause}",
+                    "_consumed_episode_rowid": _erowid,
+                }
+            logger.debug("🧠 pick_reflect (b') no failure_lesson")
+        except Exception as e:
+            logger.debug("🧠 pick_reflect (b') err: %s", e)
+
+        # (c) 新知识 — 优先挑 agent 工作沉淀的 (lesson/principle/procedure),
+        #     排除认知循环自己刚刚沉淀的 concept, 避免递归嵌套自激.
+        # Phase 2: 排除已被 consumed 的 knowledge rowid — 让大脑能跳到下一条
+        try:
+            _consumed_kids = [r[0] for r in conn.execute(
+                "SELECT knowledge_rowid FROM cognition_consumed "
+                "WHERE knowledge_rowid IS NOT NULL"
+            ).fetchall()]
+            _excl = f"AND rowid NOT IN ({','.join('?'*len(_consumed_kids))})" if _consumed_kids else ""
+            row = conn.execute(
+                f"SELECT rowid, substr(statement,1,80) as s, scope_domain "
+                f"FROM knowledge "
+                f"WHERE scope_domain IN ('lesson','principle','procedure','debug') "
+                f"{_excl} "
+                f"ORDER BY rowid DESC LIMIT 1",
+                _consumed_kids,
             ).fetchone()
             if not row:
                 row = conn.execute(
-                    "SELECT substr(statement,1,80) as s, scope_domain FROM knowledge "
-                    "WHERE scope_domain = 'concept' AND statement NOT LIKE '%Q: 新知识%' "
-                    "ORDER BY rowid DESC LIMIT 1"
+                    f"SELECT rowid, substr(statement,1,80) as s, scope_domain "
+                    f"FROM knowledge "
+                    f"WHERE scope_domain = 'concept' AND statement NOT LIKE '%Q: 新知识%' "
+                    f"{_excl} "
+                    f"ORDER BY rowid DESC LIMIT 1",
+                    _consumed_kids,
                 ).fetchone()
-            if row and row[0]:
+            if row and row[1]:
+                _krowid, _stmt, _domain = row
                 conn.close()
-                logger.info("🧠 pick_reflect hit (c) knowledge")
+                logger.info("🧠 pick_reflect hit (c) knowledge rowid=%d", _krowid)
                 return {
                     "source": "new_knowledge",
-                    "question": f"新知识 [{row[1]}] 说 '{row[0]}' — 这个对 OCOS 架构意味着什么? 有什么可以落地的改进?",
+                    "question": (f"新知识 [{_domain}] 说 '{_stmt}' — "
+                                 f"这个对 OCOS 架构意味着什么? 有什么可以落地的改进?"),
                     "hint": "知识落地建议",
+                    "_knowledge_rowid": _krowid,  # Phase 2: 让 _mark_consumed 存
                 }
             logger.debug("🧠 pick_reflect (c) no knowledge")
         except Exception as e:
@@ -2414,7 +2708,10 @@ class ResidentRuntime:
                     metadata = json.loads(metadata)
                 except ValueError:
                     metadata = {}
-            domain = (metadata or {}).get("domain", "writing") if isinstance(metadata, dict) else "writing"
+            _fallback_domain = self._classify_goal_domain(
+                row.get("description", ""))
+            domain = ((metadata or {}).get("domain", _fallback_domain)
+                      if isinstance(metadata, dict) else _fallback_domain)
             is_autonomous = (isinstance(metadata, dict)
                              and bool(metadata.get("autonomous")))
             if is_autonomous:
