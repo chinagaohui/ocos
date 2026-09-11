@@ -588,6 +588,85 @@ class AgentRuntime:
         if isinstance(result, dict) and result.get("error"):
             self._tick_errors += 1
 
+    # ── C1: TickTrace — 跨 step 因果证据链持久化 ────────────────────
+
+    def _ensure_tick_trace_table(self) -> None:
+        """C1 (2026-09-11): 确保 tick_trace 表存在 + 7 天自动清理.
+
+        TickTrace 是 AgentRuntime.tick() 主链的**观测埋点层**（不是新认知管线）:
+          10 个 step 每步一行 trace, 记录 step_name + 结果摘要 + timestamp.
+          目的: 让 tick→observe→attention→...→learning 因果链有 DB 证据,
+          不只是内存里的 step_log.
+
+        7 天清理防止无界增长（教训: cognition_consumed 必须设 retention）.
+        """
+        import sqlite3
+        db_path = getattr(self, "_db_path", ":memory:")
+        if db_path == ":memory:":
+            return
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS tick_trace ("
+                "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  tick_id INTEGER NOT NULL,"
+                "  step_name TEXT NOT NULL,"
+                "  step_index INTEGER NOT NULL,"
+                "  status TEXT,"
+                "  error TEXT,"
+                "  evidence_ref TEXT,"
+                "  elapsed_ms INTEGER,"
+                "  timestamp TEXT NOT NULL"
+                ")"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tick_trace_tick "
+                "ON tick_trace(tick_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tick_trace_step "
+                "ON tick_trace(step_name)"
+            )
+            # 7 天自动清理
+            conn.execute(
+                "DELETE FROM tick_trace WHERE timestamp < datetime('now','-7 days')"
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.debug("TickTrace ensure table err: %s", e)
+
+    def _write_tick_trace(
+        self, tick_id: int, step_index: int, step_name: str,
+        result: Any, elapsed_ms: int = 0, evidence_ref: str = "",
+    ) -> None:
+        """C1: 写入单行 TickTrace — 轻量级观测埋点, 只记录不生成认知."""
+        import sqlite3
+        from datetime import datetime, timezone
+        db_path = getattr(self, "_db_path", ":memory:")
+        if db_path == ":memory:":
+            return
+        try:
+            status = ""
+            error = ""
+            if isinstance(result, dict):
+                status = str(result.get("status", ""))
+                error = str(result.get("error", ""))[:200]
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "INSERT INTO tick_trace "
+                "(tick_id, step_name, step_index, status, error, "
+                " evidence_ref, elapsed_ms, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (tick_id, step_name, step_index, status, error,
+                 evidence_ref[:200], elapsed_ms,
+                 datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.debug("TickTrace write err: %s", e)
+
     def tick(self) -> dict[str, Any]:
         """Phase 22-C: 10 步持久化认知 Tick 循环。
 
@@ -611,38 +690,86 @@ class AgentRuntime:
             tick_start = time.monotonic()
             step_log: list[dict[str, Any]] = []
 
-            # ── Step 1: Event Ingestion ──────────────────────────────
-            self._record_step_result(step_log, self._tick_step_event_ingestion())
+            # ── C1: TickTrace 表确保 (每 tick 一次) ──
+            self._ensure_tick_trace_table()
+            _trace_id = self._cycle_count  # tick_id = cycle_count
 
-            # ── Step 2: Attention Update ─────────────────────────────
-            self._record_step_result(step_log, self._tick_step_attention_update())
+            # ── Step 1: Event Ingestion (Observe) ──────────────────
+            _t = time.monotonic()
+            _r = self._tick_step_event_ingestion()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 0, "event_ingestion", _r,
+                                   int((time.monotonic() - _t) * 1000))
 
-            # ── Step 3: WM Sync ──────────────────────────────────────
-            self._record_step_result(step_log, self._tick_step_wm_sync())
+            # ── Step 2: Attention Update (Attention) ───────────────
+            _t = time.monotonic()
+            _r = self._tick_step_attention_update()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 1, "attention_update", _r,
+                                   int((time.monotonic() - _t) * 1000))
 
-            # ── Step 4: Goal Maintenance ─────────────────────────────
-            self._record_step_result(step_log, self._tick_step_goal_maintenance())
+            # ── Step 3: WM Sync (Working Memory) ────────────────────
+            _t = time.monotonic()
+            _r = self._tick_step_wm_sync()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 2, "wm_sync", _r,
+                                   int((time.monotonic() - _t) * 1000))
 
-            # ── Step 4.5: Homeostasis Regulation（P2-A 内生目标）────────
-            self._record_step_result(step_log, self._tick_step_homeostasis_regulation())
+            # ── Step 4: Goal Maintenance (Goal) ─────────────────────
+            _t = time.monotonic()
+            _r = self._tick_step_goal_maintenance()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 3, "goal_maintenance", _r,
+                                   int((time.monotonic() - _t) * 1000))
 
-            # ── Step 5: Execution Check ──────────────────────────────
-            self._record_step_result(step_log, self._tick_step_execution_check())
+            # ── Step 4.5: Homeostasis Regulation ────────────────────
+            _t = time.monotonic()
+            _r = self._tick_step_homeostasis_regulation()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 4, "homeostasis", _r,
+                                   int((time.monotonic() - _t) * 1000))
 
-            # ── Step 6: Planning Trigger ─────────────────────────────
-            self._record_step_result(step_log, self._tick_step_planning_trigger())
+            # ── Step 5: Execution Check ─────────────────────────────
+            _t = time.monotonic()
+            _r = self._tick_step_execution_check()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 5, "execution_check", _r,
+                                   int((time.monotonic() - _t) * 1000))
 
-            # ── Step 7: Core Loop (observe→think→decide→act→reflect→learn) ──
-            self._record_step_result(step_log, self._tick_step_core_loop())
+            # ── Step 6: Planning Trigger (Think) ───────────────────
+            _t = time.monotonic()
+            _r = self._tick_step_planning_trigger()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 6, "planning_trigger", _r,
+                                   int((time.monotonic() - _t) * 1000))
 
-            # ── Step 8: Dispatch (Bridge + Gateway) ───────────────────
-            self._record_step_result(step_log, self._tick_step_dispatch())
+            # ── Step 7: Core Loop (Think→Decision) ──────────────────
+            _t = time.monotonic()
+            _r = self._tick_step_core_loop()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 7, "core_loop", _r,
+                                   int((time.monotonic() - _t) * 1000))
 
-            # ── Step 9: Result Ingest ────────────────────────────────
-            self._record_step_result(step_log, self._tick_step_result_ingest())
+            # ── Step 8: Dispatch (Execute → Bridge→Episode) ─────────
+            _t = time.monotonic()
+            _r = self._tick_step_dispatch()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 8, "dispatch", _r,
+                                   int((time.monotonic() - _t) * 1000))
 
-            # ── Step 10: Learning Consolidation ──────────────────────
-            self._record_step_result(step_log, self._tick_step_learning_consolidation())
+            # ── Step 9: Result Ingest (Outcome) ─────────────────────
+            _t = time.monotonic()
+            _r = self._tick_step_result_ingest()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 9, "result_ingest", _r,
+                                   int((time.monotonic() - _t) * 1000))
+
+            # ── Step 10: Learning Consolidation (Reflection→Learning)
+            _t = time.monotonic()
+            _r = self._tick_step_learning_consolidation()
+            self._record_step_result(step_log, _r)
+            self._write_tick_trace(_trace_id, 10, "learning_consolidation", _r,
+                                   int((time.monotonic() - _t) * 1000))
 
             # ── Budget & Graceful Degradation ────────────────────────
             tick_elapsed = time.monotonic() - tick_start
