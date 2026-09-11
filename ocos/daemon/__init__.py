@@ -346,8 +346,28 @@ class ResidentRuntime:
         每个 tick 调一次 pipeline.tick()；无传感器时为零开销零写入
         （PerceptionEngine 无 sensor 返回空事件）。
         Phase 49-B (L3-B): 同时把管线 WorldStore 注入 agent 供认知消费。
+
+        GAP-P1-4 (2026-09-11): 自动注入 self._event_bus 到 pipeline
+        （Observation → CognitiveEvent 断链修复后的生产装配闭合）。
         """
         self._perception_pipeline = pipeline
+
+        # GAP-P1-4: 确保 PerceptionPipeline、AgentRuntime、daemon 使用同一 EventBus
+        # 三实例 identity 必须一致 — 否则 StimulusScanner 和 FileSensor
+        # 的事件进了不同 _pending，永远不会被认知链消费
+        if self._event_bus is not None:
+            try:
+                if hasattr(pipeline, 'set_event_bus'):
+                    pipeline.set_event_bus(self._event_bus)
+                elif hasattr(pipeline, '_event_bus'):
+                    pipeline._event_bus = self._event_bus
+                logger.info(
+                    "PerceptionPipeline ↔ EventBus wired "
+                    "(same instance as daemon._event_bus)")
+            except Exception as e:
+                logger.warning(
+                    "Failed to wire EventBus into PerceptionPipeline: %s", e)
+
         # L3-B: agent.world_context() 经此消费世界状态
         world = getattr(pipeline, "world", None)
         agent_obj = getattr(
