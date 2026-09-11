@@ -272,13 +272,18 @@ class EventBus:
     # ── Ingest (step 1 pulls) ──
 
     def ingest(self, max_events: int = 10) -> list[CognitiveEvent]:
-        """Step 1 拉取待处理事件。"""
+        """Step 1 拉取待处理事件（drain 语义 — 唯一消费者应在此）。"""
         with self._lock:
             events = []
             while self._pending and len(events) < max_events:
                 events.append(self._pending.popleft())
             self._total_ingested += len(events)
             return events
+
+    def peek(self, max_events: int = 10) -> list[CognitiveEvent]:
+        """窥视待处理事件但不消费（非 drain — 供 TickPipeline 看但不抢 AgentRuntime 的消费位）。"""
+        with self._lock:
+            return list(self._pending)[:max_events]
 
     # ── Attention trace recording ──
 

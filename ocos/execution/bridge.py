@@ -144,6 +144,7 @@ class DecisionBridge:
         permission_gateway: Optional[Any] = None,  # S3.2: 入口网关前检（None→惰性默认）
         learning_source: Optional[Any] = None,  # P1.2: 学习产物检索源（None→无注入）
         world_source: Optional[Any] = None,  # P2.1: 世界状态检索源（None→无注入）
+        attention_source: Optional[Any] = None,  # P4: 最新 Attention 状态源 fn()->dict（None→无注入）
         agent_source: Optional[Any] = None,  # AGI: 智能体软件检索源（None→无注入）
         installer: Optional[Any] = None,  # AGI: 智能体安装执行器 fn(name)->result（None→禁安装）
         autonomous_goal_sink: Optional[Any] = None,  # L3: 自主目标落地 fn(payload)（None→待批提案无法执行）
@@ -166,6 +167,9 @@ class DecisionBridge:
         # P2.1 (AGI 计划): 世界状态检索源 — fn(description) -> world context dict
         # （None=无注入；默认零传感器空世界也返回 available=False 不注入）
         self._world_source: Any = world_source
+        # P4: Attention 状态源 — fn() -> AttentionReport/dict（None=无注入）
+        # 把 AgentRuntime step 2 的 AttentionReport 接入决策 prompt
+        self._attention_source: Any = attention_source
         # AGI 能力补全: 智能体软件检索源 — fn(description) -> 可用智能体清单
         # （None=无注入）；动态放行 CLI 前缀集（沙盒 extra_allow）
         self._agent_source: Any = agent_source
@@ -268,6 +272,16 @@ class DecisionBridge:
         （默认零传感器）返回 available=False → 不注入，优雅降级。
         """
         self._world_source = source
+        return self
+
+    def attach_attention_source(self, source: Any) -> "DecisionBridge":
+        """P4: 注入 Attention 状态源 — 让 Brain 感知现实变化。
+
+        source 为可调用对象: fn() -> AttentionReport（或等价 dict）。
+        把 AgentRuntime step 2 的 AttentionReport 接到 DecisionBridge prompt
+        里的 attention_decision_context 块。None → 不注入（基线路径不变）。
+        """
+        self._attention_source = source
         return self
 
     def attach_agent_source(self, source: Any) -> "DecisionBridge":
@@ -1755,12 +1769,13 @@ class DecisionBridge:
         无记忆/未注入 learning_source → ""（基线路径，行为不变）。
         """
         if getattr(self, "_learning_source", None) is None:
-            return ""
-        try:
-            artifacts = self._learning_source(description) or []
-        except Exception as e:
-            logger.debug("memory decision context failed: %s", e)
-            return ""
+            artifacts = []  # B4 FIX: learning_source 可为空 — WM/Attention 是独立数据源
+        else:
+            try:
+                artifacts = self._learning_source(description) or []
+            except Exception as e:
+                logger.debug("memory decision context failed: %s", e)
+                artifacts = []
         artifacts = [a for a in artifacts if a and a.get("text")]
         # B4 FIX: learning_artifacts 为空时不立即 return — WM 是独立数据源,
         # 即使没有长期经验也应该能注入短期焦点. 改为只跳过 learning artifacts
@@ -1806,9 +1821,81 @@ class DecisionBridge:
         wm_ctx = self._wm_decision_context()
         if wm_ctx:
             lines.append(wm_ctx)
+
+        # ── P4: Attention 状态直接参与决策 — 把 AgentRuntime step 2 的
+        # AttentionReport（event ingest → decide 结果）注入 prompt，让 Brain
+        # 的思考能感知到刚刚发生了什么现实变化 ──
+        attn_ctx = self._attention_decision_context()
+        if attn_ctx:
+            lines.append(attn_ctx)
+
         if not lines:
             return ""
         return "\n".join(lines)
+
+    def _attention_decision_context(self) -> str:
+        """P4: 从 attention_source 读取最新 Attention 状态, 注入决策 prompt.
+
+        这是 Reality → Attention → Brain Thinking 的关键桥接:
+          File/Host/Process Reality → EventBus → AgentRuntime.step1 ingest →
+          step2 decide (QUEUED/ACCEPTED/DISMISSED) → AttentionReport →
+          这里 → 注入 DecisionBridge prompt → Brain 感知现实变化
+
+        无 attention_source / 无 pending events → "" (优雅降级, 不影响基线).
+        """
+        if self._attention_source is None:
+            return ""
+        try:
+            report = self._attention_source()
+            if report is None:
+                return ""
+            # report 可以是 AttentionReport 对象 或 dict
+            if hasattr(report, '__dict__') and not isinstance(report, dict):
+                # AttentionReport 对象 — 提取核心字段
+                focus_type = getattr(report, 'focus_type', None)
+                fatigue = getattr(report, 'fatigue', 0.0)
+                decisions_made = getattr(report, 'decisions_made', 0)
+                # AttentionReport.last_decisions 是 DecisionDigest 列表（含 decision='QUEUED'）
+                decisions_raw = getattr(report, 'last_decisions', None) or []
+                # 也兼容 raw AttentionDecision 列表（如果有的话）
+                if not decisions_raw:
+                    decisions_raw = getattr(report, 'last_decisions_raw', None) or []
+            elif isinstance(report, dict):
+                focus_type = report.get('focus_type', None)
+                fatigue = report.get('fatigue', 0.0)
+                decisions_made = report.get('decisions_made', 0)
+                decisions_raw = report.get('last_decisions', None) or report.get('last_decisions_raw', None) or []
+            else:
+                return ""
+
+            # 没有任何事件被处理过 → 不注入
+            if decisions_made == 0 and not decisions_raw:
+                return ""
+
+            lines = ["【感知焦点状态】"]
+            lines.append(
+                f"- focus={focus_type} fatigue={fatigue:.2f} "
+                f"decisions_made={decisions_made}")
+
+            # 从 decisions 提取事件摘要
+            if decisions_raw:
+                lines.append("- 最近感知事件:")
+                for d in decisions_raw[:5]:
+                    # DecisionDigest 对象 — 有 event_id + decision(str like "QUEUED")
+                    if hasattr(d, 'event_id') and hasattr(d, 'decision'):
+                        ev_summary = getattr(d, 'event_id', '')[:20]
+                        decision_str = getattr(d, 'decision', '?')
+                        composite = getattr(d, 'composite', 0.0)
+                        lines.append(f"  [{decision_str}] event={ev_summary}... score={composite:.3f}")
+                    elif isinstance(d, dict):
+                        summary = d.get('summary', d.get('event_id', ''))
+                        decision = d.get('decision', '?')
+                        lines.append(f"  [{decision}] {summary}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.debug("attention decision context failed: %s", e)
+            return ""
 
     def _wm_decision_context(self, max_items: int = 5) -> str:
         """B4 FIX: 从 working_memory 表读取当前焦点, 注入决策 prompt.

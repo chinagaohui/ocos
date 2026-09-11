@@ -112,10 +112,10 @@ class FileSensor:
                 modality=SensorModality.FILE,
                 type=ObservationType.CHANGE,
                 content={"path": str(path), "operation": "created",
-                         "size": stat.st_size},
+                         "size": stat.st_size, "change": "created"},
                 confidence=0.9,
                 source_sensor=self.config.sensor_name,
-                raw_payload={"file": str(path), "change": "created"},
+                raw_payload={"file": str(path), "change": "created", "operation": "created"},
             )
         except Exception:
             return None
@@ -149,6 +149,17 @@ class FileSensor:
             change_type = "size_change"
 
         if changed:
+            # 归一化 operation 到 EventNormalizer 认识的值域
+            # EventNormalizer 只认 file_created / file_modified / file_deleted
+            # size_change → modified (内容大小变了也算 modified)
+            _OPERATION_MAP = {
+                "created": "created",
+                "deleted": "deleted",
+                "modified": "modified",
+                "size_change": "modified",
+            }
+            operation = _OPERATION_MAP.get(change_type, change_type)
+
             self._snapshots[key] = current
             return Observation(
                 id=f"file-{hash(key)}-{now}",
@@ -157,12 +168,13 @@ class FileSensor:
                 content={
                     "path": key,
                     "change": change_type,
+                    "operation": operation,
                     "old": old,
                     "current": current,
                 },
                 confidence=0.95,
                 source_sensor=self.config.sensor_name,
-                raw_payload={"file": key, "change": change_type},
+                raw_payload={"file": key, "change": change_type, "operation": operation},
             )
 
         # 更新快照

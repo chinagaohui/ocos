@@ -1552,6 +1552,15 @@ class AgentRuntime:
             except Exception as _wse:
                 logger.debug("world source bind skipped: %s", _wse)
 
+        # P4: Attention 状态源 — DecisionBridge prompt 注入通道
+        # 让 Brain 的思考能感知到刚刚发生了什么现实变化
+        attach_attn = getattr(bridge, "attach_attention_source", None)
+        if attach_attn is not None:
+            try:
+                attach_attn(lambda: self._attention_report)
+            except Exception as _ase:
+                logger.debug("attention source bind skipped: %s", _ase)
+
     def _replan_failed_task(self, task_id: str, task: Any,
                             reason: str, cmd: str = "") -> dict[str, Any]:
         """Phase 49-C (L4): 失败任务重规划决策。
