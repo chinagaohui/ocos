@@ -147,6 +147,17 @@ class EventNormalizer:
             return "agent_result"
         if raw.source == EventSource.USER_INPUT:
             return "user_input"
+        if raw.source == EventSource.SYSTEM:
+            # P5.1: Host 细粒度分类 — 读 payload 的 type/operation 字段
+            # EnvironmentSensor 用 "type" (memory_critical/memory_high/memory_spike)
+            # StimulusScanner 用 "operation" 或 "source"
+            subtype = (raw.payload.get("operation")
+                       or raw.payload.get("type")
+                       or raw.payload.get("source")
+                       or None)
+            if subtype:
+                return f"system_{subtype}"
+            return "system_event"
         return "system_event"
 
     def _summarize(self, raw: RawEvent, event_type: str) -> str:
@@ -160,6 +171,24 @@ class EventNormalizer:
             return f"Webhook received at {raw.payload.get('endpoint', '?')}"
         if raw.source == EventSource.USER_INPUT:
             return f"User says: {raw.payload.get('content', '?')}"
+        if raw.source == EventSource.SYSTEM:
+            # P5.1: Host 细粒度摘要 — 从 subtype + payload 组装
+            subtype = (raw.payload.get("operation")
+                       or raw.payload.get("type")
+                       or None)
+            if subtype == "memory_critical":
+                return f"CRITICAL memory usage: {raw.payload.get('used_mb', '?')} MB"
+            if subtype == "memory_high":
+                return f"HIGH memory usage: {raw.payload.get('used_mb', '?')} MB"
+            if subtype == "memory_spike":
+                return f"Memory spike: {raw.payload.get('delta_mb', '?')} MB change"
+            if subtype == "cpu_spike":
+                return f"CPU spike detected"
+            if subtype == "disk_low":
+                return f"Low disk space"
+            if subtype:
+                return f"System {subtype}: {raw.payload}"
+            return f"System event: {raw.payload}"
         return f"{raw.source.name}: {raw.payload}"
 
     def _assess_severity(self, raw: RawEvent, event_type: str) -> EventSeverity:

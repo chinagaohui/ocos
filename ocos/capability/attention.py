@@ -766,6 +766,7 @@ class CognitiveAttentionController(AttentionManager):
 
             decision = AttentionDecision(
                 event_id=event_id,
+                event_type=event_type,   # P4: 透传事件类型供下游 AttentionReport / Brain prompt
                 decision=decision_type,
                 score_trace=trace,
                 focus_change=focus_change,
@@ -855,6 +856,7 @@ class CognitiveAttentionController(AttentionManager):
             for d in last_decisions_raw[-10:]:  # 最近 10 条
                 digests.append(DecisionDigest(
                     event_id=getattr(d, "event_id", "?"),
+                    event_type=getattr(d, "event_type", "") or "",  # P4: 事件类型
                     decision=d.decision.value if hasattr(d, "decision") else "?",
                     composite=d.score_trace.composite if hasattr(d, "score_trace") else 0.0,
                 ))

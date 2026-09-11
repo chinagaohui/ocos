@@ -1869,7 +1869,8 @@ class DecisionBridge:
                 return ""
 
             # 没有任何事件被处理过 → 不注入
-            if decisions_made == 0 and not decisions_raw:
+            # 只看 decisions_raw 内容（AttentionReport 某些版本 decisions_made 可能不准）
+            if not decisions_raw:
                 return ""
 
             lines = ["【感知焦点状态】"]
@@ -1881,16 +1882,18 @@ class DecisionBridge:
             if decisions_raw:
                 lines.append("- 最近感知事件:")
                 for d in decisions_raw[:5]:
-                    # DecisionDigest 对象 — 有 event_id + decision(str like "QUEUED")
+                    # DecisionDigest 对象 — 有 event_type/event_id/decision/composite
                     if hasattr(d, 'event_id') and hasattr(d, 'decision'):
-                        ev_summary = getattr(d, 'event_id', '')[:20]
+                        ev_type = getattr(d, 'event_type', '') or 'unknown'
+                        ev_id = getattr(d, 'event_id', '')[:20]
                         decision_str = getattr(d, 'decision', '?')
                         composite = getattr(d, 'composite', 0.0)
-                        lines.append(f"  [{decision_str}] event={ev_summary}... score={composite:.3f}")
+                        lines.append(f"  [{decision_str}] {ev_type} (id={ev_id}, score={composite:.3f})")
                     elif isinstance(d, dict):
+                        et = d.get('event_type', d.get('type', '?'))
                         summary = d.get('summary', d.get('event_id', ''))
                         decision = d.get('decision', '?')
-                        lines.append(f"  [{decision}] {summary}")
+                        lines.append(f"  [{decision}] {et}: {summary}")
 
             return "\n".join(lines)
         except Exception as e:

@@ -82,6 +82,7 @@ class AttentionDecision:
     """
     decision_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     event_id: str = ""
+    event_type: str = ""    # P4: 事件类型 (file_created, system_memory_critical 等)
     decision: DecisionType = DecisionType.DISMISSED
     score_trace: AttentionScoreTrace = field(default_factory=AttentionScoreTrace)
     focus_change: FocusChange | None = None
@@ -108,6 +109,7 @@ class AttentionDecision:
 class DecisionDigest:
     """AttentionDecision 的轻量摘要。Phase 36 — 供 AttentionReport 批量引用。"""
     event_id: str = ""
+    event_type: str = ""    # P4: 事件类型 (file_created, system_memory_critical 等)
     decision: str = ""   # ACCEPTED|QUEUED|DEFERRED|DISMISSED
     composite: float = 0.0
 
