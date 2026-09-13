@@ -25,7 +25,7 @@ import json
 import logging
 import types as _types
 import typing
-from dataclasses import dataclass, field, fields, is_dataclass, replace
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -153,6 +153,15 @@ def _hash(state_json: str) -> str:
     return hashlib.sha256(state_json.encode("utf-8")).hexdigest()
 
 
+def _default_for(f):
+    """字段缺省值：literal default 优先，default_factory 次之，否则 None。"""
+    if f.default is not MISSING:
+        return f.default
+    if f.default_factory is not MISSING:
+        return f.default_factory()
+    return None
+
+
 def _rebuild(value):
     """根据 canonical partition 重建 dataclass 实例（含 __type 标签递归）。"""
     if isinstance(value, dict) and "__type" in value:
@@ -161,7 +170,7 @@ def _rebuild(value):
             raise SelfStateIntegrityError(f"unknown type tag: {value['__type']}")
         hints = typing.get_type_hints(cls)
         kwargs = {
-            f.name: _rebuild_typed(hints[f.name], value[f.name])
+            f.name: _rebuild_typed(hints[f.name], value.get(f.name, _default_for(f)))
             for f in fields(cls)
         }
         return cls(**kwargs)
@@ -407,6 +416,7 @@ class SelfStateManager:
             candidate,
             version=cur.version + 1,
             updated_at=datetime.now(timezone.utc),
+            update_history=[*candidate.update_history, contract],  # provenance 入 update_history
         )
         # 4) hash + 原子持久化（版本冲突会被 store 二次拦截）
         self._store.commit(committed)

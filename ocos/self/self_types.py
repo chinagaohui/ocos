@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -83,8 +83,14 @@ class SelfUpdateContract:
     evidence_count: int = 0  # 证据数量
     confidence_impact: float = 0.0  # 对 self_confidence 的影响 [-1, 1]
 
-    # 禁止的来源
-    FORBIDDEN: frozenset[SelfUpdateSource] = frozenset({
+    # P0-1 Step 2: provenance / evidence anchor — 进 S2 update_history，可追溯（P0-4 因果链）
+    evidence_ids: tuple[str, ...] = ()
+    """支撑本次 Delta 的 S1 Evidence anchor 列表（进 update_history）。"""
+    claim_id: str = ""
+    """产生本次 Delta 的 SelfClaim id（进 update_history，可回溯到 Claim/Evidence）。"""
+
+    # 禁止的来源（ClassVar：不参与 dataclass 序列化字段）
+    FORBIDDEN: ClassVar[frozenset[SelfUpdateSource]] = frozenset({
         SelfUpdateSource.EXTERNAL_AGENT,
     })
 
