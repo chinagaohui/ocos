@@ -1,0 +1,53 @@
+{
+  "step": 2,
+  "evidence_anchor": "S1E-863AF5B91BD2",
+  "data_hash": "310a18d815a0eaa748abfc734f39b2ca39ffbfe5a0deb810bc322372fbb2a0a2",
+  "before": {
+    "self_version": 1,
+    "content_hash": "63de6a909dacc857a6f4764ec8e887c4150b276bcef0a1e443a1824f7f668fd8"
+  },
+  "after": {
+    "self_version": 3,
+    "content_hash": "dd9ee999c6e1add1f84b82bcc58d7a4939ab50e9a289104cadd7c3e0ee7b815e"
+  },
+  "version_delta": 2,
+  "committed_versions": [
+    2,
+    3
+  ],
+  "causal_D": {
+    "claim_id": "S1E-863AF5B91BD2-C01",
+    "kind": "failure_pattern",
+    "target_component": "knowledge_boundary",
+    "key": "category-detect",
+    "old->new": "None -> DomainStatement(domain='category-detect', confidence=<KnowledgeConfidence.NEEDS_VERIFICATION: 'needs_verification'>, evidence_count=3, last_updated_tick=0, note='empirical failure; claims:S1E-863AF5B91BD2-C01; ev:S1E-863AF5B91BD2')",
+    "confidence": "NEEDS_VERIFICATION",
+    "evidence_ids": [
+      "S1E-863AF5B91BD2"
+    ],
+    "delta_id": "01b9a85508bc365ec75ff07b1bbb035f58a31b5dc9c090a03314de3dfcd73326",
+    "reason": "repeated failure pattern on 'category-detect' observed from self experience",
+    "commit_version": 3
+  },
+  "full_provenance": [
+    {
+      "claim_id": "S1E-863AF5B91BD2-C00",
+      "evidence_ids": [
+        "S1E-863AF5B91BD2"
+      ],
+      "target_component": [
+        "capability_awareness"
+      ]
+    },
+    {
+      "claim_id": "S1E-863AF5B91BD2-C01",
+      "evidence_ids": [
+        "S1E-863AF5B91BD2"
+      ],
+      "target_component": [
+        "knowledge_boundary"
+      ]
+    }
+  ],
+  "governance_surface": "SelfStateManager.commit_change -> SelfBoundaryRules.is_update_allowed（未绕过）"
+}
