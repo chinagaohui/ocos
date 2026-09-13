@@ -222,6 +222,66 @@ class PreferenceEntry:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 世界观立场与连续性（P1-1 G1 — SelfModel 第六组件 worldview）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class StanceType(Enum):
+    """世界观立场类型 — 对齐 P1-1 Semantic Contract §4。
+
+    表达"如何理解 / 应如何 / 知道边界"三种立场形态。
+    """
+
+    INTERPRETIVE = "interpretive"
+    """我如何理解这类事情。"""
+
+    NORMATIVE = "normative"
+    """我认为应如何 / 如何取舍。"""
+
+    EPISTEMIC = "epistemic"
+    """我知道自己的理解边界。"""
+
+
+class ContinuityKind(Enum):
+    """世界观变更连续性类型 — 对齐 P1-1 Semantic Contract §5 continuity。"""
+
+    FIRST = "first"
+    """首次形成（W0 不存在）。"""
+
+    DERIVED = "derived"
+    """由既有判断衍生。"""
+
+    REVISED = "revised"
+    """修订既有判断（W1≠W0）。"""
+
+    REPLACED = "replaced"
+    """替换既有判断（范式级重构）。"""
+
+
+@dataclass(frozen=True)
+class WorldViewJudgment:
+    """世界观判断叶子类型 — 单个领域的一份立场。
+
+    与 DomainStatement 同构（frozen dataclass，作 dict value 序列化）。
+    evidence_ids 放叶子（累计 genesis evidence）；commit 级 provenance 由
+    SelfUpdateContract.evidence_ids / claim_id 承担（两层并存、职责分离）。
+    """
+
+    domain: str                        # 领域（dict key，同 KnowledgeBoundary.domains 语义）
+    judgment: str                      # 判断语句（立场/理解方式，非事实）
+    stance_type: StanceType            # 立场类型
+    frame: str                         # 框架描述（如何理解"这类事情"）
+    confidence: float = 0.5            # [0,1]
+    evidence_ids: tuple[str, ...] = () # 归因证据（累计：新建/修订时追加）
+    source: str = ""                   # 来源标签（"reflection"/"runtime_observation"）
+    claim_id: str = ""                 # 最近一次写入的 SelfClaim 身份（commit 级溯源）
+    created_tick: int = 0              # 首次形成 tick
+    last_updated_tick: int = 0         # 最近修订 tick
+    continuity: ContinuityKind = ContinuityKind.FIRST
+    note: str = ""                     # 变更理由（W0→W1 的 reason）
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SelfBoundaryRules
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -275,12 +335,13 @@ class SelfModel:
     identity_ref 是只读引用，不是副本。SelfModel 投影 Identity.anchor
     但不包含它。
 
-    五个组件:
+    六个组件:
         capability_awareness  — "我能做什么"
         knowledge_boundary    — "我知道什么"
         experience_profile    — "我经历过什么"
-        preference_model      — "我和用户偏好什么"  (User + Operational 分离)
+        preference_model      — "我和用户偏好什么"
         cognitive_state       — "我当前认知状态怎样"
+        worldview             — "我如何理解世界/领域如何运作与我应如何判断"
     """
 
     # ── 核心引用 ──
@@ -292,13 +353,14 @@ class SelfModel:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # ── 五个组件 ──
+    # ── 六个组件 ──
 
     capability_awareness: Optional[Any] = None     # CapabilityAwareness
     knowledge_boundary: Optional[Any] = None       # KnowledgeBoundary
     experience_profile: Optional[Any] = None       # ExperienceProfile
     preference_model: Optional[Any] = None         # PreferenceModel
     cognitive_state: Optional[Any] = None          # CognitiveState
+    worldview: Optional[Any] = None                # WorldView
 
     # ── 元信息 ──
 
@@ -337,6 +399,7 @@ class SelfModel:
         valid_components = {
             "capability_awareness", "knowledge_boundary",
             "experience_profile", "preference_model", "cognitive_state",
+            "worldview",
         }
         if component not in valid_components:
             return False
@@ -363,6 +426,10 @@ class SelfModel:
         return self.knowledge_boundary is not None
 
     @property
+    def has_worldview(self) -> bool:
+        return self.worldview is not None
+
+    @property
     def components_loaded(self) -> int:
         return sum([
             self.capability_awareness is not None,
@@ -370,6 +437,7 @@ class SelfModel:
             self.experience_profile is not None,
             self.preference_model is not None,
             self.cognitive_state is not None,
+            self.worldview is not None,
         ])
 
 
@@ -385,5 +453,8 @@ __all__ = [
     "ExperiencePattern",
     "PreferenceType",
     "PreferenceEntry",
+    "StanceType",
+    "ContinuityKind",
+    "WorldViewJudgment",
     "SelfModel",
 ]

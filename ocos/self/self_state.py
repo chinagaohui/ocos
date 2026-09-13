@@ -38,6 +38,7 @@ from ocos.storage.schema import TABLE_SELF_STATE
 # ── S2 类型导入（serializer 注册表 与 类型重建用）────────────────────────────
 from ocos.self.self_types import (
     CapabilityStatement,
+    ContinuityKind,
     DomainStatement,
     ExperiencePattern,
     KnowledgeConfidence,
@@ -47,12 +48,15 @@ from ocos.self.self_types import (
     SelfModel,
     SelfUpdateContract,
     SelfUpdateSource,
+    StanceType,
+    WorldViewJudgment,
 )
 from ocos.self.capability_awareness import CapabilityAwareness
 from ocos.self.knowledge_boundary import KnowledgeBoundary
 from ocos.self.experience_profile import ExperienceProfile
 from ocos.self.preference_model import PreferenceModel
 from ocos.self.cognitive_state import AttentionHealth, CognitiveLoad, CognitiveState
+from ocos.self.worldview import WorldView
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +109,11 @@ _TYPE_REGISTRY: dict[str, type] = {
         AttentionHealth,
         CognitiveLoad,
         CognitiveState,
+        # P1-1 G1: SelfModel 第六组件 worldview（注册表 = 反序列化生死线）
+        WorldView,
+        WorldViewJudgment,
+        StanceType,
+        ContinuityKind,
     )
 }
 

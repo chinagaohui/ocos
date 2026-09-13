@@ -128,9 +128,10 @@ class TestS4001IdentityImmutability:
         sm = create_self_model(anchor)
         sm = initialize_empty_components(sm)
 
-        assert sm.components_loaded == 5
+        assert sm.components_loaded == 6  # D1 ACCEPT: worldview 计入
         assert sm.has_capability_awareness
         assert sm.has_knowledge_boundary
+        assert sm.has_worldview
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -514,7 +515,7 @@ class TestS4005RuntimeBinding:
 
         # 2. Initialize components
         sm = initialize_empty_components(sm)
-        assert sm.components_loaded == 5
+        assert sm.components_loaded == 6  # D1 ACCEPT: worldview 计入
 
         # 3. Update capabilities
         ca = CapabilityAwareness()

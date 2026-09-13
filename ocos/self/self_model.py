@@ -24,6 +24,7 @@ from ocos.self.knowledge_boundary import KnowledgeBoundary
 from ocos.self.experience_profile import ExperienceProfile
 from ocos.self.preference_model import PreferenceModel
 from ocos.self.cognitive_state import CognitiveState
+from ocos.self.worldview import WorldView
 
 
 # ── 组装器 ──
@@ -53,6 +54,7 @@ def create_self_model(identity_anchor: Any) -> SelfModel:
         experience_profile=None,
         preference_model=None,
         cognitive_state=None,
+        worldview=None,
         self_confidence=0.5,
         boundary_rules=SelfBoundaryRules(),
     )
@@ -73,6 +75,8 @@ def initialize_empty_components(self_model: SelfModel) -> SelfModel:
         self_model.preference_model = PreferenceModel()
     if self_model.cognitive_state is None:
         self_model.cognitive_state = CognitiveState()
+    if self_model.worldview is None:
+        self_model.worldview = WorldView()
     self_model.updated_at = datetime.now(timezone.utc)
     return self_model
 
@@ -171,6 +175,28 @@ def update_cognitive_state(
     return self_model.update(contract, "cognitive_state", state)
 
 
+def update_worldview(
+    self_model: SelfModel,
+    worldview: WorldView,
+    source: SelfUpdateSource,
+    reason: str,
+    tick_id: int,
+) -> bool:
+    """更新世界观（SelfModel 第六组件）。
+
+    复用既有 5 源（REFLECTION / RUNTIME_OBSERVATION / MEMORY_CONSOLIDATION，
+    对齐 P1-1 G1 Shape Design §8），不新增 authority。
+    """
+    contract = SelfUpdateContract(
+        source=source,
+        reason=reason,
+        tick_id=tick_id,
+        fields_changed=("worldview",),
+        confidence_impact=0.05,  # 默认保守；调用方可改 contract 后走 update
+    )
+    return self_model.update(contract, "worldview", worldview)
+
+
 # ── 查询 ──
 
 
@@ -201,5 +227,6 @@ __all__ = [
     "update_experience",
     "update_preferences",
     "update_cognitive_state",
+    "update_worldview",
     "self_summary",
 ]

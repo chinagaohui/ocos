@@ -9,12 +9,13 @@ Self Model 不是 Identity.anchor（那个不可变），
     S40-03: Self ≠ Belief — 自身状态 ≠ 世界判断
     S40-04: 更新来源受限 — Experience/Registry/MemoryConsolidation/RuntimeObservation
 
-五个组件:
+六个组件:
     CapabilityAwareness  — "我能做什么"
     KnowledgeBoundary    — "我知道什么"
     ExperienceProfile    — "我经历过什么"
     PreferenceModel      — "我和用户偏好什么"
     CognitiveState       — "我当前认知状态怎样"
+    WorldView            — "我如何理解世界/领域如何运作与我应如何判断"
 """
 
 from ocos.self.self_types import (
@@ -28,6 +29,9 @@ from ocos.self.self_types import (
     ExperiencePattern,
     PreferenceType,
     PreferenceEntry,
+    StanceType,
+    ContinuityKind,
+    WorldViewJudgment,
 )
 
 from ocos.self.capability_awareness import CapabilityAwareness
@@ -35,6 +39,7 @@ from ocos.self.knowledge_boundary import KnowledgeBoundary
 from ocos.self.experience_profile import ExperienceProfile
 from ocos.self.preference_model import PreferenceModel
 from ocos.self.cognitive_state import CognitiveState, CognitiveLoad, AttentionHealth
+from ocos.self.worldview import WorldView
 
 from ocos.self.self_model import (
     create_self_model,
@@ -44,6 +49,7 @@ from ocos.self.self_model import (
     update_experience,
     update_preferences,
     update_cognitive_state,
+    update_worldview,
     self_summary,
 )
 
@@ -59,6 +65,9 @@ __all__ = [
     "ExperiencePattern",
     "PreferenceType",
     "PreferenceEntry",
+    "StanceType",
+    "ContinuityKind",
+    "WorldViewJudgment",
     # Components
     "CapabilityAwareness",
     "KnowledgeBoundary",
@@ -67,6 +76,7 @@ __all__ = [
     "CognitiveState",
     "CognitiveLoad",
     "AttentionHealth",
+    "WorldView",
     # Assembler
     "create_self_model",
     "initialize_empty_components",
@@ -75,5 +85,6 @@ __all__ = [
     "update_experience",
     "update_preferences",
     "update_cognitive_state",
+    "update_worldview",
     "self_summary",
 ]
