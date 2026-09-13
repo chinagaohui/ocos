@@ -425,5 +425,22 @@ Legacy Learning Path   → Archive
 4. **伪成长集中 in learning/growth/evolution/capability**：产 Evidence/Knowledge 而非 Self Delta；此为"功能正确但主体语义错误"。
 5. **三处 store 并存需澄清**：`capability_registry/registry/skill_registry`（Merge）、`event_memory/event_store` vs `storage/event_store` vs `events/event_store`（真身裁决）。
 
-### H.4 全局红线回执
-> **`Causality=` 具备路径 ≠ `Causal Attribution=` 已实现成长。** 全库 913 个文件，**没有一条**达到 Causal Attribution=PROVEN。OCOS 目前是"有记忆的 Agent / 带记忆的反射系统"，**还不是**具备 X→D→Y 且 Y≠Z 可证成长链的持续认知主体。这条差距，正是 P0 的唯一验收标准。
+### H.4 全局红线回执（分层口径，v0.5 修正）
+> **`Causality=` 具备路径 ≠ `Causal Attribution=` 已实现成长。**
+> **分层口径（违规使用 "全库 UNPROVEN" 已修正）**：只有**位于 X→D→Y 路径上的主体候选模块**才用 Causal Attribution 验收。正确表述：
+>
+> **"对所有具备 SelfState/Cognition/Experience 语义、且理论上位于 X→D→Y 路径中的主体候选模块，Causal Attribution 当前均 UNPROVEN。"**
+>
+> Governance（Authority boundary PROVEN）· Tool（功能契约 PROVEN）· Persistence/Runtime（State continuity PROVEN）· World（World continuity PROVEN）· Memory/Evidence（五级消费证据）——**都不是成长主体，不要求 X→D→Y**。
+>
+> 全库 913 文件中，**主体候选模块**（self/、cognitive_continuity/、cognitive_loop/、reasoning/decision/planning、reflection/、learning/、growth/、evolution/、capability 的 Evidence 侧）**没有一条**达到 Causal Attribution=PROVEN。OCOS 目前是"有记忆的 Agent / 带记忆的反射系统"，**还不是**具备 X→D→Y 且 Y≠Z 可证成长链的持续认知主体。这条差距，正是 ⑧ P0（P0-4 X→D→Y 实验）的唯一验收标准。
+>
+> **验收分层表（冻结自 FREEZE §14.2）**：
+> ```text
+> Governance    → Authority boundary / Fail-closed PROVEN
+> Tool          → 功能契约 / 生产在链 PROVEN
+> Persistence   → Persistence / State continuity PROVEN
+> World         → World continuity PROVEN
+> Memory/Evidence → 五级消费证据 (①Recall→②Injection→③Consumption→④Behavioral Delta→⑤Causal Growth)
+> Subject Core  → Causal Attribution 验收（唯一强制 X→D→Y）
+> ```

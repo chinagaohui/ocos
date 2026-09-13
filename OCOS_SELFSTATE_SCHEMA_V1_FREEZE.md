@@ -460,11 +460,11 @@ G5 Worldview Projection  → "我对世界的认识是什么，而不是世界�
 ② SelfState Semantics v0.2          ✅ FREEZE
 ③ SelfState v1 Freeze               ✅ FREEZE
 ④ Claim / Delta / Continuity Freeze ✅ FREEZE
-⑤ 913-file reverse mapping          ⬜ NEXT
-⑥ 模块语义映射（8 类：Self / Evidence / World / Memory / Cognition / Governance / Tool / Legacy）
-⑦ Retain / Rewrite / Merge / Archive
-⑧ P0 / P1 / P2
-⑨ Implementation
+⑤ 913-file reverse mapping          ✅ FREEZE（收口，不再扩大反查范围）
+⑥ 模块语义映射（8 类：Self / Evidence / World / Memory / Cognition / Governance / Tool / Legacy）✅（learning/interaction/capability/记忆域/存储域/遗留域）
+⑦ Retain / Rewrite / Merge / Archive + 四层架构地图 ✅ FREEZE（OCOS_913_SEMANTIC_MAP v0.5）
+⑧ P0 / P1 / P2                      ⬜ NEXT（本文件 §15 + OCOS_P0_P1_P2_PLAN.md）
+⑨ Implementation（暂不进入，等 P0/P1/P2 契约裁决批准）
 ```
 
 **⑤ 反查审计问题（冻结）**：
@@ -564,6 +564,78 @@ FailureLesson
 
 **禁止**：把"具备 X→D→Y 路径"当作"已实现成长"。
 
+### 14.2 验收口径分层（冻结，v0.5 修正：Causal Attribution 只作用于主体候选模块）
+
+> Causal Attribution 不是"全库都要证明自己会成长"。只有**位于 X→D→Y 路径上的主体候选模块**才用 Causal Attribution 验收；其余各层用各自的验收标准，不要倒逼它们证明"会成长"。
+
+```text
+913 文件
+│
+├── Governance / Authority
+│   └── 验收 = Authority boundary PROVEN · Fail-closed PROVEN（不要求 Causal Attribution）
+│
+├── Tool（CLI/API/Shell/LLM Provider/Execution）
+│   └── 验收 = 功能契约 PROVEN · 生产在链 PROVEN（不要求 Causal Attribution）
+│
+├── Persistence / Runtime
+│   └── 验收 = Persistence PROVEN · State continuity PROVEN（不要求 Causal Attribution）
+│
+├── World / WorldModel
+│   └── 验收 = World continuity PROVEN（世界跨 restart 连续）
+│
+├── Memory / Evidence
+│   └── 验收落在五级消费证据 (① Recall / ② Injection / ③ Decision Consumption / ④ Behavioral Delta / ⑤ Causal Growth)
+│
+└── Subject Core（SelfState·Cognition·Experience 且理论上位于 X→D→Y 路径）
+    └── 必须进入 Causal Attribution 验收（唯一强制 X→D→Y 的层）
+```
+
+**Error 修正**：不得写成"全库没有一条 Causal Attribution = PROVEN"。正确表述 = **"对所有具备 SelfState/Cognition/Experience 语义、且理论上位于 X→D→Y 路径中的主体候选模块，Causal Attribution 当前均 UNPROVEN。"** Governance/Tool/Persistence/World 不是成长主体，本就不该用 X→D→Y 验收。
+
+### 14.3 Causal Attribution = 验收证据对象（冻结，从布尔字段升级）
+
+Causal Attribution 不是布尔字段，而是一组**可审计证据**。任何声称"成长发生"的模块/生产行为，必须能产出该对象并回答其属性链：
+
+```text
+CausalAttribution（验收证据对象）
+├── experience_ref          = X（唯一指向）  ← Experience 是什么
+├── previous_claim          = A              ← 过去的我认为什么
+├── contradiction_evidence                   ← 为什么 A 被现实推翻
+├── self_delta_ref          = D              ← Self 发生了什么变化
+├── cognition_delta_ref                      ← 现在怎么想
+├── decision_1 / action_1 / result_1         ← 基线尝试
+├── decision_2 / action_2 / result_2         ← 变后尝试
+├── decision_2_consumes_delta                ← Decision₂ 是否真的消费了 D
+├── counterfactual_Z                         ← 如果没有 X 本来会怎样
+├── actual_Y                                 ← 实际做了什么/怎么想
+├── Y_not_equal_Z                            ← Y ≠ Z
+└── causal_explanation                       ← 为什么可把 Y 归因给 X（而非原有策略本来就会产生 Y）
+```
+
+**审计问题链（任何"学习成功/认知成长/自我进化"声明必须逐条回答）**：
+
+```text
+X：发生了什么？
+↓
+A：以前怎么认为？
+↓
+为什么 A 被现实推翻？
+↓
+D：Self 发生了什么变化？
+↓
+Cognition：现在怎么想？
+↓
+Decision₂ 是否真的消费 D？
+↓
+Action₂ 是否不同（≠ Action₁）？
+↓
+Y 是否不同于 Z？
+↓
+为什么可以把变化归因给 X？
+```
+
+> 以后禁止以"日志里看到 Lesson 被 Prompt 注入了，所以 Learning 成功"作为结论 —— 那最多是五级中的 ②，不是成长。
+
 **最后一个问题（冻结）**：
 
 > 如果这个模块删除，"我"的哪一种连续性会断？
@@ -601,3 +673,27 @@ P0 / P1 / P2 → Implementation
 ```
 
 **代码不再定义 OCOS；SelfState 开始定义代码应该留下什么。**
+
+---
+
+## 15. ⑧ P0/P1/P2 方向契约（FREEZE，细则见 OCOS_P0_P1_P2_PLAN.md）
+
+**阶段切换**：从"代码考古" → "主体生命链建设"。不再扩大反查范围。
+
+**P0 只有 4 条主链（不扩几十项）**：
+```text
+P0-1 SelfState 真身通电   S2 = 真正参与 Thinking 的 Self；S1 = 能力证据（非"我"）
+P0-2 Self Delta 主链      唯一合法路径 + 禁止 Episode/Knowledge/Belief/SelfVersion/Prompt +1 为成长
+P0-3 Worldview            主体判断投影，非 WorldModel 镜像（WorldModel/Worldview/SelfDelta 三分）
+P0-4 第一次 X→D→Y 实验    同一 Goal：外1失败→Recognition→Delta→外2；验收 = Action₂≠Action₁ ∧ Decision₂消费D ∧ Y≠Z（P0 唯一闸门）
+```
+
+**P0 红线（修正口径）**：
+- S2"通电" ≠ 新建对象塞进 Prompt；是把 SelfState 变成**真实认知状态源**。
+- Worldview 不重建 WorldModel；只做引用与投影。
+- P0 不是"让代码库证明自己会成长"——分层验收（§14.2）。
+
+**P1（支撑，不抢 P0）**：WorldModel 持久化 · Experience/Memory/Wisdom 三层收敛 · Knowledge→Self/Worldview 边界 · Skill 进成长链。
+**P2（债务，不阻塞 P0）**：registry 统一 · event_store 三处 ownership 裁决 · dead paths / 重复 attention / 超大模块。
+
+**门**：P0-4 为唯一"生命链完成"闸门。PASS→持续主体；FAIL→结构完成而非生命链完成。
