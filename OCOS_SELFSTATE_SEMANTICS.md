@@ -2,7 +2,7 @@
 
 > **目的：把 SelfState 的语义和边界彻底定下来 —— 不是查代码有没有这些字段，而是逐字段回答"它到底是什么、凭什么这么判断、怎么变化"。**
 > **范围：纯语义定义，不写代码、不查 bug。**
-> **状态：v0.2 —— 方向 GO；Schema v1 暂不冻结，等待 G1–G5 钉死。**
+> **状态：v0.2 —— 方向 GO；Schema v1 已冻结，见 `OCOS_SELFSTATE_SCHEMA_V1_FREEZE.md`。**
 > **日期：2026-09-13（Asia/Shanghai）**
 > **前置：`OCOS_COGNITIVE_IDENTITY_AUDIT.md` v0.2（已冻结 §8 决策，裁决：GO/可冻结）。**
 
@@ -282,19 +282,17 @@ OCOS 的核心不再是一个"有很多认知模块的 Agent"，而是：
 
 ---
 
-## 11. SelfState v1 Freeze Gate（G1–G5）
+## 11. Freeze Gate 结果（G1–G5 全部冻结）
 
-| 门 | 内容 | 状态 |
+| 门 | 内容 | 判定 |
 |---|---|---|
-| **G1** | Self Claim 最小语义原子 | ✅ 已定义（§4，草案待确认） |
-| **G2** | Self Delta 标准结构 | ✅ 已定义（§5，草案待确认） |
-| **G3** | Continuity = State + Cognitive | ✅ 已定义（§6） |
-| **G4** | Counterfactual Z 持久化 / 重建规则 | ❓ 待决 |
-| **G5** | Worldview 与 WorldModel / Knowledge 正式投影关系 | ❓ 待决 |
+| **G1** | Self Claim 最小语义原子 | 🟢 GO / Freeze（新增 claim_id） |
+| **G2** | Self Delta 标准结构 | 🟢 GO / Freeze（新增 delta_id + cognition_implication） |
+| **G3** | Continuity = State + Cognitive | 🟢 GO / Freeze |
+| **G4** | Counterfactual Z 持久化 / 重建 | 🟢 Freeze：持久化优先 + 可验证重建兼容 |
+| **G5** | Worldview 与 WorldModel / Knowledge 投影关系 | 🟢 Freeze：主体性认识投影，不复制 WorldModel |
 
-G1 + G2 是重头：一旦定死，持久化自然变成
-`Identity → Claim → Evidence → Confidence → Delta → Version → Continuity`，
-而不是先设计一堆表再证明它们是不是"我"。
+**全部冻结内容见 `OCOS_SELFSTATE_SCHEMA_V1_FREEZE.md`。**
 
 ---
 
