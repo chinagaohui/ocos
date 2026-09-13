@@ -517,6 +517,36 @@ Core 能否进入 X → D → Y？
 **防误判红线（冻结）："重要 ≠ 属于 Self"**
 SQLite=Persistence · LLM=External Cognition Resource · WorldModel=World · DecisionBridge=Authority · Governance=Boundary · Shell capability=Capability —— 它们都不是"我"。
 
+**追加字段 —— Consumer / Downstream Effect（冻结，⑥ 必查）**：
+
+对每个 symbol 额外回答：`Producer → Artifact → Consumer → Consumer Effect → SelfState Impact → X→D→Y position`。
+
+- **Producer**：它产生什么对象。
+- **Consumer**：这个对象最终被谁消费？
+- **Consumer Effect**：被消费后造成什么（Knowledge? Episode? SelfClaim? Decision? Cognition? Prompt?）
+
+这是为了把"生产了什么"和"真正改变了什么"彻底分开：
+```text
+A 产生了一个看起来重要的对象
+   但没人消费 → 遗留
+   或只被 Prompt injection → Prompt injection ≠ Cognition Delta
+```
+
+**五级消费证据分级（冻结，严禁混用）**：
+
+```text
+① Recall Evidence              对象被召回
+② Prompt Injection Evidence    对象进入了 Prompt
+③ Decision Consumption Evidence 对象被 Decision 消费
+④ Behavioral Delta Evidence    Action₂ ≠ Action₁
+⑤ Causal Growth Evidence       消费了 D 且 Y ≠ Z 且因果解释存在
+```
+
+```text
+FailureLesson → MEM_CTX → DecisionBridge → LLM → Action
+```
+不能只因为"Lesson 影响了 Decision"就判学习成功；必须证明 `Action₂ ≠ Action₁` 且 `Decision₂/Action₂ 确实消费了 D`，最后落到 ⑤ Y ≠ Z。
+
 **最后一个问题（冻结）**：
 
 > 如果这个模块删除，"我"的哪一种连续性会断？

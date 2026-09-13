@@ -1,7 +1,7 @@
 # OCOS 913-File Semantic Reverse Mapping（第一阶段）
 
-> **性质：只读语义映射，不写代码、不改模块。** 由 8 个并行反查代理按冻结契约 §14 判定矩阵跑完。  
-> **状态：v0.2 —— 裁决标准已升级（新增 SelfState Impact + 两级裁决门）；映射仍为 domain 级，⑥ 已进 symbol 级。**  
+> **性质：只读语义映射，不写代码、不改模块。** 由并行反查代理按冻结契约 §14 判定矩阵跑完。  
+> **状态：v0.3 —— 裁决方法再升级（新增 Consumer/Downstream Effect + 五级消费证据），⑥ symbol 级正式审计中（learning/ pilot 已完成）。**  
 > **文档链**：`OCOS_SELFSTATE_SCHEMA_V1_FREEZE.md`（契约）→ **本文件（反查结果）** → 待：⑥⑦⑧。  
 > **主线问题（契约 §14，冻结）**：这个模块服务于哪个部分的我？如果它不存在，"我"的哪一种连续性会断？
 
@@ -171,6 +171,19 @@ Core 能否进入 X → D → Y？
 ### A.3 防误判红线："重要 ≠ 属于 Self"
 
 SQLite=Persistence · LLM=External Cognition Resource · WorldModel=World · DecisionBridge=Authority · Governance=Boundary · Shell=Capability —— 都不是"我"。
+
+### A.5 追加：Consumer / Downstream Effect + 五级消费证据（v0.3 冻结）
+
+每个 symbol 追加回答：`Producer → Artifact → Consumer → Consumer Effect → SelfState Impact → X→D→Y position`。
+
+- **Consumer Effect**：被消费后造成什么（Knowledge / Episode / SelfClaim / Decision / Cognition / Prompt?）
+- 无人消费 → 遗留；只被 Prompt injection → 不等于 Cognition Delta。
+
+五级消费证据（严禁混用）：
+```text
+① Recall → ② Prompt Injection → ③ Decision Consumption → ④ Behavioral Delta(Action₂≠Action₁) → ⑤ Causal Growth(D 被消费且 Y≠Z 且有因果解释)
+```
+`FailureLesson → MEM_CTX → DecisionBridge → LLM → Action` 不能只因"影响 Decision"就判学习成功。
 
 ### A.4 单个模块可含多角色（learning/ 为例，禁止整体判属主核）
 
