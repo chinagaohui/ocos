@@ -2,151 +2,322 @@
 
 > **目的：把 SelfState 的语义和边界彻底定下来 —— 不是查代码有没有这些字段，而是逐字段回答"它到底是什么、凭什么这么判断、怎么变化"。**
 > **范围：纯语义定义，不写代码、不查 bug。**
-> **状态：v0.1 草案，供评审。**
+> **状态：v0.2 —— 方向 GO；Schema v1 暂不冻结，等待 G1–G5 钉死。**
 > **日期：2026-09-13（Asia/Shanghai）**
-> **前置：`OCOS_COGNITIVE_IDENTITY_AUDIT.md` v0.2（已冻结 §8 决策）。**
+> **前置：`OCOS_COGNITIVE_IDENTITY_AUDIT.md` v0.2（已冻结 §8 决策，裁决：GO/可冻结）。**
 
 ---
 
 ## 0. 一句话立场
 
-SelfState 不是"一堆域的数据"，而是一个**能回答三个横向问题**的自我：
+SelfState 不是"一堆域的数据"，而是一个**能回答三个横向问题的自我**：
 
 > 为什么(? Evidence) · 多确定(? Confidence) · 什么从 A 变到 B(? Continuity)
 
-当这五横、七纵（5 横向维度 × 7 子域）都各自有答案时，它才真正像一个"自我"。
+当 5 横向语义 × 7 纵轴都各自有答案时，它才真正像一个"自我"。
+**现在不写代码。** 顺序是：语义（本文件）→ Freeze Gate（G1–G5）→ 913 文件反查 → 反推去留 → P0/P1/P2。
 
 ---
 
-## 1. 七个纵轴子域的语义（逐字段）
+## 1. Growth Invariant（X/Y/Z —— 项目级最高验收，冻结）
 
-每个子域都必须同时回答三件事：**本域要回答的问题 · 什么能进入本域 · 什么东西永远不属于本域（边界）**。
+```text
+X = 过去真实发生的经历
+Y = 现在实际产生的认知 / 行为
+Z = 如果没有 X，原本会产生的认知 / 行为
 
-### 1.1 Identity
-- **回答**：我是谁？什么东西永远不能被经验改变？
-- **进入**：identity_ref、born_at、type、constitution 引用、与主人的关系锚点。
-- **边界（不可变）**：id / 诞生时间 / 宪法哈希。**身份可以稳定。**
-- **证据**：无 —— 它是锚，不是判断。
+X → Self Delta → Cognition Delta → Y       且  Y ≠ Z
+```
 
-### 1.2 Situation
-- **回答**：我现在在哪里？当前处于什么运行环境/生命周期/关系状态？
-- **进入**：当前机器与运行环境、生命周期阶段、与主人/助手的关系状态。**当前状态。**
-- **边界**：不是"历史经历"，只是"此刻的状态快照"。
-- **证据**：运行时观测（daemon / vitals / 环境探针）。
+**最重要的不是 `Y ≠ Z`，而是必须能解释为什么 `Y ≠ Z`。**
 
-### 1.3 Memory（memory_self）
-- **回答**：哪些记忆属于"我的过去"？
-- **进入**：与自我相关、可被"我"引用的长期记忆索引。
-- **边界**：它是"我的过去"的**索引视图**，不是原始存储本体；不入库不入脑。
-- **证据**：指向底层 Memory 条目的引用。
+不能解释原因的，以下全部不算成长：
 
-### 1.4 Experience（experience_self）
-- **回答**：哪些事情**真正改变过**我？
-- **进入**：带因果解释的 episode 链——**做了 X → 结果如何 → 我因此认识/改变了什么**。
-- **边界**：只收"产生过自我/认知 delta 的事件"；没改变我的、纯流水账不入此域。
-- **证据**：episode 级证据 + 因果链接（+ 反事实 Z 的留痕）。
+```text
+Episode +1 · Knowledge +1 · Self version +1 · Belief +1 · Prompt context +1
+```
 
-### 1.5 Capability（capability_self）
-- **回答**：我认为自己能做什么 / 不能做什么？证据是什么？
-- **进入**：能力声名 + 能力局限 + 失败模式，每条都带"为什么"。
-- **边界（关键）**：这是 S2 的**认识**；S1（实测成功率）只是它的一类**证据来源**。不得把 S1 当作"我"。
-- **证据**：S1 实测 / Experience / Registry / Reflection。
-
-### 1.6 Worldview
-- **回答**：我认为世界是什么样？证据是什么？
-- **进入**：对世界的判断库（世界模型），可被证据推翻。
-- **边界**：与自我域分域（S40-03）；"我"只引用不复制整个世界。
-- **证据**：World / Knowledge / 经历互证。
-
-### 1.7 Cognition（cognition_self）
-- **回答**：我现在相信什么、正在想什么？为什么？以及**下一次该怎么想**。
-- **进入**：当前认知状态、当前专注、策略意图。
-- **边界**：持续变化，是"下一时刻"的输入，不是归档。
-- **证据**：运行时认知观测。
+既有原则被本架构正式吸收：**Recall 进入 Prompt ≠ 行为改变**（A11/A12 行为验证结论）。
 
 ---
 
-## 2. 五个横向维度的语义（贯穿所有纵轴）
+## 2. 七纵轴语义定义（冻结为 Schema 的语义定义表）
 
-| 横向维度 | 回答的问题 | 说明 |
+| 域 | 一句话定义 | 回答的问题 |
 |---|---|---|
-| **Evidence** | 我为什么这么认为？ | 每条自我认识必须挂证据引用；无证据 → 标记为"猜测"而非"确定"。 |
-| **Confidence** | 我有多确定？ | 全局 self_confidence + 每条判断的置信度；诚实标注未知。 |
-| **Provenance** | 这个认识是从哪来的？ | 来源分类（Experience / Registry / Reflection / RuntimeObserv / External…），排外部直接注入。 |
-| **Temporal** | 它是什么时候成立的？ | 每个认识带时间锚，支持跨期对比。 |
-| **Continuity** | 我什么时候从 A 变到 B？为什么？ | **SelfState 最核心属性**。必须能回答"v371 为何 ≠ v370"。 |
-
-**Continuity 的唯一判定标准（冻结自审计 §8.2）**：
-> **Version 371 的"我"，为什么和 Version 370 的"我"不一样？**
-> 若只有 `version +1 / count +1`、没有可解释的认知 delta，则此 version 无认知意义。
+| **Situation** | `= NOW` | 我现在处在哪里 / 当前处于什么状态 |
+| **Experience** | `= WHAT HAPPENED` | 我经历过什么（真正改变过我的） |
+| **Memory** | `= WHAT I RETAIN` | 我记得什么（索引视图） |
+| **Cognition** | `= WHAT I AM THINKING` | 我正在想什么 |
+| **Worldview** | `= WHAT I THINK THE WORLD IS` | 我认为世界是什么样 |
+| **Capability** | `= WHAT I THINK I CAN DO` | 我认为自己能做什么 |
+| **Identity** | `= WHO I AM` | 我是谁（不可变锚） |
 
 ---
 
-## 3. 子域 × 横向 = SelfState 的最终形态
+## 3. 五横向语义：约束，不是数据域（v0.2 修正）
+
+**Evidence / Confidence / Provenance / Temporal / Continuity 不是 SelfState 的五个"数据域"，而是所有可演化子域的横向语义约束。**
 
 ```text
 SelfState
-├── Identity     { 锚，无 E/C/P/T/C }
-├── Situation    { Evidence, Confidence, Provenance, Temporal }
-├── Memory       { 引用视图, Provenance, Temporal }
-├── Experience   { Evidence, Confidence, Provenance, Temporal, Continuity }
-├── Capability   { Evidence, Confidence, Provenance, Temporal, Continuity }   ← S1 是它的证据，不是它
-├── Worldview    { Evidence, Confidence, Provenance, Temporal, Continuity }   ← 可被证据推翻
-└── Cognition    { Evidence, Confidence, Provenance, Temporal, Continuity }   ← 持续变化
+│
+├── Vertical Domains
+│   ├── Identity · Situation · Memory · Experience · Capability · Worldview · Cognition
+│
+└── Cross-Cutting Semantics   ← 约束，不建独立表
+    ├── Evidence      我为什么这么认为
+    ├── Confidence    我有多确定
+    ├── Provenance    这个认识从哪来（排除外部直接注入）
+    ├── Temporal      它是什么时候成立的
+    └── Continuity    我什么时候从 A 变到 B，为什么
 ```
 
-> Identity 是唯二没有 E/C/P/T/C 的本体（其余纵轴宣讲 Evidence+Continuity 两条最重的横轴）。这是它与"认识"的根本区别。
+**数据库设计红线**：禁止出现 `self_evidence` / `self_confidence` / `self_provenance` 之类的独立表。它们必须**附着在具体的 Self Claim / Self Delta / Self Judgment 上**。
 
 ---
 
-## 4. 四个层的变更权限（修正 v0.1 层级错误）
+## 4. G1 · 最小原子 = Self Claim（不是 Domain）
+
+真正的最小原子不是 Domain，而是 **Claim**：
 
 ```text
-Identity Anchor   不可随经验改变         ← 稳定（冻结）
-Core Self Boundary 稳定                  ← 稳定（冻结）
-SelfModel          可以成长               ← 经受控来源更新
-Beliefs/Worldview  可以被证据推翻          ← 证据驱动更新（认识必须可改变）
-Cognitive State    持续变化               ← 实时
+Capability
+    └── Claim
+          ├── subject      主题（如 "我在复杂 shell 操作上的可靠性"）
+          ├── predicate    谓词（如 "较低"）
+          ├── value        值
+          ├── evidence[]   证据引用列表
+          ├── confidence   置信度
+          ├── provenance   来源
+          ├── temporal     成立时间
+          └── continuity   变化链
 ```
 
-**核心原则**：身份可以稳定，认识必须可以改变。两条必须同时成立，否则"不能改变认识却要通过经历成长"的悖论成立。
-
----
-
-## 5. 一条必须连通的链（冻结自审计 §8.1）
+例（不是 `shell_success_rate = 30.9%`，而是）：
 
 ```text
-我能用 shell          ← S1 证据
-我为什么常在 shell 失败  ← Experience / Failure
-我现在对自己 shell 能力的认识 ← SelfModel
-因此下一次遇到 shell 问题 采取什么策略 ← Cognition
+Self Claim: "我在复杂 shell 操作上的可靠性较低"
+
+Evidence:    E2894 · E2716 · E2472
+Confidence:  0.82
+Provenance:  empirical_episode
+
+Previous:    "我可以稳定完成 shell 操作"
+Delta:       reliability_assessment ↓
+Reason:      repeated execution failures
 ```
 
-这四层必须从下到上被打通，且认知在**下一次思考**中被携带。断一环，"我"就只是堆字段。
+**S1 的正确进入路径**（不是 S1 → 直接改 SelfModel）：
+
+```text
+S1 (agent_self_model)
+  ↓ 只作为
+Evidence
+  ↓
+Self Claim
+  ↓
+Self Delta
+  ↓
+SelfModel
+```
+
+> S1 **不删除**：它不能因为"我觉得自己很厉害"就证明自己厉害 —— 它是客观能力统计证据。降级不是削弱，是放回正确位置。
 
 ---
 
-## 6. 语义待决问题（下一轮评审要回答）
+## 5. G2 · Self Delta 标准结构
 
-1. **Continuity** 的数据载体：用 `delta log`（每次变化记录 A→B 因）还是 `version snapshot`（每版本全量）？两者可并存，但必须至少一种能回答"为什么变"。
-2. **反事实 Z** 在哪记：Z 是历史假设，存于 Experience 的因果链留痕，还是重建生成？需定载体。
-3. **Worldview 与现 WorldStore / Knowledge 的关系**：合并、投影，还是仅索引？"我"不复制世界是铁律，但读取口径未定。
-4. **Situation 的"关系"**：是否纳入与主人/助手的关系状态，还是只留运行环境？语义边界未定。
+```text
+SelfDelta
+├── claim_ref         受影响的 Claim
+├── from_value        旧认识（即 Z 或上一个状态）
+├── to_value          新认识（即 Y）
+├── type              strengthen / weaken / reverse / uncertain
+├── reason            ★为什么变（必填，否则不算 delta）
+├── evidence[]        触发证据
+├── counterfactual_Z  反事实基线（见 G4）
+├── created_at        时间锚
+└── affects           self_claim | worldview_claim
+```
+
+**G1 + G2 一旦确定，持久化自然成形，而不是先设计一堆表**：
+
+```text
+Identity → Self Claim → Evidence → Confidence → Delta → Version → Continuity
+```
 
 ---
 
-## 7. 落地顺序（本期到此为止，不写码）
+## 6. G3 · Continuity 拆分为两个概念
 
-1. ✅ 本文件（SelfState 语义定义）→ 交评审。
-2. ⬜ 你与侧评审定 §6 待决问题后，冻结 SelfState Schema v1。
-3. ⬜ 拿完整源码做 913 文件反查（属于"我 / 工具 / 遗留"→ 目标映射 → 保留/重构/合并/删除）。
-4. ⬜ 据此形成真正的 P0/P1/P2（不是从"现有代码有什么"出发，而是从"OCOS 该成为谁"反推代码去留）。
+```text
+Continuity
+├── State Continuity       "我还是同一个我"    ← identity_ref 不变
+└── Cognitive Continuity   "现在的我为什么不同于过去的我" ← v371 = v370 + D，D 必须有原因
+```
+
+**红线**：`identity_ref = same, version = 371` 只代表 State Continuity（同一个 ID ≠ 认知连续）。真正需要证明的是：
+
+```text
+v370
+  │ Experience X
+  ↓
+Delta D（有原因）
+  ↓
+v371 = v370 + D
+```
 
 ---
 
-## 附：本阶段判断
+## 7. Memory ≠ Experience（冻结）
 
-**从做更强认知 Runtime，切换到做持续存在的"我"。** Fast视图：
-Runtime=身体 · Memory=过去 · Perception=接触世界的方式 · Brain=当前思考 · SelfModel=对自己的认识 · WorldModel=对世界的认识 · Learning=改变自己的机制。
+> **我记得发生过什么，不等于那件事改变了我。**
 
-**现在不修代码。** 语义定清，再反查代码。
+```text
+Memory
+    ├── 普通记忆         （如 "Episode #100：今天执行 ls 成功"）
+    └── Self-relevant memory
+              ↓ 只有当它产生 Self/Cognitive Delta
+         Experience（真正改变过我的）
+              ↓
+         Self Delta
+```
+
+- 进 Memory：发生过且我记住。
+- 进 Experience（Self-relevant）：**产生了 Self/Cognitive Delta**。
+
+---
+
+## 8. G5 · Worldview = 投影认识，不是世界复制（冻结原则）
+
+```text
+WorldModel           世界的模型（客观本体，如 shell command X → environment behavior Y）
+      ↓ 引用投影（不复制）
+SelfState.worldview  "我对世界的认识"（带主体视角 + 证据 + 置信度）
+```
+
+```text
+WorldModel:   shell command X → environment behavior Y
+Worldview:    "我目前认为在环境 E 中，X 通常会导致 Y"
+              confidence = 0.73
+              evidence   = E123, E127
+```
+
+**红线**：Worldview 是带主体视角、证据和置信度的认识，不是 WorldModel 的副本。
+（G5 待决：与 WorldStore / Knowledge 的正式投影口径，见 §11。）
+
+---
+
+## 9. Cognition Self 严格定义（防退化）
+
+`cognition_self` 极易退化成"把当前 Prompt 存下来"→ 重新变成 Prompt Engineering。**禁止。**
+
+严格定义为：
+
+> 当前认知状态中，已经形成、正在形成、或影响下一次思考的主体性认知状态。
+
+必须能携带：
+
+```text
+Current Belief                我现在相信什么
+Current Hypothesis            我正在假设什么
+Current Uncertainty           我现在不确定什么
+Current Focus                 我当前专注什么
+Current Strategy Intention    我下一步打算采取什么策略
+Overturned Previous Understanding  被现实推翻的旧认识
+Open Question                 我留着的开放问题
+```
+
+其中最关键的一条：
+
+```text
+Previous Understanding
+        ↓ Reality contradicted
+Current Understanding
+```
+
+**这一部分是 SelfState 与普通 Context 的真正区别** —— 上下文是信息，这里是被经历改造过的"我"。
+
+---
+
+## 10. 三层总结构（冻结）
+
+```text
+                 ┌─────────────────────┐
+                 │     IDENTITY        │   我是不是同一个我
+                 └──────────┬──────────┘
+                            │
+                     SelfState
+                            │
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+      STATE              HISTORY             CHANGE
+        │                   │                   │
+  Situation             Memory              Delta
+  Capability             Experience          Continuity
+  Worldview                                  Why
+  Cognition
+        │                   │                   │
+        └───────────────────┼───────────────────┘
+                            ↓
+                        THINKING
+                            ↓
+                         ACTION
+                            ↓
+                         REALITY
+                            ↓
+                      OBSERVATION
+                            ↓
+                       EXPERIENCE
+                            ↓
+                        LEARNING
+                            ↓
+                       SELF UPDATE
+                            ↺
+```
+
+OCOS 的核心不再是一个"有很多认知模块的 Agent"，而是：
+**一个具有身份连续性、经历连续性和认知连续性的持续存在主体。**
+
+---
+
+## 11. SelfState v1 Freeze Gate（G1–G5）
+
+| 门 | 内容 | 状态 |
+|---|---|---|
+| **G1** | Self Claim 最小语义原子 | ✅ 已定义（§4，草案待确认） |
+| **G2** | Self Delta 标准结构 | ✅ 已定义（§5，草案待确认） |
+| **G3** | Continuity = State + Cognitive | ✅ 已定义（§6） |
+| **G4** | Counterfactual Z 持久化 / 重建规则 | ❓ 待决 |
+| **G5** | Worldview 与 WorldModel / Knowledge 正式投影关系 | ❓ 待决 |
+
+G1 + G2 是重头：一旦定死，持久化自然变成
+`Identity → Claim → Evidence → Confidence → Delta → Version → Continuity`，
+而不是先设计一堆表再证明它们是不是"我"。
+
+---
+
+## 12. 路线（冻结）
+
+```text
+① Self Identity Audit v0.2        ✅（GO/可冻结）
+② SelfState Semantics v0.1→v0.2   ← 当前
+③ SelfState v1 Freeze             ⬜（等 G1–G5）
+④ Claim / Delta / Continuity 语义冻结 ⬜
+⑤ 913 文件反查                    ⬜
+⑥ 每个现有模块映射到：
+   Self / Evidence / World / Memory / Cognition / Governance / Tool / Legacy
+⑦ 从目标"我"反推代码去留          ⬜
+⑧ 形成 P0/P1/P2                   ⬜
+⑨ 最后才进入实现                  ⬜
+```
+
+**为什么不跳过 ③④ 直接接 S2**：避免把一个还没有完全定义清楚的"我"接进生产系统。
+
+**⑤ 反查应采用的审计问题（冻结）**：
+
+> 这个模块服务于哪个部分的我？
+> 如果它不存在，那个"我"的哪一种连续性会断掉？
+
+而不是"这个模块有没有用"。
