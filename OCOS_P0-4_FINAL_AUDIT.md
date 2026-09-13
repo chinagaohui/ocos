@@ -1,8 +1,8 @@
 # OCOS P0-4 FINAL AUDIT — ATTEMPT 2 裁决（冻结）
 
-> 状态：**CONDITIONAL PASS（已冻结）**。
+> 状态：**CONDITIONAL PASS（Attempt 2 已冻结）**；P0-4A = PASS/CLOSED；**P0-4B Production = FROZEN/BLOCKED（2026-09-13 裁决，见 §9）**。
 > 本文件为 P0-4 Attempt 2 的正式审计结论，记录证据强度、降级说明、反证条件与后续独立验证项。
-> **冻结纪律：不再为刷 PASS 修改 Production、不重跑 A2、不反向补 ThinkingTrace。**
+> **冻结纪律：不再为刷 PASS 修改 Production、不重跑 A2、不反向补 ThinkingTrace、不为满足审计而重构生产控制流。**
 
 ---
 
@@ -12,7 +12,9 @@
 P0-1  Self S2 Power-on               ✅
 P0-2  Self Evidence / Claim / Delta  ✅
 P0-3  Production S2-only Thinking    ✅
-P0-4  X → D → S2 → Decision → Y      🟡 CONDITIONAL
+P0-4  X → D → S2 → Decision → Y      🟡 CONDITIONAL (Attempt 2)
+  ├─ P0-4A 实时认知消费              ✅ PASS / CLOSED
+  └─ P0-4B 生产 LLM 决策验证         ⛔ FROZEN / BLOCKED（§9）
 ```
 
 ---
@@ -77,20 +79,20 @@ Trace          TNG-F693EFA38C59→DEC-F0937AC6111C                       (step5/
 | E2 sampling | ✅ 排除（限 deterministic harness） |
 | E3 capability confounding | ✅ 排除 |
 | E4 prompt variation | ✅ 排除 |
-| C01 → Decision₂ **实时消费记录** | ⚠️ CONDITIONAL |
-| Production LLM behavioral proof | ❌ 未验证 |
+| C01 → Decision₂ **实时消费记录** | ✅ PASS / CLOSED（P0-4A，受控 harness 验证） |
+| Production LLM behavioral proof | ⛔ UNEXECUTABLE（P0-4B，见 §9，非证伪） |
 
 ---
 
 ## 5. 为什么不是 FULL PASS（两层限制，均如实登记）
 
-**限制 1 — 认知消费证据时序性（主卡点）**
+**限制 1 — 认知消费证据时序性（P0-4A 已在受控 harness CLOSED；Production 仍为缺口）**
 
-> ThinkingTrace 为**事后重建**，而非 Decision₂ 发生当下同步持久化。
-
-- 可证明："这个 Decision₂ 的行为确实与 C01 精确对应。"（结构性、确定性重建、差分对照）
-- 不能升级为："Decision₂ 发生瞬间，系统实时记录了它消费 C01 并据此决策。"（contemporaneous proof）
-- 未因 Step 4 已得到漂亮 verify_first 而反向补 ThinkingTrace。
+> 受控 harness 内，`component_consumption()` 已证明"决策时刻实际读取组件 → consumption manifest → fused ThinkingTrace+DecisionRecord 同步持久化"成立（P0-4A = CLOSED）。
+>
+> 但**生产运行时**未接入该机制：生产仍在决策处调用旧 `record_thinking_trace()`（全量 claims），且 `component_consumption` 未接到一个"唯一 + 原样"的实际读取点。此缺口列入 Section 9（Production Wiring GAP）。
+>
+> 未因 Step 4 已得到漂亮 verify_first 而反向补 ThinkingTrace。
 
 **限制 2 — 生产运行时未接入**
 
@@ -152,6 +154,92 @@ Action₂
 > 本轮已获得 OCOS 第一条**有边界、有降级说明、有反证条件**的真实主体生命链证据：
 > X → D → S2 → Decision₂(≠Z) → Y(≠Z)，且 E1–E4 排除。
 >
-> **不标记为 FULL PASS**；P0-4A（实时消费）、P0-4B（生产 LLM）为待验证独立项。
+> 子项结算：**P0-4A = PASS / CLOSED**（受控 harness 实时消费）；**P0-4B = FROZEN / BLOCKED**（见 §9）。
+
+---
+
+## 9. P0-4B 生产接线 — FROZEN / BLOCKED（2026-09-13 只读落点审计裁决）
+
+> **本轮不写代码。P0-4B 生产段正式冻结。**
+> 结论：**不是代码能力不足**，而是生产 runtime 的"真实决策边界"当前不存在足够小的接线点；
+> 强行把"可观测性补线"凑上去，会升级成"决策控制流重构"——这正是审计阶段应挡住的。
+
+### 9.1 阶段结算
+
+```text
+P0-4A  Decision-time Consumption        = PASS / CLOSED
+P0-4B  Step 1 Provider Verifiability    = PASS / CLOSED
+P0-4B  Production LLM                   = BLOCKED（MockProvider / 无真实 provider）
+P0-4B  Production Consumption Wiring    = GAP CONFIRMED（NOT AUTHORIZED）
+P0-4B  Production Causal Validation     = UNEXECUTABLE（不是 FAIL / 不是证伪）
+```
+
+### 9.2 核心阻点：Q4（fused trace 须先于 Action）
+
+冻结的 P0-4A 顺序：
+
+```text
+真实 Decision₂
+    ↓
+Consumption Manifest
+    ↓
+ThinkingTrace + DecisionRecord 原子落库
+    ↓
+Action
+```
+
+生产现状（converse.py 多步主循环）是 **LLM 生成与 USE| 动作执行同轮交织**：
+
+```text
+LLM generation
+    ↓
+产生 decision / strategy / action
+    ↓
+同轮交织执行 USE| → Action
+```
+
+- `ThinkingTrace`（D 消费）在生成前已知；
+- `DecisionRecord`（decision/strategy/action）是 LLM **输出**，生成后才可得；
+- `Action` 与生成耦合在同一循环内，**不存在"输出到手但动作未执行"的干净单点**。
+
+要为满足顺序拆解生成/执行循环 ⇒ 是 **Decision/Action control-flow refactor**，而非 minimal wiring。**此即决定性阻断。**
+
+### 9.3 Q2 更深问题：KB 并非单一语义来源
+
+生产 LLM 实际获得：
+
+```text
+                 ┌─ S2.knowledge_boundary（S2 字段）
+                 │     └─ 有 SelfClaim / Delta / Evidence provenance
+LLM Context ─────┤
+                 └─ _knowledge_boundary_block()（原始 DB 聚合）
+                       └─ knowledge/belief/episode 聚合，无 Self provenance
+```
+
+因此**不能宣布**："LLM 看到了 knowledge_boundary ⇒ 它消费了 C01。" 否则会把 `C01→S2` 的消费关系**合成**出来，而非 observed consumption —— 这是本审计体系最需要防的**假因果归因**。
+
+### 9.4 冻结：三条 Production Redline
+
+- **Redline-1 — Consumption Source**：只有"Decision₂ 实际读取的 S2 component"才能产生 consumption manifest。禁止：扫描全部 committed claims、按最终 Action 反推、按 prompt 出现某字段反推、语义猜测、用原始 DB 聚合冒充 Self Delta consumption。
+- **Redline-2 — Decision-time Boundary**：必须真实存在 `LLM output complete → DecisionRecord → manifest captured → ThinkingTrace+DecisionRecord atomic persist → Action` 边界。若当前 runtime 无此边界，**不为了满足审计而重构生产控制流**。
+- **Redline-3 — Dual KB Semantics**：`S2.knowledge_boundary` 与 `_knowledge_boundary_block()` 视为**两个不同 provenance source**，禁止在 P0-4B 中合并为 `knowledge_boundary = C01`（属另一架构问题，应单独立项）。
+
+### 9.5 冻结事实：P0-4B PRODUCTION BLOCKER
+
+```text
+B1  Provider unavailable（MockProvider / 无真实 provider）
+B2  No single production S2 decision consumption point（converse/bridge/recall_router 多处读 S2）
+B3  knowledge_boundary has dual provenance（S2 字段 vs 原始 DB 聚合）
+B4  Current LLM→USE execution is interleaved（生成/动作同轮交织）
+B5  Fused decision-time persistence therefore requires control-flow change, not minimal wiring
+```
+
+### 9.6 冻结纪律（防"顺手改 Converse"）
+
+> **不得为 P0-4B 改动 Production 决策入口 / Converse 控制流 / LLM prompt / Decision semantics。**
+> P0-4B 转入 **FROZEN / BLOCKED**，等待真实 provider 条件后，再按 B1–B5 清单评估是否放行最小 wiring。
+> 两条结论严格分开：
+>   - Production LLM causal validation = currently **unexecutable, not disproven**；
+>   - Production cognitive-consumption observability = currently **incomplete, independently of provider availability**。
 
 *文件结尾不变式：本结论已冻结，不再为追求 PASS 而改实验、改 Prompt、改生产代码或重跑。*
