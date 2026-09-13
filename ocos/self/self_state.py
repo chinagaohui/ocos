@@ -26,14 +26,15 @@ import logging
 import threading
 import types as _types
 import typing
-from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
+from dataclasses import MISSING, fields, is_dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
 
-from ocos.storage.connection import get_connection, transaction
-from ocos.storage.migrations import ensure_schema
-from ocos.storage.schema import TABLE_SELF_STATE
+from ocos.self.capability_awareness import CapabilityAwareness
+from ocos.self.cognitive_state import AttentionHealth, CognitiveLoad, CognitiveState
+from ocos.self.experience_profile import ExperienceProfile
+from ocos.self.knowledge_boundary import KnowledgeBoundary
+from ocos.self.preference_model import PreferenceModel
 
 # ── S2 类型导入（serializer 注册表 与 类型重建用）────────────────────────────
 from ocos.self.self_types import (
@@ -51,12 +52,10 @@ from ocos.self.self_types import (
     StanceType,
     WorldViewJudgment,
 )
-from ocos.self.capability_awareness import CapabilityAwareness
-from ocos.self.knowledge_boundary import KnowledgeBoundary
-from ocos.self.experience_profile import ExperienceProfile
-from ocos.self.preference_model import PreferenceModel
-from ocos.self.cognitive_state import AttentionHealth, CognitiveLoad, CognitiveState
 from ocos.self.worldview import WorldView
+from ocos.storage.connection import get_connection, transaction
+from ocos.storage.migrations import ensure_schema
+from ocos.storage.schema import TABLE_SELF_STATE
 
 logger = logging.getLogger(__name__)
 
@@ -435,7 +434,7 @@ class SelfStateManager:
         return committed
 
     @property
-    def accessor(self) -> "SelfProjectionAccessor":
+    def accessor(self) -> SelfProjectionAccessor:
         """唯一读 accessor —— Thinking / Self projection 的唯一入口。"""
         return SelfProjectionAccessor(self)
 
@@ -491,7 +490,7 @@ class SelfProjectionAccessor:
             })
         return out
 
-    def component_consumption(self, component: str) -> Optional[dict]:
+    def component_consumption(self, component: str) -> dict | None:
         """P0-4A：决策时刻【实际读取的组件】→ decision-relevant consumption manifest。
 
         『我实际读了 self_projection.<component>』发生时即形成消费关系，而非读完
@@ -519,6 +518,36 @@ class SelfProjectionAccessor:
                 "content_hash": self.content_hash,
             }
         return None
+
+    def get_committed_worldview(self) -> list[dict]:
+        """G4: 已提交 S2 worldview 的只读结构化投影（唯一读出口）。
+
+        只读、committed only、无 fallback / 推理 / 判断 / 修改。数据源唯一 =
+        committed S2 worldview（G3 frozen 链经 Govern 产出），不读取 Recognition /
+        Claim 生成层。无 worldview / 无 judgment → []（Thinking input 不变化 →
+        G4-B/F 保持）。保留 claim_id / evidence_ids / source 溯源（I2），供
+        G4-D/E diff 归因。不改 render/brief/project 等既有方法（G1 T6b 基线不变）。
+        """
+        s = self._manager.current
+        wv = getattr(s, "worldview", None)
+        if wv is None:
+            return []
+        out: list[dict] = []
+        for domain, j in wv.judgments.items():
+            out.append({
+                "type": "worldview",
+                "version": 1,
+                "domain": domain,
+                "judgment": j.judgment,
+                "frame": j.frame,
+                "stance_type": j.stance_type.value,
+                "confidence": j.confidence,
+                "continuity": j.continuity.value,
+                "claim_id": j.claim_id,
+                "evidence_ids": list(j.evidence_ids),
+                "source": "committed_self_projection",
+            })
+        return out
 
     def render(self) -> str:
         """文本投影：由已提交 S2 生成，非 Prompt 源、不读 S1。"""
@@ -574,7 +603,7 @@ class SelfProjectionAccessor:
 
 
 _S2_LOCK = threading.Lock()
-_S2_ACCESSOR_REGISTRY: dict[str, "SelfProjectionAccessor"] = {}
+_S2_ACCESSOR_REGISTRY: dict[str, SelfProjectionAccessor] = {}
 
 
 def register_self_projection(db_path: str, accessor) -> None:
@@ -585,7 +614,7 @@ def register_self_projection(db_path: str, accessor) -> None:
         _S2_ACCESSOR_REGISTRY[db_path] = accessor
 
 
-def _resolve_identity_ref(db_path: str) -> Optional[str]:
+def _resolve_identity_ref(db_path: str) -> str | None:
     """从持久化 identity 表解析唯一 agent_id（合法身份锚，非 S1 推导）。"""
     try:
         conn = get_connection(db_path)
@@ -595,7 +624,7 @@ def _resolve_identity_ref(db_path: str) -> Optional[str]:
         return None
 
 
-def get_self_projection(db_path: str, identity_ref: Optional[str] = None):
+def get_self_projection(db_path: str, identity_ref: str | None = None):
     """进程内 S2 唯一只读 projection（committed → 7-domain Self representation）。
 
     - 优先返回已注册（runtime boot）的 accessor；否则按身份从持久化 reload committed S2。
