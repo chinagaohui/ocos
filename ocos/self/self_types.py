@@ -24,8 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, ClassVar, Optional
-
+from typing import Any, ClassVar
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 更新来源枚举
@@ -88,6 +87,16 @@ class SelfUpdateContract:
     """支撑本次 Delta 的 S1 Evidence anchor 列表（进 update_history）。"""
     claim_id: str = ""
     """产生本次 Delta 的 SelfClaim id（进 update_history，可回溯到 Claim/Evidence）。"""
+
+    # P1-1 G3: worldview 因果链持久锚（进 update_history，可恢复 "X → Recognition(R) → W1"）。
+    # trigger_experience_id 仅当其经 WorldViewExperienceGate 解析验证通过后写入，否则留空。
+    trigger_experience_id: str = ""
+    """X 的真实经历锚（仅 gate 验证通过后写入；进 update_history 可审计）。"""
+    recognition_type: str = ""
+    """RecognitionType.value（"conflict"/"confirm"/"novel_pattern"/"reframe"）。
+
+    进 update_history，供 X→R→W1 因果链恢复。仅 gate 验证通过后由管线写入。
+    """
 
     # 禁止的来源（ClassVar：不参与 dataclass 序列化字段）
     FORBIDDEN: ClassVar[frozenset[SelfUpdateSource]] = frozenset({
@@ -258,6 +267,26 @@ class ContinuityKind(Enum):
     """替换既有判断（范式级重构）。"""
 
 
+class RecognitionType(Enum):
+    """Worldview 经历识别类型 — G3 Recognition 由真实经历推导（非调用方提供）。
+
+    持久化时以其 .value 字符串写入 `SelfUpdateContract.recognition_type`；
+    本枚本身是 pipeline 内部类型，不注册进 `_TYPE_REGISTRY`、不进入 SelfModel 序列化。
+    """
+
+    CONFLICT = "conflict"
+    """经历与既有理解方向相悖 → REVISED。"""
+
+    CONFIRM = "confirm"
+    """经历与既有理解一致/强化（无结构变化 → 不产 W1 delta）→ DERIVED。"""
+
+    NOVEL_PATTERN = "novel_pattern"
+    """新领域/新范式，无既有判断 → FIRST。"""
+
+    REFRAME = "reframe"
+    """divergence 类别改变，暴露不同组织框架 → REPLACED。"""
+
+
 @dataclass(frozen=True)
 class WorldViewJudgment:
     """世界观判断叶子类型 — 单个领域的一份立场。
@@ -355,12 +384,12 @@ class SelfModel:
 
     # ── 六个组件 ──
 
-    capability_awareness: Optional[Any] = None     # CapabilityAwareness
-    knowledge_boundary: Optional[Any] = None       # KnowledgeBoundary
-    experience_profile: Optional[Any] = None       # ExperienceProfile
-    preference_model: Optional[Any] = None         # PreferenceModel
-    cognitive_state: Optional[Any] = None          # CognitiveState
-    worldview: Optional[Any] = None                # WorldView
+    capability_awareness: Any | None = None     # CapabilityAwareness
+    knowledge_boundary: Any | None = None       # KnowledgeBoundary
+    experience_profile: Any | None = None       # ExperienceProfile
+    preference_model: Any | None = None         # PreferenceModel
+    cognitive_state: Any | None = None          # CognitiveState
+    worldview: Any | None = None                # WorldView
 
     # ── 元信息 ──
 
@@ -455,6 +484,7 @@ __all__ = [
     "PreferenceEntry",
     "StanceType",
     "ContinuityKind",
+    "RecognitionType",
     "WorldViewJudgment",
     "SelfModel",
 ]

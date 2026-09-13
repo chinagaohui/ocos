@@ -23,23 +23,28 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from ocos.self.capability_awareness import CapabilityAwareness
+from ocos.self.knowledge_boundary import KnowledgeBoundary
 from ocos.self.self_types import (
     CapabilityStatement,
+    ContinuityKind,
     DomainStatement,
-    ExperiencePattern,
     KnowledgeConfidence,
+    RecognitionType,
     SelfModel,
     SelfUpdateContract,
     SelfUpdateSource,
+    StanceType,
+    WorldViewJudgment,
 )
-from ocos.self.capability_awareness import CapabilityAwareness
-from ocos.self.knowledge_boundary import KnowledgeBoundary
+from ocos.self.worldview import WorldView
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,19 @@ logger = logging.getLogger(__name__)
 _MIN_CAPABILITY_ATTEMPTS = 3
 # capability 判定可用/可信的实测成功率阈值（与 CapabilityAwareness.register 的 known 阈值一致）。
 _CAP_KNOWN_SR = 0.6
+
+# G3: worldview 凝结准入 — 真实经历串联观测数（derived，非 caller 输入）低于该阈值不凝结。
+_MIN_WV_OCCURRENCES = 3
+
+# G3: divergence_kind 分类家族（REFRAME 依赖类别改变，CONFLICT 依赖同维反方向）。
+_DIV_FAMILY = {
+    "none": "stable",
+    "unexpected_value": "expectation",
+    "type_mismatch": "type",
+    "missing": "existence",
+    "exceeds_bound": "rating",
+    "falls_short": "rating",
+}
 
 
 class SelfEvidenceError(Exception):
@@ -98,6 +116,7 @@ class ClaimKind(Enum):
     CAPABILITY_KNOWN = "capability_known"
     CAPABILITY_UNCERTAIN = "capability_uncertain"
     FAILURE_PATTERN = "failure_pattern"
+    WORLDVIEW_JUDGMENT = "worldview_judgment"  # G3: 真实经历 → 结构化世界观判断
 
 
 @dataclass(frozen=True)
@@ -194,11 +213,228 @@ def capture_s1_snapshot(snapshot: dict) -> S1Evidence | None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# G3: WorldViewExperienceGate — trigger_experience_id 的 provenance 门（C）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class WorldViewExperienceGate:
+    """把 "Experience 字符串关联" 提升为 "真实 Experience 验证"（防伪造 trigger）。
+
+    三步 provenance 校验（Plan §3.3 / C）：
+      1. existence    — 在注入的 experience_resolver 中找到该 Episode
+      2. ownership    — resolved.identity_ref == current_identity（属于本 OCOS）
+      3. evidence_link — resolved.data_hash == 当前观测的 S1Evidence.data_hash
+    任一步失败 → return None → 调用方 fail-closed（无 Claim / 无 Delta / 无 commit）。
+
+    语义：断言 resolved 是"已有真实 Experience/Episode"，而非 caller 按 ID 构造的包装。
+
+    注入协议（resolver 复用既有 Memory/Experience 层，不新建存储）：
+      resolver.resolve(episode_id) -> resolved | None
+      resolved 需暴露：identity_ref / data_hash / associated_observations(可数序列)
+    """
+
+    def __init__(self, experience_resolver: Any) -> None:
+        self._resolver = experience_resolver
+
+    def resolve(self, trigger_episode: str, current_identity: str,
+                expected_data_hash: str):
+        """解析并验证 trigger_episode 为真实、归属本 OCOS、证据关联的经历。"""
+        resolved = self._resolver.resolve(trigger_episode)
+        if resolved is None:
+            return None
+        if getattr(resolved, "identity_ref", None) != current_identity:
+            return None
+        if getattr(resolved, "data_hash", None) != expected_data_hash:
+            return None
+        return resolved
+
+    def count(self, resolved_experience) -> int:
+        """从解析后的真实经历推导 occurrences（B）—— 非 caller 可信输入。"""
+        return len(getattr(resolved_experience, "associated_observations", []))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# G3: _classify_divergence — expected+actual → 结构化 divergence_kind（D）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _classify_divergence(expected: Any, actual: Any) -> str:
+    """确定性分类器：同输入同输出，产出结构化 divergence_kind（非 bool）。
+
+    divergence_kind ∈ {"none","type_mismatch","missing","unexpected_value",
+                       "exceeds_bound","falls_short"}（见 _DIV_FAMILY）。
+    expected == actual → "none"（无差异 → 不触发 conflict/reframe 类）。
+    """
+    if expected == actual:
+        return "none"
+
+    # 数值型偏离：方向由 magnitude 侧决定（exceeds_bound / falls_short）
+    ne, na = _as_number(expected), _as_number(actual)
+    if ne is not None and na is not None and ne != na:
+        return "exceeds_bound" if na > ne else "falls_short"
+
+    es = str(expected).strip()
+    as_ = str(actual).strip()
+    el, al = es.lower(), as_.lower()
+
+    # 缺失类（expected 是"存在"预期而 actual 缺失）
+    if al == "missing" or (el in ("file exists", "exists") and al != "exists"):
+        return "missing"
+    # 退出状态类
+    if "exit" in el:
+        return "unexpected_value"
+    # 其余按类型错配处理
+    return "type_mismatch"
+
+
+def _as_number(x: Any):
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    if isinstance(x, str):
+        s = x.strip().lstrip("+-")
+        if s and (s.isdigit() or s.replace(".", "", 1).isdigit()):
+            try:
+                return float(x)
+            except ValueError:
+                return None
+    return None
+
+
+def _div_family(kind: str) -> str:
+    return _DIV_FAMILY.get(kind, "unknown")
+
+
+_DIVERGENCE_NOTE_RE = re.compile(r"divergence:([a-z_]+)")
+
+
+def _note_divergence_kind(note: str) -> str | None:
+    """从既有 judgment.note 提取上次 divergence_kind（用于类别改变检测）。"""
+    if not note:
+        return None
+    m = _DIVERGENCE_NOTE_RE.search(note)
+    return m.group(1) if m else None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# G3: WorldViewRecognitionRule — 从真实经历信号推导一切（judgment/frame/stance/recognition）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class WorldViewRecognitionRule:
+    """从验证过的真实经历 + 当前 worldview 推导结构化解（B+C+D+R 全推导）。
+
+    调用方对 recognize --(gate)--> 这里，只给候选事实观测；所有语义字段
+    （judgment / frame / stance_type / recognition_type / divergence_kind /
+    occurrences）都由本规则对事实 + 当前 worldview 确定性推导，禁预制。
+    """
+
+    def __init__(self, gate: WorldViewExperienceGate,
+                 current_worldview: WorldView | None = None) -> None:
+        self._gate = gate
+        self._current = current_worldview if current_worldview is not None else WorldView()
+
+    def claim_from(self, obs: EvidenceObservation, current_identity: str,
+                   evidence: S1Evidence) -> SelfClaim | None:
+        meta = _meta_to_dict(obs.meta)
+        domain = meta.get("domain")
+        expected = meta.get("expected")
+        actual = meta.get("actual")
+        trigger_episode = meta.get("trigger_episode")
+        # 候选事实必须齐全，否则 fail-closed。
+        if not domain or expected is None or actual is None or not trigger_episode:
+            return None
+        # ── C: provenance 门 — 失败 fail-closed ──
+        resolved = self._gate.resolve(trigger_episode, current_identity, evidence.data_hash)
+        if resolved is None:
+            return None
+        # ── B: occurrences 由真实经历推导（忽略 caller 的 occurrences_candidate）──
+        occurrences = self._gate.count(resolved)
+        if occurrences < _MIN_WV_OCCURRENCES:
+            return None
+        # ── D: divergence_kind 确定性分类 ──
+        divergence_kind = _classify_divergence(expected, actual)
+        # ── R: recognition_type / stance_type / frame / judgment / confidence ──
+        prior = self._current.get(domain)
+        if divergence_kind == "none" and prior is None:
+            return None  # 无既有判断且无差异 → 无 distinguishable pattern
+        recognition_type = self._derive_recognition_type(prior, divergence_kind)
+        stance_type = self._derive_stance_type(prior, divergence_kind)
+        frame = self._derive_frame(domain, divergence_kind)
+        judgment = _derive_judgment(domain, divergence_kind)
+        confidence = self._derive_confidence(occurrences, recognition_type)
+        return SelfClaim(
+            claim_id=f"{evidence.evidence_id}-WV",
+            kind=ClaimKind.WORLDVIEW_JUDGMENT,
+            statement=judgment,
+            target_component="worldview",
+            key=domain,
+            meta={
+                "domain": domain,
+                "divergence_kind": divergence_kind,
+                "recognition_type": recognition_type,      # RecognitionType 实例（内部）
+                "trigger_episode": trigger_episode,        # 已过 provenance 门（C）
+                "occurrences": occurrences,                # derived（B）
+                "frame": frame,                            # 规则生成，非输入
+                "stance_type": stance_type.value,          # 规则生成，非输入
+                "count": occurrences,                      # 兼容 evidence_count 映射
+            },
+            evidence=evidence,
+            source=SelfUpdateSource.RUNTIME_OBSERVATION,
+            confidence=confidence,
+        )
+
+    def _derive_recognition_type(self, prior, divergence_kind) -> RecognitionType:
+        if prior is None:
+            return RecognitionType.NOVEL_PATTERN
+        if divergence_kind == "none":
+            return RecognitionType.CONFIRM
+        prior_div = _note_divergence_kind(getattr(prior, "note", ""))
+        if prior_div is None:
+            # 旧判断无 divergence 标注（遗留）：视为稳定理解被打破 → 冲突
+            return RecognitionType.CONFLICT
+        if _div_family(divergence_kind) != _div_family(prior_div):
+            return RecognitionType.REFRAME          # 类别改变 → 新组织框架
+        if _is_opposite(divergence_kind, prior_div):
+            return RecognitionType.CONFLICT          # 同维反方向 → 修订
+        return RecognitionType.CONFIRM               # 同类别重复 → 一致/强化
+
+    def _derive_stance_type(self, prior, divergence_kind) -> StanceType:
+        if prior is None:
+            return StanceType.INTERPRETIVE
+        if divergence_kind == "none":
+            return StanceType.INTERPRETIVE
+        # 出现冲突/重构 → 认识到自身理解边界
+        return StanceType.EPISTEMIC if prior is not None else StanceType.NORMATIVE
+
+    def _derive_frame(self, domain: str, divergence_kind: str) -> str:
+        return f"在这类 {domain} 场景，观测可能出现 {divergence_kind} 差异"
+
+    def _derive_confidence(self, occurrences: int, recog: RecognitionType) -> float:
+        base = 0.5 + 0.06 * occurrences
+        if recog in (RecognitionType.CONFLICT, RecognitionType.REFRAME):
+            base -= 0.15
+        if recog is RecognitionType.CONFIRM:
+            base += 0.05
+        return round(min(0.9, max(0.3, base)), 3)
+
+
+def _is_opposite(kind: str, other: str) -> bool:
+    return {kind, other} == {"exceeds_bound", "falls_short"}
+
+
+def _derive_judgment(domain: str, divergence_kind: str) -> str:
+    return f"对于 {domain}，同类情形可能出现 {divergence_kind} 偏离"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Recognition — Evidence → Claim（最小接线，规则化，不发散）(Step 2b)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def recognize(evidence: S1Evidence) -> list[SelfClaim]:
+def recognize(evidence: S1Evidence, current: SelfModel | None = None,
+              experience_resolver: Any = None, tick_id: int = 0) -> list[SelfClaim]:
     """把 S1 Evidence 转换为候选 Self Claim（仅规则偿付，禁止凭空生成收益）。
 
     有明确准入门槛：能力实测次数 < _MIN_CAPABILITY_ATTEMPTS 时不产 Claim，
@@ -218,6 +454,22 @@ def recognize(evidence: S1Evidence) -> list[SelfClaim]:
                 kind, component = ClaimKind.CAPABILITY_UNCERTAIN, "capability_awareness"
         elif obs.key == "s1.failure_mode":
             kind, component = ClaimKind.FAILURE_PATTERN, "knowledge_boundary"
+        elif obs.key == "wv.experience":
+            # G3：反预制守护 — 输入禁携 judgment/frame/stance_type/recognition_type/divergence
+            forbidden = {"judgment", "frame", "stance_type", "recognition_type", "divergence"}
+            if any(k in meta for k in forbidden):
+                raise SelfEvidenceError(
+                    "prohibited pre-fabricated judgment fields in wv.experience meta"
+                )
+            if current is None or experience_resolver is None:
+                continue  # 无真实解析上下文 → fail-closed
+            gate = WorldViewExperienceGate(experience_resolver)
+            rule = WorldViewRecognitionRule(gate, current.worldview)
+            wv_claim = rule.claim_from(obs, current.identity_ref, evidence)
+            if wv_claim is None:
+                continue  # 未过 provenance 门 / 凝结准入 → fail-closed
+            claims.append(wv_claim)
+            continue
         else:
             continue
         claims.append(SelfClaim(
@@ -284,6 +536,22 @@ def delta_from_claim(current: SelfModel, claim: SelfClaim) -> SelfDelta:
             note=f"empirical failure; claims:{claim.claim_id}; ev:{claim.evidence.evidence_id}",
         )
         impact = -0.01
+    elif kind is ClaimKind.WORLDVIEW_JUDGMENT:
+        # G3：W1≠W0 语义结构门（A）—— 必须先构好 candidate new 再判结构变化。
+        wv = current.worldview
+        old = wv.get(claim.key) if wv is not None else None
+        meta = claim.meta
+        recog = meta.get("recognition_type")
+        if not isinstance(recog, RecognitionType):
+            raise SelfEvidenceError("worldview claim missing derived recognition_type")
+        new = _build_worldview_judgment(old, claim, meta, current)
+        if not _worldview_semantic_change(old, new):
+            # 仅 confidence/evidence/tick/continuity 变化，无结构变化 → 不产 W1 delta
+            raise SelfEvidenceError(
+                f"worldview semantic gate: no structural W1 for domain '{claim.key}' "
+                f"({recog.value} changed only confidence/evidence/tick)"
+            )
+        impact = _worldview_impact(recog)
     else:
         raise SelfEvidenceError(f"unknown claim kind: {kind}")
     return SelfDelta(
@@ -297,6 +565,75 @@ def delta_from_claim(current: SelfModel, claim: SelfClaim) -> SelfDelta:
         source=claim.source,
         confidence_impact=impact,
     )
+
+
+def _build_worldview_judgment(old, claim: SelfClaim, meta: dict,
+                              current: SelfModel) -> WorldViewJudgment:
+    """构造 candidate new judgment；CONFIRM（强化）复制旧结构，仅证据/置信/时间变化。"""
+    recog = meta["recognition_type"]
+    tick = current.version  # 以 committed version 作 tick 代理（pipeline 内部表示）
+    domain = claim.key
+    evidence_id = claim.evidence.evidence_id
+    expanded_ids = ((old.evidence_ids if old is not None else ()) + (evidence_id,))
+    if recog is RecognitionType.CONFIRM and old is not None:
+        # 一致/强化：结构沿用旧判断，仅证据/置信/时间变化 → 结构门必拒（不产 W1）
+        return WorldViewJudgment(
+            domain=domain,
+            judgment=old.judgment,
+            stance_type=old.stance_type,
+            frame=old.frame,
+            confidence=claim.confidence,
+            evidence_ids=expanded_ids,
+            source=claim.source.value,
+            claim_id=claim.claim_id,
+            created_tick=old.created_tick,
+            last_updated_tick=tick,
+            continuity=ContinuityKind.DERIVED,
+            note=f"confirm: divergence:{meta['divergence_kind']}, ev:{evidence_id}",
+        )
+    return WorldViewJudgment(
+        domain=domain,
+        judgment=claim.statement,
+        stance_type=StanceType(meta["stance_type"]),
+        frame=meta["frame"],
+        confidence=claim.confidence,
+        evidence_ids=expanded_ids,
+        source=claim.source.value,
+        claim_id=claim.claim_id,
+        created_tick=old.created_tick if old is not None else tick,
+        last_updated_tick=tick,
+        continuity=_continuity_for(old, recog),
+        note=f"divergence:{meta['divergence_kind']} [recognition:{recog.value}, ev:{evidence_id}]",
+    )
+
+
+def _worldview_semantic_change(old, new) -> bool:
+    """W1≠W0 = 语义结构变化：judgment/frame/stance_type 至少一者变化。"""
+    if old is None:
+        return True  # FIRST 形成
+    return not (
+        new.judgment == old.judgment
+        and new.frame == old.frame
+        and new.stance_type == old.stance_type
+    )
+
+
+def _continuity_for(old, recog: RecognitionType) -> ContinuityKind:
+    if old is None or recog is RecognitionType.NOVEL_PATTERN:
+        return ContinuityKind.FIRST
+    if recog is RecognitionType.REFRAME:
+        return ContinuityKind.REPLACED
+    if recog is RecognitionType.CONFLICT:
+        return ContinuityKind.REVISED
+    return ContinuityKind.DERIVED
+
+
+def _worldview_impact(recog: RecognitionType) -> float:
+    if recog in (RecognitionType.CONFLICT, RecognitionType.REFRAME):
+        return 0.05
+    if recog is RecognitionType.NOVEL_PATTERN:
+        return 0.03
+    return 0.01
 
 
 def apply_delta(candidate: SelfModel, delta: SelfDelta) -> None:
@@ -317,6 +654,13 @@ def apply_delta(candidate: SelfModel, delta: SelfDelta) -> None:
             kb = KnowledgeBoundary()
             candidate.knowledge_boundary = kb
         kb.declare(delta.new_value)
+    elif kind is ClaimKind.WORLDVIEW_JUDGMENT:
+        # G3：apply 到 worldview 容器（增量）
+        wv = candidate.worldview
+        if wv is None:
+            wv = WorldView()
+            candidate.worldview = wv
+        wv.declare(delta.new_value)
     else:
         raise SelfEvidenceError(f"unknown delta kind: {kind}")
 
@@ -331,40 +675,66 @@ class SelfEvidencePipeline:
 
     - 每个 Claim 一次的独立 governed commit（version+1），provenance 并入 update_history。
     - 任何写入库动作都由 SelfStateManager.commit_change 执行（经 SelfBoundaryRules 治理门）。
+    - G3：experience_resolver 注入真实 Experience/Episode 解析，worldview 因果链
+      （trigger_experience_id + recognition_type）只在 gate 验证通过后写入 contract。
     """
 
-    def __init__(self, manager) -> None:
+    def __init__(self, manager, experience_resolver: Any = None) -> None:
         self._manager = manager
+        self._experience_resolver = experience_resolver
 
     @property
     def manager(self):
         return self._manager
 
+    @property
+    def experience_resolver(self):
+        return self._experience_resolver
+
     def ingest(self, evidence: S1Evidence, tick_id: int = 1) -> list[SelfModel]:
         """Recognition → per-claim governed commit。返回每个成功提交的 committed 态。"""
         if evidence.is_empty:
             raise UnrecognizableEvidence("evidence has no observations")
-        claims = recognize(evidence)
+        claims = recognize(
+            evidence,
+            current=self._manager.current,
+            experience_resolver=self._experience_resolver,
+            tick_id=tick_id,
+        )
         if not claims:
             raise UnrecognizableEvidence(
                 "evidence did not cross recognition gate (insufficient/unknown)"
             )
         committed: list[SelfModel] = []
         for claim in claims:
-            delta = delta_from_claim(self._manager.current, claim)
+            try:
+                delta = delta_from_claim(self._manager.current, claim)
+            except Exception as e:  # noqa: BLE001 — 语义结构门/未知 kind 等按 claim 隔离
+                logger.info("claim %s produced no delta: %s", claim.claim_id, e)
+                continue
             candidate = self._manager.build_candidate()
             apply_delta(candidate, delta)
 
+            count = claim.meta.get("count") or claim.meta.get("attempts") or 1
             contract = SelfUpdateContract(
                 source=delta.source,
                 reason=claim.statement,
                 tick_id=tick_id,
                 fields_changed=(delta.target_component,),
-                evidence_count=max(1, int(claim.meta.get("count") or claim.meta.get("attempts") or 1)),
+                evidence_count=max(1, int(count)),
                 confidence_impact=delta.confidence_impact,
                 evidence_ids=(evidence.evidence_id,),
                 claim_id=claim.claim_id,
             )
+            # G3：worldview 因果链持久锚（C）— 仅当 gate 验证通过后写入（fail-closed）
+            if claim.kind is ClaimKind.WORLDVIEW_JUDGMENT:
+                recog = claim.meta.get("recognition_type")
+                if isinstance(recog, RecognitionType):
+                    contract = replace(
+                        contract,
+                        recognition_type=recog.value,
+                        trigger_experience_id=str(claim.meta.get("trigger_episode") or ""),
+                    )
             try:
                 committed.append(self._manager.commit_change(candidate, contract))
             except Exception as e:  # noqa: BLE001 — 治理拒绝等按单个 claim 隔离，不中断批次
@@ -381,6 +751,8 @@ __all__ = [
     "ClaimKind",
     "SelfClaim",
     "SelfDelta",
+    "WorldViewExperienceGate",
+    "WorldViewRecognitionRule",
     "capture_s1_snapshot",
     "recognize",
     "delta_from_claim",
