@@ -130,16 +130,20 @@ SelfModel
 
 ```text
 SelfDelta
-├── claim_ref         受影响的 Claim
-├── from_value        旧认识（即 Z 或上一个状态）
-├── to_value          新认识（即 Y）
-├── type              strengthen / weaken / reverse / uncertain
-├── reason            ★为什么变（必填，否则不算 delta）
-├── evidence[]        触发证据
-├── counterfactual_Z  反事实基线（见 G4）
-├── created_at        时间锚
-└── affects           self_claim | worldview_claim
+├── delta_id           稳定对象标识
+├── claim_ref          受影响的 Claim
+├── from_value         旧认识（Self 认知变化之起点；即 Z 或上一个状态）
+├── to_value           新认识（Self 认知变化之终点）
+├── type               strengthen / weaken / reverse / uncertain
+├── reason             ★为什么变（必填，否则不算 delta）
+├── evidence[]         触发证据
+├── counterfactual_Z   反事实基线（见 G4）
+├── created_at         时间锚
+├── affects            self_claim | worldview_claim
+└── cognition_implication  这个 Self Delta 如何改变下一次思考
 ```
+
+> 正式规范以 `OCOS_SELFSTATE_SCHEMA_V1_FREEZE.md` §3.1 为唯一标准。
 
 **G1 + G2 一旦确定，持久化自然成形，而不是先设计一堆表**：
 
@@ -205,7 +209,8 @@ Worldview:    "我目前认为在环境 E 中，X 通常会导致 Y"
 ```
 
 **红线**：Worldview 是带主体视角、证据和置信度的认识，不是 WorldModel 的副本。
-（G5 待决：与 WorldStore / Knowledge 的正式投影口径，见 §11。）
+
+**G5 已冻结：Worldview 是 Self 对 WorldModel / Knowledge / Experience 综合形成的主体性认识，不复制 WorldModel。**（正式规范见 `OCOS_SELFSTATE_SCHEMA_V1_FREEZE.md` §6）
 
 ---
 
@@ -299,16 +304,16 @@ OCOS 的核心不再是一个"有很多认知模块的 Agent"，而是：
 ## 12. 路线（冻结）
 
 ```text
-① Self Identity Audit v0.2        ✅（GO/可冻结）
-② SelfState Semantics v0.1→v0.2   ← 当前
-③ SelfState v1 Freeze             ⬜（等 G1–G5）
-④ Claim / Delta / Continuity 语义冻结 ⬜
-⑤ 913 文件反查                    ⬜
-⑥ 每个现有模块映射到：
-   Self / Evidence / World / Memory / Cognition / Governance / Tool / Legacy
-⑦ 从目标"我"反推代码去留          ⬜
-⑧ 形成 P0/P1/P2                   ⬜
-⑨ 最后才进入实现                  ⬜
+① Self Identity Audit v0.2          ✅ FREEZE
+② SelfState Semantics v0.2          ✅ FREEZE
+③ SelfState v1 Freeze               ✅ FREEZE
+④ Claim / Delta / Continuity Freeze ✅ FREEZE
+⑤ 913-file reverse mapping          ⬜ NEXT
+⑥ 模块语义映射（8 类：
+   Self / Evidence / World / Memory / Cognition / Governance / Tool / Legacy）
+⑦ Retain / Rewrite / Merge / Archive
+⑧ P0 / P1 / P2
+⑨ Implementation
 ```
 
 **为什么不跳过 ③④ 直接接 S2**：避免把一个还没有完全定义清楚的"我"接进生产系统。

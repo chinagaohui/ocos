@@ -456,13 +456,12 @@ G5 Worldview Projection  → "我对世界的认识是什么，而不是世界�
 本文件冻结后，才允许进入 **913 文件反查**。顺序：
 
 ```text
-① Self Identity Audit v0.2        ✅
-② SelfState Semantics v0.2        ✅
-③ SelfState v1 Freeze（本文件）    ✅ FREEZE
-④ Claim / Delta / Continuity Freeze ✅（含于本文件 §2–§4）
-⑤ 913-file reverse mapping        ⬜ 下一步
-⑥ 模块映射 8 类：
-   Self / Evidence / World / Memory / Cognition / Governance / Tool / Legacy
+① Self Identity Audit v0.2          ✅ FREEZE
+② SelfState Semantics v0.2          ✅ FREEZE
+③ SelfState v1 Freeze               ✅ FREEZE
+④ Claim / Delta / Continuity Freeze ✅ FREEZE
+⑤ 913-file reverse mapping          ⬜ NEXT
+⑥ 模块语义映射（8 类：Self / Evidence / World / Memory / Cognition / Governance / Tool / Legacy）
 ⑦ Retain / Rewrite / Merge / Archive
 ⑧ P0 / P1 / P2
 ⑨ Implementation
@@ -474,3 +473,61 @@ G5 Worldview Projection  → "我对世界的认识是什么，而不是世界�
 > 如果它不存在，那个"我"的哪一种连续性会断掉？
 
 而不是"这个模块有没有用"。**先定义"我是谁"，再检查代码里哪些东西真正服务于这个"我"** —— 不能被现有代码结构绑架。
+
+---
+
+## 14. 913 文件反查判定矩阵（冻结）
+
+**SelfState v1 已最小闭环，不再扩展字段。** 反查阶段从"这个模块有没有价值"改为以下判定矩阵：
+
+| 维度 | 必答问题 |
+|---|---|
+| Subject | 它服务"我"的哪个部分？ |
+| Domain | Identity / Situation / Memory / Experience / Capability / Worldview / Cognition？ |
+| Semantic Role | Self / Evidence / World / Memory / Cognition / Governance / Tool / Legacy？ |
+| Evidence | 它产生什么可验证证据？ |
+| Mutation | 它能改变 SelfState 什么？ |
+| Continuity | 它维持哪一种连续性？ |
+| Causality | 能否进入 X → D → Y？ |
+| Authority | 它有没有改变 Self 的权限？ |
+| Persistence | 它的状态是否跨 restart 连续？ |
+| Production | 是否真正进入生产主链？ |
+| Disposition | Retain / Rewrite / Merge / Archive |
+
+**最后一个问题（冻结）**：
+
+> 如果这个模块删除，"我"的哪一种连续性会断？
+
+若答案是"没有任何 Self / Memory / Experience / Cognition / World / Governance 连续性会断"，那么即使它"功能很多"，**也没有资格因为"有用"留在主体核心里**。
+
+### 14.1 第一阶段只做语义映射，不做整改
+
+```text
+913 files
+   ↓
+Semantic Reverse Mapping
+   ↓
+每个模块属于什么
+   ↓
+服务 Self 的哪一部分
+   ↓
+依赖什么
+   ↓
+产生什么证据
+   ↓
+是否维持连续性
+   ↓
+生产是否真实使用
+```
+
+然后得到三分：
+
+```text
+Core Self          Cognitive/World       External
+Retain / Rewrite   Retain / Merge        Tool / Capability
+New                Archive
+        ↓
+P0 / P1 / P2 → Implementation
+```
+
+**代码不再定义 OCOS；SelfState 开始定义代码应该留下什么。**
