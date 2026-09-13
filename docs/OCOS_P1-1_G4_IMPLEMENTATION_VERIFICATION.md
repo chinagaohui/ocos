@@ -1,6 +1,8 @@
 # OCOS P1-1 G4 — Worldview → Thinking Consumption 实施验证报告
 
-> 状态：**G4 IMPLEMENTATION COMPLETE — 提交 Human Gate 终裁**。
+> 状态：**G4 PASS / FROZEN ✅（Human Gate 终裁，2026-09-14）**。
+> 终裁：G4-A~H / Production Read-Path / P-E1~P-E6 / I1·I2·I3 / Regression / Scope / Authority Boundary 全部 PASS。
+> **G4 正式收口，不再继续扩展。P1-1D = NOT AUTHORIZED，下一步仅允许 Scope Assessment，不得直接实施。**
 > 授权依据：`docs/OCOS_P1-1_G4_IMPLEMENTATION_PLAN.md`（×2 修订稿，Human Gate：**G4 IMPLEMENTATION GO ✅**）
 > + `docs/OCOS_P1-1_G4_SCOPE_AMENDMENT_PRODUCTION_READPATH.md`（Human Gate：**G4 Scope Amendment = GO**，补齐生产 Thinking 真实消费证据）。
 > 承接已 FROZEN 的 G1 Physical Seat（PASS）、G3 formation chain（PASS/FROZEN，Experience→Evidence→Provenance Gate→Derived statistics→Recognition→Claim→Delta→Govern→W1）。
@@ -34,7 +36,9 @@ Production Thinking Read-Path 接线（converse.py 唯一生产接线）
        ↓
 G4 Verification P-E1~P-E6（生产消费实证）
        ↓
-Human Gate: G4 PASS? / FROZEN        ← 待终裁
+Human Gate 终裁：G4 PASS / FROZEN ✅（2026-09-14）
+       ↓
+P1-1D Scope Assessment（下一步，仅审计，不得直接实施）
 ```
 
 **能力声明边界（严格保持）**：G4 完成后最多只能声明——
@@ -427,10 +431,13 @@ ruff check ocos/self/self_state.py / ocos/interaction/converse.py
 
 ---
 
-## 9. Human Gate（终裁提交）
+## 9. Human Gate（终裁记录）
 
-- 本报告 = **G4 Implementation Evidence / Verification Report（含 Scope Amendment 生产消费补证）**。
-- 请 Human Gate 裁决：**G4 PASS（FROZEN）？** 或 AMENDED / NO-GO。
+- **终裁：G4 PASS / FROZEN ✅（2026-09-14）**。
+- G4 正式收口，不再继续扩展。P1-1D = NOT AUTHORIZED。
+- 冻结生产面：`get_committed_worldview()` → `WorldViewContextBlock` / `WorldViewReadAdapter` / `ThinkingContextProvider` → `ChatResponder.build_context()` → Production Thinking Input。
+- 冻结已验证判据：G4-D（W0→W1→Input Diff）、G4-E（Input Diff→Reasoning-context Output Diff）、P-E2（Production Prompt Diff）、P-E3（No-W1 Zero-Impact）、P-E4（No Reverse Mutation）、P-E5（Production Source Trace）。
+- 下一步：**P1-1D Scope Assessment**（只读审计，不得直接实施）。
 
 ### 9.1 终裁理由（十三项）
 
@@ -470,4 +477,4 @@ P-E2/P-E3 生产差分与零影响判据（剥离块逐字节相等 / 无 W1 零
 
 ---
 
-*本报告为 G4 收口裁决材料。G4 实现 + G4-A~H + P-E1~P-E6 验证已完成（14 passed + 受影响回归 113 passed，合计 127 passed / 0 failed），提交 Human Gate 终裁：G4 PASS（FROZEN）？ 下一步 P1-1D 另行授权。*
+*G4 收口裁决材料（终裁：PASS / FROZEN，2026-09-14）。G4-A~H + P-E1~P-E6 全部通过（14 passed + 受影响回归 113 passed，合计 127 passed / 0 failed）。下一步 P1-1D 仅允许 Scope Assessment，另行授权。*
