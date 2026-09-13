@@ -974,6 +974,34 @@ class ChatResponder:
         except Exception as e:
             logger.debug("self state projection failed: %s", e)
 
+        # G4: Worldview → Thinking consumption（P1-1 G4 Scope Amendment，唯一生产接线）。
+        # 生产链：committed W1 → SelfProjectionAccessor → WorldViewReadAdapter →
+        #        ThinkingContextProvider → build_context() → 生产 Thinking Context/Prompt
+        #        → ChatResponder 真实 reasoning path。
+        # 边界（FROZEN）：只读投影，不推理、不判断、不修改；只进 Thinking input，
+        # 不接入 context_builder / decision_pipeline / agent_runtime / bridge。
+        # 无 W1（accessor None / 无 judgment）→ 块为空 → context 逐字节不变（G4-B 保持）。
+        # 「无 W1」≠「消费失败」：accessor/adapter/assembly 任何异常都不得静默降级
+        # 成"没有 worldview"（否则生产证据链会把真实接线故障掩盖掉）→ 显式 error。
+        try:
+            from ocos.self.self_state import get_self_projection
+            from ocos.self.worldview_read_adapter import ThinkingContextProvider
+            s2 = get_self_projection(self._db_path)
+            if s2 is not None:
+                blocks = ThinkingContextProvider(s2).build(
+                    base_self_context="")["worldview"]
+                if blocks:
+                    wv_lines = ["世界观（committed，结构化投影）:"]
+                    for b in blocks:
+                        wv_lines.append(
+                            f"  [{b['domain']}] {b['judgment']} "
+                            f"(frame={b['frame']}, stance={b['stance_type']}, "
+                            f"conf={b['confidence']}, claim={b['claim_id']}, "
+                            f"evidence={len(b['evidence_ids'])})")
+                    lines.append("\n".join(wv_lines))
+        except Exception as e:
+            logger.error("worldview consumption failed: %s", e, exception=e)
+
         # 记忆
         try:
             from ocos.memory.hub import MemoryHub
