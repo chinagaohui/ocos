@@ -1,7 +1,7 @@
 # OCOS 913-File Semantic Reverse Mapping（第一阶段）
 
 > **性质：只读语义映射，不写代码、不改模块。** 由 8 个并行反查代理按冻结契约 §14 判定矩阵跑完。  
-> **状态：v0.1 草案（domain 级 + 代表文件级）；完整到"逐文件行级"的颗粒度留作追加遍历。**  
+> **状态：v0.2 —— 裁决标准已升级（新增 SelfState Impact + 两级裁决门）；映射仍为 domain 级，⑥ 已进 symbol 级。**  
 > **文档链**：`OCOS_SELFSTATE_SCHEMA_V1_FREEZE.md`（契约）→ **本文件（反查结果）** → 待：⑥⑦⑧。  
 > **主线问题（契约 §14，冻结）**：这个模块服务于哪个部分的我？如果它不存在，"我"的哪一种连续性会断？
 
@@ -138,3 +138,87 @@ entry:  ocos/runtime/__main__.py → RuntimeKernel
 ## 附 · 反查代理清单（8 路，结果已并入上文）
 
 A=Self域(self/continuity/reflection/growth/living...) · B=记忆域 · C=世界域 · D=认知域 · E=行为自主域 · F=运行时内核域 · G=治理审计域 · H=能力学习遗留域+scripts/根。
+
+---
+
+## §A · 升级后的判定标准（v0.2，冻结自 FREEZE §14）
+
+### A.1 `SelfState Impact` 字段（新增）
+
+每文件/symbol 必答：**它最终改变 SelfState 的哪一部分？**
+∈ {Identity, Situation, Memory, Experience, Capability, Worldview, Cognition, **None**}
+
+- 值为 **None** → 继续问"它是不是 Governance / Tool？"
+- 连 Governance / Tool 都不是 → **高度疑似 Legacy**。
+
+作用：直接追问"这东西最终有没有成为『我的状态/经历/认识/变化』"，而非"有没有功能"。这会把 `learning/` 这类「功能正确但主体语义错误」的模块当场拆穿。
+
+### A.2 两级裁决门（新增，升级"删了断哪种连续性"）
+
+```text
+                    ┌─ SelfState Continuity ─ YES → Core
+Module ─────────────┤
+                    ├─ Governance / Authority   → Core Boundary
+                    ├─ World / Tool Capability → External Capability
+                    └─ None                     → Legacy / Archive
+
+第二道门（对 Core）：
+Core 能否进入 X → D → Y？
+  YES → 主体核心
+  NO  → 只是 Evidence / Memory / Tool / Governance？→ 保留，但 NOT Self Core
+```
+
+### A.3 防误判红线："重要 ≠ 属于 Self"
+
+SQLite=Persistence · LLM=External Cognition Resource · WorldModel=World · DecisionBridge=Authority · Governance=Boundary · Shell=Capability —— 都不是"我"。
+
+### A.4 单个模块可含多角色（learning/ 为例，禁止整体判属主核）
+
+```text
+Evidence Producer      → Retain
+Experience Recognizer  → Retain / Rewrite
+Knowledge Learner      → Retain
+Self Delta Generator   → Rewrite
+Legacy Learning Path   → Archive
+```
+
+---
+
+## §B · ⑥ Symbol 级 pilot：`learning/`（13 文件）
+
+> 目标：证明"不能把 learning/ 整体判为主核"。以下为**逐 class/function** 判定（14 字段，压缩展示）。**产出的东西只进 Knowledge，不等于改变了我**——判定依据：是否造成 Self Claim→Delta→Cognition Delta→影响未来思考。
+
+### B.1 `experience_learning.py`
+
+| Symbol | Domain | Role | SelfState Impact | Mutation | Causality | Production | Persistence | Disposition |
+|---|---|---|---|---|---|---|---|---|
+| `FailureCause` (枚举) | Experience | Evidence | None | 分类标签 | — | 间接 | — | Retain |
+| `FailureDiagnoser.diagnose()` | Experience | Evidence | None | 产失败分类+证据信号 | X(部分) | 由 MasterAgent 调 | 否 | **Retain**（Evidence Producer） |
+| `EpisodeExampleConverter` | Memory→Experience | Evidence | None | 把 Episode→LearningExample | X | 有调用 | 否 | **Retain**（Experience Producer） |
+| `RuleBasedLearner.learn_fn()` | Experience | Knowledge(LESSON/RULE) | None | 写 LearningModel.rules（仅成功率统计） | ✗（不生成 Self Delta） | 有 | 是(SQLite) | **Rewrite**（Knowledge Learner，but not Self） |
+
+**关键**：`RuleBasedLearner` 产出的是 **Knowledge（系统知道失败）**，不是 **Self（我因失败而改变）**——`MonitoringLearner` 就是契约 §1.4 点名的伪成长（count/规则累积）。
+
+### B.2 `skill_growth.py`
+
+| Symbol | Domain | Role | SelfState Impact | Mutation | Causality | Production | Persistence | Disposition |
+|---|---|---|---|---|---|---|---|---|
+| `ReplanAction` (枚举, retry/skip/continue/ambiguous) | Capability | Tool/Governance | None | 决定重试/跳过策略 | X→策略 | 由调用方用 | 否 | **Retain**（Tool） |
+| `SkillProposer` (同任务成功 N 次→Candidate) | Experience→Capability | Evidence | None | 生成 Candidate Skill | ✗ | 有 | 是 | **Retain/Rewrite** |
+| Governed Skill 管线 (Candidate→Verified→Committed) | Capability | Governance | None | 候选需验证才授权（N=3 不授权） | — | 是 | 是 | **Retain**（边界守卫） |
+
+### B.3 `persistence.py` 等
+
+| File | Role | SelfState Impact | Disposition |
+|---|---|---|---|
+| `persistence.py` | Tool（SQLite 存储） | None | Retain（非 Self） |
+
+### B.4 learning/ 目录级裁决
+
+- **不属 Self Core**：learning/ 的输出全部落在 **Experience/Knowledge/Evidence 层**，`SelfState Impact` 绝大多数 = **None**。
+- **没有一条路径产出 Self Claim → Self Delta → Cognition Delta**（Causality 全是 X 或 ✗，无一处到 D）。
+- **不删**：它维持经历/记忆连续性（失败证据、经验样本、技能候选）——删了断"经历连续性"。
+- **但要 Rewrite 才能进阶**：目前是"系统知道失败"，要变成"我因失败而改变"，必须补 `Self Delta Generator`（把 Failure→Self Claim→Delta→Cognition Delta→影响下一思考）。
+- **Disposition 分布**：Retain≈8？ · Rewrite≈2（RuleBasedLearner→知识进 Self；补 delta 链） · Archive≈0 · 其中 Legacy Learning Path（若有未接线老规则路径）→ Archive（本 pilot 未发现明显死路径，标注待办）。
+
+> **本 pilot 结论 = 全库反查的样板**：`learning/` 是 **Experience/Evidence 源（留）** + **缺 Self Delta 主链（需 Rewrite）**，而非 Self Core。这正是"功能正确但主体语义错误"的典型。

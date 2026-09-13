@@ -492,7 +492,30 @@ G5 Worldview Projection  → "我对世界的认识是什么，而不是世界�
 | Authority | 它有没有改变 Self 的权限？ |
 | Persistence | 它的状态是否跨 restart 连续？ |
 | Production | 是否真正进入生产主链？ |
+| **SelfState Impact** | **它最终改变 SelfState 的哪一部分？** ∈ {Identity, Situation, Memory, Experience, Capability, Worldview, Cognition, **None**} |
 | Disposition | Retain / Rewrite / Merge / Archive |
+
+**SelfState Impact 判定规则（冻结）**：
+- 值为 **None** 时：继续问"它是不是 Governance / Tool？"
+- 若连 Governance / Tool 都不是 → **高度疑似 Legacy**。
+
+**Disposition 两级裁决门（冻结，升级末问）**：
+
+```text
+                    ┌─ SelfState Continuity ─ YES → Core
+Module ─────────────┤
+                    ├─ Governance / Authority   → Core Boundary
+                    ├─ World / Tool Capability → External Capability
+                    └─ None                     → Legacy / Archive
+
+第二道门（对 Core）：
+Core 能否进入 X → D → Y？
+  YES → 主体核心
+  NO  → 只是 Evidence / Memory / Tool / Governance？→ 保留，但 NOT Self Core
+```
+
+**防误判红线（冻结）："重要 ≠ 属于 Self"**
+SQLite=Persistence · LLM=External Cognition Resource · WorldModel=World · DecisionBridge=Authority · Governance=Boundary · Shell capability=Capability —— 它们都不是"我"。
 
 **最后一个问题（冻结）**：
 
