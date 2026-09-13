@@ -482,6 +482,35 @@ class SelfProjectionAccessor:
             })
         return out
 
+    def component_consumption(self, component: str) -> Optional[dict]:
+        """P0-4A：决策时刻【实际读取的组件】→ decision-relevant consumption manifest。
+
+        『我实际读了 self_projection.<component>』发生时即形成消费关系，而非读完
+        再遍历 update_history 猜『哪个 claim 对应它』。机制：
+          - 驱动变量是**被读取的组件名**（Decision₂ 真正访问的那一项）；
+          - 返回该组件当前值由哪个已提交 SelfUpdateContract 写入（provenance：
+            claim_id / evidence_ids）+ S2 版本 / content_hash。
+        只读、无副作用；不重算决策、不决定 Action。组件无 provenance 返回 None。
+        """
+        s = self._manager.current
+        history = list(getattr(s, "update_history", None) or [])
+        for contract in reversed(history):
+            fields = getattr(contract, "fields_changed", ()) or ()
+            if component not in fields:
+                continue
+            cid = getattr(contract, "claim_id", "") or ""
+            if not cid:
+                continue
+            return {
+                "self_version": s.version,
+                "claim_id": cid,
+                "delta_id": cid,  # decision-relevant delta = 该 claim 的身份
+                "evidence_ids": list(getattr(contract, "evidence_ids", ()) or ()),
+                "target_component": component,
+                "content_hash": self.content_hash,
+            }
+        return None
+
     def render(self) -> str:
         """文本投影：由已提交 S2 生成，非 Prompt 源、不读 S1。"""
         s = self._manager.current

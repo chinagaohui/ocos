@@ -128,6 +128,69 @@ class DecisionTraceStore:
             )
         return rec
 
+    def record_decision_contemporaneous(
+        self,
+        self_version: int,
+        consumed_delta_ids=(),
+        consumed_evidence_ids=(),
+        decision: str = "",
+        strategy: str = "",
+        action: str = "",
+        action_ids=(),
+        y_ref: Optional[str] = None,
+        thinking_trace_id: str = "",
+        decision_id: str = "",
+    ) -> tuple[ThinkingTrace, DecisionRecord]:
+        """P0-4A：同一事务原子持久化 ThinkingTrace + DecisionRecord。
+
+        本方法遵守冻结红线 —— `DecisionTraceStore` 是**记录器，不是 Decision Runtime**：
+          - 不重读 S2、不重算决策、不决定 Action。
+          - `consumed_delta_ids / consumed_evidence_ids / self_version` 由调用方
+            在【实际读取 S2 组件的那一刻】形成并传入（decision-relevant consumption）。
+          - 一个事务同时写入 ThinkingTrace 与 DecisionRecord，保证同一 identity、
+            同一时刻、先于 Action 效果持久化。
+        """
+        trace = ThinkingTrace(
+            thinking_trace_id=thinking_trace_id or _new_id("TNG"),
+            self_version=self_version,
+            consumed_delta_ids=tuple(consumed_delta_ids),
+            consumed_evidence_ids=tuple(consumed_evidence_ids),
+        )
+        rec = DecisionRecord(
+            decision_id=decision_id or _new_id("DEC"),
+            thinking_trace_id=trace.thinking_trace_id,
+            decision=decision,
+            strategy=strategy,
+            action=action,
+            action_ids=tuple(action_ids),
+            y_ref=y_ref,
+        )
+        with transaction(self._db_path) as conn:
+            conn.execute(
+                f"INSERT INTO {TABLE_DECISION_TRACE} "
+                f"(thinking_trace_id, self_version, consumed_delta_ids_json, "
+                f" consumed_evidence_ids_json, created_at) VALUES (?,?,?,?,?)",
+                (
+                    trace.thinking_trace_id, trace.self_version,
+                    _json(list(trace.consumed_delta_ids)),
+                    _json(list(trace.consumed_evidence_ids)),
+                    trace.created_at.isoformat(),
+                ),
+            )
+            conn.execute(
+                f"INSERT INTO {TABLE_DECISION_TRACE_DECISION} "
+                f"(decision_id, thinking_trace_id, decision, strategy, action, "
+                f" action_ids_json, y_ref, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    rec.decision_id, rec.thinking_trace_id, rec.decision,
+                    rec.strategy, rec.action,
+                    _json(list(rec.action_ids)),
+                    rec.y_ref,
+                    rec.created_at.isoformat(),
+                ),
+            )
+        return trace, rec
+
     # ── 读取 ─────────────────────────────────────────────────────────
 
     def thinking(self, thinking_trace_id: str) -> Optional[ThinkingTrace]:

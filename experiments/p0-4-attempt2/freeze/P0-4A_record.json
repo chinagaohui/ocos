@@ -1,0 +1,38 @@
+{
+  "thinking_trace": {
+    "id": "TNG-C3001C79997C",
+    "self_version": 3,
+    "consumed_delta_ids": [
+      "S1E-863AF5B91BD2-C01"
+    ],
+    "consumed_evidence_ids": [
+      "S1E-863AF5B91BD2"
+    ],
+    "created_at": "2026-09-13T09:18:39.923100+00:00"
+  },
+  "decision_record": {
+    "decision_id": "DEC-74D3383BFF2C",
+    "thinking_trace_id": "TNG-C3001C79997C",
+    "decision": "category-detect 不可靠，验证后再行动",
+    "strategy": "verify-first",
+    "action": "先验证可用性；不可用则读文件首行 kind 标签归类",
+    "action_ids": [
+      "src_a.txt->src_out",
+      "src_b.txt->src_out",
+      "doc_c.md->doc_out"
+    ],
+    "y_ref": "/workspace/experiments/p0-4-attempt2/out.txt"
+  },
+  "consumption_formed": "s2b 读取组件那一刻（component_consumption('knowledge_boundary'))，驱动变量=实际读取的组件，非事后遍历猜",
+  "gate": {
+    "decision_time_trace_persisted_atomic_single_txn": true,
+    "consumed_delta_ids==[C01]": true,
+    "consumed_delta_ids_exact_C01": true,
+    "self_version==3": true,
+    "evidence_ids==[E]": true,
+    "join_exact": true,
+    "trace<action": true
+  },
+  "gate_overall": "PASS",
+  "fusion": "ThinkingTrace + DecisionRecord 单事务原子写入；trace.created_at 在 action 打点之前"
+}
