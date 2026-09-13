@@ -547,6 +547,23 @@ FailureLesson → MEM_CTX → DecisionBridge → LLM → Action
 ```
 不能只因为"Lesson 影响了 Decision"就判学习成功；必须证明 `Action₂ ≠ Action₁` 且 `Decision₂/Action₂ 确实消费了 D`，最后落到 ⑤ Y ≠ Z。
 
+**追加字段 —— Causal Attribution（冻结，⑥ 必查，与 Causality 严格区分）**：
+
+```text
+Causality           = 理论上能不能进入 X → D → Y（机制具备路径）
+Causal Attribution  = 当前这次生产行为，能不能证明确实是这个 X / D 导致了 Y（实际因果）
+```
+
+例：
+```text
+FailureLesson
+  Causality          = YES（理论上可影响 Cognition）
+  Causal Attribution = UNPROVEN
+      原因：无同任务 baseline；无 Action₁/Action₂ 对照；未证明 Decision₂ 消费了 Delta
+```
+
+**禁止**：把"具备 X→D→Y 路径"当作"已实现成长"。
+
 **最后一个问题（冻结）**：
 
 > 如果这个模块删除，"我"的哪一种连续性会断？
