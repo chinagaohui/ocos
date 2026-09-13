@@ -1,10 +1,12 @@
-# OCOS P1-1 G4 — Worldview → Thinking Consumption Implementation Plan
+# OCOS P1-1 G4 — Worldview → Thinking Consumption Implementation Plan（×2 修订稿）
 
-> 状态：**G4 SCOPE ACCEPTED ✅ → 本文件 = G4 Implementation Plan（设计稿）。G4 Implementation = 仍 NOT AUTHORIZED**。
+> 状态：**G4 SCOPE ACCEPTED ✅ → 本文件 = G4 Implementation Plan ×2（设计稿）。G4 Implementation = 仍 NOT AUTHORIZED**。
 > 授权依据：`docs/OCOS_P1-1_G4_SCOPE_ASSESSMENT.md`（Human Gate：**G4 SCOPE ACCEPTED**）。
 > 承接：G3 已 **PASS / FROZEN**；G3 frozen 链（Experience→…→Govern→W1）为唯一 worldview 上游事实链。
-> 本文件回答：G4 改哪几处、WorldViewReadAdapter / ThinkingContextProvider 边界、消费入口选择、
-> G4-A~F diff 采集方式、防假消费判据落地、与 P1-1D 的边界。交 Human Gate 裁决 **G4 IMPLEMENTATION GO**。**不实现。**
+> Human Gate ×2 核心裁决（本修订吸收）：
+> 1. **G4 是读取，不是认知增强**。2. **G4 是 Thinking input，不是 Decision behavior**。
+> 3. **G4 消费 W1，不重新生成 W1**。四线：不碰 context_builder / decision_pipeline / agent_runtime / bridge。
+> 本文件交 Human Gate 裁决 **G4 IMPLEMENTATION GO**。**不实现。**
 
 ---
 
@@ -12,218 +14,282 @@
 
 | 项 | 状态 |
 | --- | --- |
-| 本 Plan（G4 Implementation Plan） | ✅ 授权产出 |
+| 本 Plan（G4 Implementation Plan ×2） | ✅ 授权产出 |
 | G4 Implementation | ❌ NOT AUTHORIZED（须本 Plan → Human Gate → 另行 GO） |
+| 改 context_builder.py / decision_pipeline.py / agent_runtime.py / bridge.py | ❌ 禁止（行为链，触碰即污染 P1-1D） |
 | 改 G3 frozen 链：self_evidence.py / WorldViewRecognitionRule / RecognitionType / Contract anchors | ❌ 禁止 |
-| 改 worldview.py 定义 | ❌ 禁止 |
-| 改 DecisionBridge / AgentRuntime 行为 / Execution | ❌ 禁止 |
+| 改 worldview.py / self_types.py 定义 | ❌ 禁止 |
+| 改 DecisionBridge / Execution | ❌ 禁止 |
 | 做行为实验（Y≠Z）/ 进入 P1-1D | ❌ 禁止 |
 | schema / migration | ❌ 禁止 |
 
 ---
 
-## 1. Scope — 最小改动表面
+## 1. G4 目标冻结
 
-| 文件 | 变更 | 性质 |
-| --- | --- | --- |
-| `ocos/self/self_state.py` | `SelfProjectionAccessor` 增 **只读** `worldview_context()` 方法：从 committed S2 worldview 生成结构化消费块；无 W1 → 返回空；同名旧方法（brief/render/project/committed_claims/component_consumption）零改动 | 增量，读侧，向后兼容 |
-| `ocos/self/worldview_consumption.py`（新） | +`WorldViewReadAdapter`（只读封装 committed worldview 读取）+`ThinkingContextProvider`（将 base Self 上下文 + worldview 块组装成 Thinking input context；**唯一消费入口**） | 增量，新增，只读 |
-| `ocos/tests/test_p1_1_g4_worldview_consumption.py`（新） | G4-A~G 用例矩阵 | 测试 |
-
-**明确不触碰**：`worldview.py`、`self_evidence.py`、G3 frozen 链、`DecisionBridge`、`AgentRuntime`、`Execution`、schema/migrations。
-
----
-
-## 2. 设计总则
-
-### 2.1 消费链（G4 只新增读路径，不触碰 G3 写链）
+**一句话目标**：建立 **W1 → Thinking Input** 的**合法读取通道**，并证明该读取会**改变 reasoning context**；**不证明智能提升、不改变行为**。
 
 ```text
-S2 committed worldview（G3 frozen 链产出，只读）
+Committed WorldView W1
         ↓
-SelfProjectionAccessor.worldview_context()      ← 只读投影（唯一 S2 读入口）
+WorldViewReadAdapter（只读）
         ↓
-WorldViewReadAdapter                            ← 只读封装，结构化 worldview 块
+Thinking Input Context（WorldViewContextBlock，结构化）
         ↓
-ThinkingContextProvider                          ← 组装 base Self + worldview → Thinking input context
-        ↓
-Thinking input changed（G4-D）
-        ↓
-Reasoning 读取该 input → 结构化 output diff（G4-E）
+Reasoning Output Diff（结构化，测试内确定性 consumer）
 ```
 
-**与 G3 的对称性**：
-- G3：`Experience 改变 → Recognition 改变 → W0→W1`（H3 结构门）。
-- G4：`W1 改变 → Thinking input 改变 → Reasoning output 改变`（G4-D/E）。
-- 两者共用同一边界哲学：**只认结构变化（judgment/frame/stance），不认 tick/confidence 跳动**。
+验证链：
 
-### 2.2 唯一消费入口选择（分阶段，三选一 → 推荐 context_builder 承接注入）
+```text
+W0 ≠ W1（G3 语义结构变化）
+      ↓
+input diff（G4-D）
+      ↓
+reasoning diff（G4-E）
+```
 
-审计事实（G4-Scope §1）：唯一 S2 读入口 = `SelfProjectionAccessor`；生产 prompt 经 `accessor.brief()`（recall_router:403 / converse:808）；`ContextBuilder` 是被动聚合袋（set_self_context → build → DecisionContext.self_summary），**非决策逻辑**。
-
-| 候选接入点 | 风险 | 结论 |
-| --- | --- | --- |
-| 直接改 `brief()` 内嵌 worldview | **高**：brief 是生产 prompt 自注入槽位，改写会动 G1 T6b 零影响基线 | 不采用 |
-| 新 `ThinkingContextProvider` 组装（推荐） | 低：新增只读组件，不改既有方法 | **采用为唯一消费入口** |
-| 注入到 `ContextBuilder.set_self_context` | 低-中：唯一真正进入决策上下文聚合的接线点，需受控 | **作为 Wiring 阶段承接（§3.6）** |
-
-**推荐**：消费的核心载体是新增的 `ThinkingContextProvider`；真正的生产注入点选择 **`ContextBuilder.set_self_context()`**（决策上下文 `self_summary` 槽位会带上 worldview 结构化块 —— 不触碰 DecisionBridge/AgentRuntime/Execution 逻辑本身，只是喂给既有聚合袋的 self 文本来源）。
+**G4 明确不做**：不进入 Decision/AgentRuntime/Bridge/Execution；不生成任何自然语言"我的世界观认为…"；不重新解释或重新生成 W1。
 
 ---
 
-## 3. 设计决策
+## 2. 消费链（只读，新增读路径）
 
-### 3.1 `SelfProjectionAccessor.worldview_context()`（只读，增量）
-
-```python
-# self_state.py — SelfProjectionAccessor 新增只读方法
-def worldview_context(self) -> list[dict]:
-    """从 committed S2 worldview 生成结构化消费块（只读，无副作用）。
-
-    无 worldview / 无 judgment → []（Thinking input 不变化 → G4-B/F 保持）。
-    每条 judgment 输出结构化字段：domain / judgment / stance_type / frame /
-    confidence / continuity / claim_id / evidence_ids。
-    不改 render/brief/project 等既有方法（G1 T6b 基线不变）。
-    """
-    wv = getattr(self._manager.current, "worldview", None)
-    if wv is None:
-        return []
-    return wv.summaries()          # WorldView.summary() 结构化视图（只读）
+```text
+S2 committed worldview（G3 frozen 链产出，经 Govern）
+        ↓
+SelfProjectionAccessor.get_committed_worldview()     ← read API（唯一读出口，committed only）
+        ↓
+WorldViewReadAdapter.consume()                      ← 只读，结构化 WorldViewContextBlock
+        ↓
+ThinkingContextProvider.build()                      ← 追加结构化 worldview 块（不改 base Self）
+        ↓
+Thinking Input Context（含 worldview block）
+        ↓
+Reasoning（读取该 context → 结构化 output）           ← G4-E 判据，非生产决策逻辑
 ```
 
-- **只读**：不提供任何写路径，复用 `SelfProjectionAccessor` "Thinking 只能消费此 accessor 输出"的既有纪律。
-- **零影响**：新增方法不动既有方法；无 W1 → `[]`，消费端自然不变化。
+**终止边界**：链条**止于 Thinking Input Context**。G4 **不做生产决策接线**（不注入 context_builder / decision_pipeline / agent_runtime）。真实决策影响留给 P1-1D。
 
-### 3.2 `WorldViewReadAdapter`（新，只读）
+---
+
+## 3. 文件范围（最小改动表面）
+
+| # | 文件 | 变更 | 性质 |
+| --- | --- | --- | --- |
+| 1 | `ocos/self/self_state.py` | `SelfProjectionAccessor` 增 **只读** `get_committed_worldview()`：从 committed S2 worldview 出结构化块；无 W1 → `[]`；既有方法（brief/render/project/committed_claims/component_consumption）**零改动** | 增量，读侧，向后兼容 |
+| 2 | `ocos/self/worldview_read_adapter.py`（新） | +`WorldViewContextBlock`（结构化数据块）+`WorldViewReadAdapter`（只读封装）+`ThinkingContextProvider`（组装 Thinking Input Context） | 增量，新增，只读 |
+| 3 | `ocos/tests/test_p1_1_g4_worldview_consumption.py`（新） | G4-A~H 用例矩阵 | 测试 |
+
+**只允许修改/新增以上 3 项**。以下**绝对冻结不触碰**：
+
+```text
+self_evidence.py   ❌   worldview.py  ❌   self_types.py  ❌
+context_builder.py ❌   decision_pipeline.py ❌   agent_runtime.py  ❌
+bridge.py          ❌   DecisionBridge  ❌     Execution          ❌
+schema/migration   ❌
+```
+
+---
+
+## 4. 设计决策
+
+### 4.1 `SelfProjectionAccessor.get_committed_worldview()`（read API，只读）
 
 ```python
-# ocos/self/worldview_consumption.py —— 新增
-class WorldViewReadAdapter:
-    """只读封装：把 committed S2 worldview 投影为可被 Thinking 消费的规范块。
+# self_state.py — self_state.SelfProjectionAccessor 新增只读方法
+def get_committed_worldview(self) -> list[dict]:
+    """从 committed S2 worldview 导出结构化块（只读，无副作用）。
 
-    数据源唯一 = SelfProjectionAccessor.worldview_context()（committed，经 govern）。
-    只读：无写路径、不 bypass govern、不 touch G3 frozen 链。
+    数据源唯一 = self._manager.current.worldview（已 Govern 的 W1，唯一合法来源）。
+    无 worldview / 无 judgment → []（Thinking input 不变化 → G4-B/F 保持）。
+    仅暴露读：校验存在后原样结构化返回；不推理、不判断、不修改、不 fallback 生成。
+    不改 render/brief/project 等既有方法（G1 T6b 基线不变）。
     """
-    def __init__(self, accessor):
+    s = self._manager.current
+    wv = getattr(s, "worldview", None)
+    if wv is None:
+        return []
+    out = []
+    for dom in wv.iter_domains():
+        j = wv.get(dom)
+        if j is None:
+            continue
+        out.append({
+            "type": "worldview",
+            "domain": dom,
+            "judgment": j.judgment,
+            "frame": j.frame,
+            "stance_type": j.stance_type.value,
+            "confidence": j.confidence,
+            "continuity": j.continuity.value,
+            "claim_id": j.claim_id,
+            "evidence_ids": list(j.evidence_ids),
+            "source": "committed_self_projection",
+        })
+    return out
+```
+
+- **只读**：唯一读出口，复用 `SelfProjectionAccessor` "Thinking 只能消费此 accessor 输出"纪律；无写路径。
+- **不重新解释**：仅把已入库 W1 结构化搬移，无推导/判断/fallback。
+
+### 4.2 `WorldViewContextBlock`（结构化，非自然语言）
+
+```json
+{
+  "type": "worldview",
+  "version": 1,
+  "domain": "external_systems",
+  "judgment": "external systems tooling is unreliable",
+  "frame": "external_systems_are_uncertain",
+  "stance": "cautious",
+  "confidence": 0.82,
+  "continuity": "first",
+  "claim_id": "ev-…-WV",
+  "evidence_ids": ["ev-…"],
+  "source": "committed_self_projection"
+}
+```
+
+- **结构化、可审计**；后续 diff 采集友好；不给自然语言"我的世界观认为…"留位（防 prompt 假消费）。
+
+### 4.3 `WorldViewReadAdapter`（只读，禁止推理/判断/修改/fallback）
+
+```python
+# ocos/self/worldview_read_adapter.py —— 新增
+class WorldViewReadAdapter:
+    """只读封装：把 committed S2 worldview 投影为 Thinking 可消费的 WorldViewContextBlock 列表。
+
+    只读：无写路径、不推理不判断、不做 fallback 生成。
+    数据源唯一 = SelfProjectionAccessor.get_committed_worldview()（committed，经 Govern）。
+    禁止访问：WorldViewRecognitionRule / WorldViewExperienceGate / Claim 生成层。
+    """
+    def __init__(self, accessor) -> None:
         self._acc = accessor
 
     def consume(self) -> list[dict]:
         """返回结构化 worldview 块（无 W1 → []）。"""
-        return self._acc.worldview_context()
+        return self._acc.get_committed_worldview()
 
     def has_worldview(self) -> bool:
         return bool(self.consume())
 ```
 
-### 3.3 `ThinkingContextProvider`（新，唯一消费入口）
+### 4.4 `ThinkingContextProvider`（唯一消费入口，只追加结构字段）
 
 ```python
-# ocos/self/worldview_consumption.py —— 新增
+# ocos/self/worldview_read_adapter.py —— 新增
 class ThinkingContextProvider:
-    """把 base Self 上下文 + worldview 块组装成 Thinking input context（唯一消费入口）。
+    """把 base Self 上下文 + worldview 块组装成 Thinking Input Context（唯一消费入口）。
 
-    原则：S2 committed worldview → Read Adapter → Thinking input。
-    input context 的 worldview 部分由 W1 结构变化驱动；CONFIRM（仅置信/证据）不产生变化（G4-F）。
+    原则：S2 committed worldview → Read Adapter → Thinking input。只追加结构化字段，
+    不改 base Self 自然语言段（G4-B 逐字节保 true）；CONFIRM 不改变 input（G4-F）。
+    本组件只产出 Thinking Input Context，不接入任何生产决策执行。
     """
-    def __init__(self, accessor):
+    def __init__(self, accessor) -> None:
         self._adapter = WorldViewReadAdapter(accessor)
 
     def build(self, base_self_context: str = "") -> dict:
         return {
-            "self": base_self_context,        # 既有 Self 上下文（逐字节转发，不改）
-            "worldview": self._adapter.consume(),  # 结构化块；无 W1 → []
+            "self": base_self_context,                     # 逐字节转发，不改
+            "worldview": self._adapter.consume(),          # 结构化块；无 W1 → []
         }
 
     def worldview_for(self, domain: str) -> dict | None:
-        for j in self._adapter.consume():
-            if j["domain"] == domain:
-                return j
+        for b in self._adapter.consume():
+            if b["domain"] == domain:
+                return b
         return None
 ```
 
-### 3.4 G4-E 结构化推理 diff（不引入行为实验，不要求任务成功率）
+### 4.5 G4-E 结构化推理 diff（不引入行为实验，不要求任务成功率）
 
-**不接 LLM 作 G4 判据**（LLM 有随机性）。G4-E 用**确定性结构化推理消费者**证明：
+**不接 LLM 作 G4 判据**（随机性）。G4-E 用**确定性结构化 reasoning consumer**（测试内，非生产决策逻辑）证明：
 对同一推理输入，W1 存在/不存在 → 结构化输出可区分（只改"结构化字段值 + 归因 reason"）。
-示例（测试内确定性 consumer，非生产决策逻辑）：
 
 ```text
 baseline（无 worldview）:
     risk_assessment = unknown
     rationale       = <base self only>
+    worldview_used  = null
 
-with worldview（W1: tool 域 frame=caution）:
+with worldview（W1: domain=external_systems frame=caution）:
     risk_assessment = high
-    rationale       = worldview.frame(caution) for tool
-    worldview_used  = {"domain": "tool", "claim_id": "...", "evidence_ids": [...]}
+    rationale       = worldview.frame(external_systems_are_uncertain) for external_systems
+    worldview_used  = {"domain": "external_systems", "claim_id": "ev-…-WV",
+                       "evidence_ids": ["ev-…"]}
 ```
 
-即：G4-E 只证明 **worldview 块真的进入了推理输入并被结构化输出引用**（可归因到 claim_id/evidence_ids），
+即：G4-E 只证明 **worldview 块真的进入推理输入并被结构化输出引用（可归因 claim_id/evidence_ids）**。
 **不要求**任务成功率提升 / 行为改善 / 长期策略变化。
 
-### 3.5 防假消费终审（G4-F）
+### 4.6 防假消费 / 权限边界
 
-- 仅 confidence / evidence_ids 变化（无结构 W1）→ `worldview_context()` 输出稳定 → `ThinkingContextProvider.build()` 的 worldview 块不变 → **Thinking input 不变化**。
-- 与 G3 `_worldview_semantic_change` 同构对齐；G4 测试复用 G3 的 CONFIRM 路径构造。
+- **G4-F**：仅 confidence / evidence_ids 变化（无结构 W1）→ `get_committed_worldview()` 稳定 → provider.build() 的 worldview 块不变 → **Thinking input 不变化**（与 G3 `_worldview_semantic_change` 同构）。
+- **G4-H 权限边界（反向影响守卫）**：Thinking 读取**不得**反向改变 Self —— 修改 `ThinkingInputContext` / 消费产物，不能改 `WorldView / Claim / Delta / Govern`，否则成 `Thinking → Self` 自我污染。测试断言：消费路径（adapter/provider 只读）`_manager.current` 及其 worldview/update_history/hash **逐字段不变**；G3 frozen 链文件 import hash 不变、版本不变。
 
-### 3.6 Wiring 阶段（唯一生产注入：`ContextBuilder.set_self_context`）
+### 4.7 数据权限设计（谁可读 / 谁不可读）
 
-- 唯一生产接线点 = `ContextBuilder.set_self_context(provider_built.self 文本 + worldview 块)`。
-- `ContextBuilder` 是被动聚合袋，`build()` 产出 `DecisionContext.self_summary`；**不改 `build()` / 决策逻辑 / DecisionBridge / AgentRuntime / Execution**。
-- reverse 性：该注入可回退，不影响既有 self_summary 语义；无 W1 时 worldview 块为空，self_summary 与旧行为等价。
-
----
-
-## 4. Safety Audit
-
-| 风险 | 守卫 | 证据 |
+| 层 | 权限 | 依据 |
 | --- | --- | --- |
-| 假消费（prompt 加字段即声称使用） | G4-D/E 双 diff；G4-F CONFIRM 不变 | §3.4/§3.5 / G4-D/E/F |
-| 破坏 G1 T6b 零影响基线 | 不改 brief/render；新方法增量；无 W1 → [] | §3.1 / G4-B |
-| 绕过 G3 frozen 链 | 消费端唯一来源 = committed S2 accessor；写端/G3 frozen 链零改动 | §3.1-3.3 / G4-C |
-| 触碰 Decision 逻辑 | 只喂 `ContextBuilder.set_self_context` 文本；build()/DecisionBridge/AgentRuntime/Execution 零改动 | §3.6 / G4-G |
-| G4-E 越界（任务成功率/行为改善） | G4-E 限定为结构化 output diff，不要求行为 Delta | §3.4 / §6 |
-| 改动面失控 | 仅 2 生产文件（1 改增量 + 1 新）+ 1 测试文件 | §1 |
-
-**新增面核对**：`SelfProjectionAccessor.worldview_context`（只读）、`WorldViewReadAdapter`（只读）、`ThinkingContextProvider`（只读组装）。**无新 authority、无新存储、无写路径、不改既有方法**。
+| **读** `SelfProjectionAccessor.get_committed_worldview()` | ✅ 允许 | 唯一读出口 |
+| **读** `SelfModel.worldview`（经 accessor） | ✅ 允许（只读） | source=committed |
+| **读** `WorldViewRecognitionRule` / `WorldViewExperienceGate` / Claim 生成层 | ❌ 禁止 | G4 不能重新解释世界观，只消费 Govern 后 W1 |
 
 ---
 
 ## 5. Verification（G4 GO 后执行）
 
-载体：`ocos/tests/test_p1_1_g4_worldview_consumption.py`（G4-A~G）。
+载体：`ocos/tests/test_p1_1_g4_worldview_consumption.py`（G4-A~H）。
 
 | # | 用例 | 判据 |
 | --- | --- | --- |
-| G4-A | 读取点存在 | W1 存在 → `worldview_context()` / provider.build() 含 worldview 结构化块（domain/judgment/stance/frame/claim_id/evidence_ids） |
-| G4-B | 零影响基线 | 无 W1 → `[]`；provider.build() 的 self 段与 base 逐字节一致（G1 T6b 语义保持） |
-| G4-C | 只读消费 | 消费端只读 committed S2；不写 S2、不改 G3 frozen 链（import hash 不变） |
-| G4-D | **input changed** | W1 形成（结构变化）前后，provider.build() 的 worldview 块 diff ≠ ∅ 且可归因到 judgment/frame/stance |
-| G4-E | **output changed** | 确定性结构化 consumer：W1 存在 vs 不存在 → 结构化输出（risk_assessment + worldview_used 归因）可区分 |
+| G4-A | 读取存在 | W1 存在 → `get_committed_worldview()` / provider.build() 含 worldview 块（judgment/frame/stance/confidence/continuity/claim_id/evidence_ids/source） |
+| G4-B | 零影响基线 | 无 W1 → `[]`；provider.build() 的 self 段与 base **逐字节一致**（G1 T6b 语义保持） |
+| G4-C | 只读消费 | 消费后 `_manager.current`（worldview/update_history/hash/version）不变；G3 frozen 链 import hash 不变 |
+| G4-D | **input changed** | W1 形成（结构变化，如 frame: unknown→high_risk_external）前后，provider.build() worldview 块 diff ≠ ∅ 且归因到 judgment/frame/stance |
+| G4-E | **output changed** | 确定性结构化 consumer：W1 存在/不存在 → 结构化输出（risk_assessment + worldview_used 归因）可区分 |
 | G4-F | 防假消费 | CONFIRM（仅置信/证据）→ worldview 块不变 → input 不变（同 G3 V-sg） |
-| G4-G | 回归 | 受影响集合（self_state / context_builder / G1 / G3 / step1-3）全绿 |
+| G4-G | 回归 | 受影响集合（self_state / G1 / G3 / step1-3 / phase40）全绿 |
+| G4-H | **Authority Boundary** | 修改 ThinkingContext/消费产物不反向改变 WorldView/Claim/Delta/Govern（version、content_hash、update_history、worldview 全等） |
 
-**diff 采集方式**：对 `provider.build()["worldview"]`（list[dict]）做 canonical 逐项比较（domain/judgment/frame/stance tuple + claim_id/evidence_ids）；对 G4-E 结构化 consumer 输出做字段级 tuple diff。
+**diff 采集方式**：worldview 块 canonical 逐项比较（domain/judgment/frame/stance tuple + claim_id/evidence_ids + confidence + continuity）；G4-E consumer 输出做字段级 tuple diff。
 
-**G4 PASS 门槛**：G4-A~G 全过，且出现**至少一条"结构 W1 → input diff → output 可区分"完整链**（G4-D+E 联合）。仅 A/B/C 不构成 PASS。
+**G4 PASS 门槛**：G4-A~H 全过，且出现**至少一条"结构 W1 → input diff → output 可区分"完整链**（G4-D+E 联合）。仅 A/B/C 不构成 PASS。
 
 ---
 
-## 6. Non-Goals / 递延
+## 6. Safety Audit
 
-- G4 不证明**生产用户可得性**：`ContextBuilder` 注入真实 runtime 场景的端到端验证与真实 LLM prompt 效果，属 Wiring 后续 + P1-1D 前置，另行处理。
-- G4 不做行为改变（Y≠Z）→ P1-1D，另行授权。
-- G4 不改 G3 frozen 链 / schema / DecisionBridge / AgentRuntime / Execution。
+| 风险 | 守卫 | 证据 |
+| --- | --- | --- |
+| 假消费（prompt 加字段即声称使用） | G4-D/E 双 diff；G4-F CONFIRM 不变 | §4.5/4.6 / G4-D/E/F |
+| 破坏 G1 T6b 零影响基线 | 不改 brief/render；新方法增量；无 W1 → []；self 段逐字节转发 | §4.1-4.4 / G4-B |
+| 绕过 G3 frozen 链 / 重新生成 W1 | 消费端唯一来源 = committed accessor；禁止访问 Recognition/Claim 层 | §4.7 / G4-C |
+| **反向污染 Self**（Thinking→Self） | G4-H 权限边界；adapter/provider 纯只读 | §4.6 / G4-H |
+| 触碰行为链（Decision/AgentRuntime/Bridge） | 消费终止于 Thinking Input Context；禁止注入四线文件 | §2/§3 / G4-G |
+| G4-E 越界（任务成功率/行为改善） | 限定结构化 output diff，不要求行为 Delta | §4.5 / §7 |
+| 改动面失控 | 仅 2 生产文件增量/新增 + 1 测试文件 | §3 |
+
+**新增面核对**：`SelfProjectionAccessor.get_committed_worldview`（只读）、`WorldViewReadAdapter`（只读）、`ThinkingContextProvider`（只读组装）、`WorldViewContextBlock`（数据结构）。**无新 authority、无新存储、无写路径、无生产决策接线、不改既有方法**。
+
+---
+
+## 7. Non-Goals / 递延
+
+- G4 不做生产决策接线（context_builder / decision_pipeline / agent_runtime / bridge 四线冻结）—— 真实行为影响留给 P1-1D。
+- G4 不接 LLM 作验证判据（用确定性结构化 consumer）。
+- G4 不改 G3 frozen 链 / worldview / self_types / schema。
 - G4 之后仍须独立 Human Gate 才能进入 P1-1D。
 
 ---
 
-## 7. Human Gate
+## 8. Human Gate
 
-- 本文件 = **G4 Implementation Scope / Plan + Safety Audit（设计稿）**。**Implementation 仍 NOT AUTHORIZED。**
+- 本文件 = **G4 Implementation Scope / Plan ×2 + Safety Audit（设计稿）**。**Implementation 仍 NOT AUTHORIZED。**
 - Gate 裁决选项：**G4 IMPLEMENTATION GO** / **G4 PLAN AMENDED** / **G4 NO-GO**。
 - 冻结纪律不变：实现授权前不修改任何生产文件；G3 frozen 链不受本 Plan 影响。
 
 ---
 
-*本文件为 G4 实施规格（设计稿），非代码。等待 Human Gate 裁决。*
+*本文件为 G4 实施规格（设计稿 ×2），非代码。等待 Human Gate 裁决。*
