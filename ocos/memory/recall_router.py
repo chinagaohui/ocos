@@ -387,20 +387,20 @@ class RecallRouter:
         scored.sort(key=lambda it: (it.score, it.confidence), reverse=True)
         return scored[:budgets.get("procedural", 2)]
 
-    # ── 自我模型（复用 ocos.self.agent_self_model，Phase 2 接入）────────
+    # ── 自我模型（P0-1 Step 3: 唯一经 S2 committed projection，不复用 S1）──
 
     def _recall_self(
         self, grams: set[str], budgets: dict[str, int]
     ) -> list[RecallItem]:
-        """从 AgentSelfModel.render_brief() 取 ≤120 字自我画像。
+        """从 S2 committed projection 取紧凑自我摘要。
 
-        ocos.self 模块受隔离约束（不能 import memory 层），这里反向
-        引入是合法的（memory → self）。brief 为"能力/失败模式/专注"
-        的确定性聚合，无 LLM。
+        P0-1 Step 3: S1.render_brief() ✗ → S2 accessor.brief()（committed 态，不读 S1）。
+        brief 为 S2 的确定性聚合，无 LLM。
         """
         try:
-            from ocos.self.agent_self_model import AgentSelfModel
-            brief = AgentSelfModel(self._db_path).render_brief()
+            from ocos.self.self_state import get_self_projection
+            s2 = get_self_projection(self._db_path)
+            brief = s2.brief() if s2 is not None else ""
         except Exception:
             return []
         if not brief:

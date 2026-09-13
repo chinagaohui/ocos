@@ -573,6 +573,9 @@ class AgentRuntime:
             return
         self._self_state = SelfStateManager(self._db_path)
         self._self_state.boot(identity_ref)
+        # P0-1 Step 3: 注册为进程内 db 唯一 S2 accessor → 生产 Prompt 路径共享同一 committed S2。
+        from ocos.self.self_state import register_self_projection
+        register_self_projection(self._db_path, self._self_state.accessor)
         logger.info(
             "S2 SelfState activated v%d (identity_ref=%s)",
             self._self_state.version, identity_ref,

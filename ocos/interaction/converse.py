@@ -798,36 +798,18 @@ class ChatResponder:
                 kw_str = "、".join(f"{k}×{c}" for k, c in top)
                 parts.append(f"用户关注关键词: {kw_str}")
 
-            # 3. OCOS 对自己的能力认知（成功率）
-            cur.execute(
-                "SELECT capabilities, personality FROM agent_self_model "
-                "ORDER BY calibrated_at DESC LIMIT 1")
-            row = cur.fetchone()
-            if row:
-                caps = {}
-                try:
-                    caps = _json.loads(row['capabilities']) if isinstance(row['capabilities'], str) else (row['capabilities'] or [])
-                except Exception:
-                    pass
-                pers = {}
-                try:
-                    pers = _json.loads(row['personality']) if isinstance(row['personality'], str) else (row['personality'] or {})
-                except Exception:
-                    pass
-                if caps:
-                    top_caps = sorted(
-                        caps,
-                        key=lambda x: x.get('success_rate') or 0,
-                        reverse=True)[:3]
-                    cap_str = "、".join(
-                        f"{c['name']}成功率{(c.get('success_rate') or 0)*100:.0f}%"
-                        for c in top_caps if c.get('name', '?') != '?')
-                    if cap_str:
-                        parts.append(f"自身能力（实测）: {cap_str}")
-                if pers:
-                    risk = pers.get('risk_preference', '')
-                    if risk:
-                        parts.append(f"回复风格: {pers.get('reply_style','?')}，风险偏好: {risk}")
+            # 3. OCOS 对自己的能力认知 —— P0-1 Step 3: 唯一取自 S2 committed projection。
+            #    ✗ 旧逻辑直接读 S1 能力表（S1 live state → Thinking：S1 bypass）。
+            #    现改经 get_self_projection 取已提交 S2；无 S2 → 本槽缺省，绝不回退 S1。
+            try:
+                from ocos.self.self_state import get_self_projection
+                s2 = get_self_projection(self._db_path)
+                if s2 is not None:
+                    s2_brief = s2.brief()
+                    if s2_brief:
+                        parts.append(f"自身能力（已提交 S2）: {s2_brief}")
+            except Exception:
+                logger.debug("self capability hint via S2 unavailable", exc_info=True)
 
             db.close()
             return "用户画像:\n  " + "\n  ".join(parts) if parts else ""
@@ -980,12 +962,17 @@ class ChatResponder:
         except Exception as e:
             logger.debug("constitution context failed: %s", e)
 
-        # L4-2: 自我模型 — "我是谁"实测画像（daemon boot 加载 + tick 校准）
+        # L4-2: SelfState — "我是谁"权威投影（P0-1 Step 3: S2 committed projection，S1.render ✗）
+        # 仅取已提交 S2；无持久化 S2(:memory:/不可解析身份) → 降级为空，绝不回退 S1。
         try:
-            from ocos.self.agent_self_model import AgentSelfModel
-            lines.append(AgentSelfModel(self._db_path).render())
+            from ocos.self.self_state import get_self_projection
+            s2 = get_self_projection(self._db_path)
+            if s2 is not None:
+                s2_render = s2.render()
+                if s2_render:
+                    lines.append(s2_render)
         except Exception as e:
-            logger.debug("self model context failed: %s", e)
+            logger.debug("self state projection failed: %s", e)
 
         # 记忆
         try:

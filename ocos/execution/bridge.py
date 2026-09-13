@@ -2425,10 +2425,14 @@ class DecisionBridge:
             return ""
         facts: list[str] = ["【自我能力事实（实测真值，分析自身必须引用）】"]
         try:
-            from ocos.self.agent_self_model import AgentSelfModel
-            facts.append(AgentSelfModel(self._db_path).render())
+            from ocos.self.self_state import get_self_projection
+            s2 = get_self_projection(self._db_path)
+            if s2 is not None:
+                s2_render = s2.render()
+                if s2_render:
+                    facts.append(s2_render)
         except Exception:
-            logger.debug("self knowledge hint: self model unavailable",
+            logger.debug("self knowledge hint: self state projection unavailable",
                          exc_info=True)
         try:
             import sqlite3 as _sq

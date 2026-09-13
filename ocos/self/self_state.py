@@ -23,11 +23,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import types as _types
 import typing
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Optional
 
 from ocos.storage.connection import get_connection, transaction
 from ocos.storage.migrations import ensure_schema
@@ -468,6 +470,15 @@ class SelfProjectionAccessor:
         ]
         if s.capability_awareness:
             parts.append(f"  {s.capability_awareness.summary()}")
+            ca = s.capability_awareness
+            if ca.known:
+                # 已提交 S2 的 known 全集 → 权威 7 域自我表示的一部分。
+                # 确定性排序；标注可用性/置信度，Thinking 据此引用自身能力。
+                names = sorted(ca.known)
+                joined = ", ".join(
+                    f"{n}{'✓' if ca.known[n].available else '✗'}"
+                    for n in names)
+                parts.append(f"  known capabilities: {joined}")
         if s.knowledge_boundary:
             parts.append(f"  {s.knowledge_boundary.summary()}")
         if s.experience_profile:
@@ -477,6 +488,76 @@ class SelfProjectionAccessor:
         if s.cognitive_state:
             parts.append(f"  {s.cognitive_state.summary()}")
         return "\n".join(parts)
+
+    def brief(self) -> str:
+        """紧凑 Self 摘要（决策空间自注入用，≤~180 字级）。非 Prompt 源、不读 S1。
+
+        Thinking / 记忆路由的自注入槽位，等价替代 S1.render_brief()。
+        """
+        s = self._manager.current
+        bits: list[str] = []
+        ca = s.capability_awareness
+        if ca is not None and ca.known:
+            bits.append("capabilities:" + ", ".join(sorted(ca.known))[:90])
+        kb = s.knowledge_boundary
+        if kb is not None and kb.needs_verification:
+            domains = list(kb.needs_verification)[:3]
+            bits.append("needs_verification:" + "; ".join(str(d) for d in domains)[:60])
+        cs = s.cognitive_state
+        if cs is not None and cs.active_focus:
+            bits.append("focus:" + str(cs.active_focus)[:40])
+        return " | ".join(bits)
+
+
+# ── P0-1 Step 3：S2 → Thinking 的进程级唯一 accessor 路由 ─────────────────────
+# Thinking 的 authoritative Self source 唯一来自 S2 committed projection。
+# 生产 Prompt 路径（converse/bridge/recall_router）一律经此取 S2，**绝不回退 S1.render()**。
+
+
+_S2_LOCK = threading.Lock()
+_S2_ACCESSOR_REGISTRY: dict[str, "SelfProjectionAccessor"] = {}
+
+
+def register_self_projection(db_path: str, accessor) -> None:
+    """把已 boot 的 S2 accessor 注册为进程内 db 唯一 accessor（AgentRuntime boot 时调用）。"""
+    if not db_path or db_path == ":memory:":
+        return
+    with _S2_LOCK:
+        _S2_ACCESSOR_REGISTRY[db_path] = accessor
+
+
+def _resolve_identity_ref(db_path: str) -> Optional[str]:
+    """从持久化 identity 表解析唯一 agent_id（合法身份锚，非 S1 推导）。"""
+    try:
+        conn = get_connection(db_path)
+        row = conn.execute("SELECT agent_id FROM identity LIMIT 1").fetchone()
+        return str(row["agent_id"]) if row else None
+    except Exception:
+        return None
+
+
+def get_self_projection(db_path: str, identity_ref: Optional[str] = None):
+    """进程内 S2 唯一只读 projection（committed → 7-domain Self representation）。
+
+    - 优先返回已注册（runtime boot）的 accessor；否则按身份从持久化 reload committed S2。
+    - restart 后为持久化恢复的 committed 态，**不是**从 S1 重新构造。
+    - 无持久化载体(:memory:) 或 identity 不可解析 → None（调用方降级为空，绝不回退 S1）。
+    """
+    if not db_path or db_path == ":memory:":
+        return None
+    with _S2_LOCK:
+        acc = _S2_ACCESSOR_REGISTRY.get(db_path)
+        if acc is not None:
+            return acc
+    ident = identity_ref or _resolve_identity_ref(db_path)
+    if not ident:
+        return None
+    manager = SelfStateManager(db_path)
+    manager.boot(ident)
+    acc = manager.accessor
+    with _S2_LOCK:
+        _S2_ACCESSOR_REGISTRY.setdefault(db_path, acc)
+    return acc
 
 
 __all__ = [
@@ -488,6 +569,8 @@ __all__ = [
     "SelfStateStore",
     "SelfStateManager",
     "SelfProjectionAccessor",
+    "register_self_projection",
+    "get_self_projection",
     "serialize_state",
     "deserialize_state",
 ]
