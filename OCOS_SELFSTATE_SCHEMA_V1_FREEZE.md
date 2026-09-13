@@ -682,18 +682,23 @@ P0 / P1 / P2 → Implementation
 
 **P0 只有 4 条主链（不扩几十项）**：
 ```text
-P0-1 SelfState 真身通电   S2 = 真正参与 Thinking 的 Self；S1 = 能力证据（非"我"）
-P0-2 Self Delta 主链      唯一合法路径 + 禁止 Episode/Knowledge/Belief/SelfVersion/Prompt +1 为成长
+P0-1 SelfState 真身通电   S2 = 唯一参与 Thinking 的 Self（T-S1 强制验收）；S1 = 能力证据（禁止独立进 Thinking）
+P0-2 Self Growth 主链     唯一合法 Self/Cognitive Growth 路径；Episode/Knowledge/Belief/Skill/SelfVersion/Prompt +1
+                          单独存在不得宣称成长
 P0-3 Worldview            主体判断投影，非 WorldModel 镜像（WorldModel/Worldview/SelfDelta 三分）
-P0-4 第一次 X→D→Y 实验    同一 Goal：外1失败→Recognition→Delta→外2；验收 = Action₂≠Action₁ ∧ Decision₂消费D ∧ Y≠Z（P0 唯一闸门）
+P0-4 第一次 X→D→Y 实验    同一 Goal：外1失败→Recognition→Δ→外2；验收 = Decision₂ consumes D ∧
+                          Behavioral Delta(结构性差异，非机械 Action≠) ∧ Y≠Z（唯一 Life-chain Gate）
 ```
 
 **P0 红线（修正口径）**：
-- S2"通电" ≠ 新建对象塞进 Prompt；是把 SelfState 变成**真实认知状态源**。
-- Worldview 不重建 WorldModel；只做引用与投影。
+- S2"通电" ≠ 新建对象塞进 Prompt；是把 SelfState 变成**真实认知状态源**。**T-S1**：生产 Thinking 的 Self 来源必须是 S2，S1 只能经 Evidence→Claim/Delta 路径进入。
+- **P0-2 名称**："唯一合法成长路径" → "唯一合法 **Self Growth / Cognitive Growth** 路径"（Episode/Knowledge/Belief/Skill/Version/Prompt +1 是合法状态变化，但单独存在不得宣称 Self Growth）。
+- Worldview 不重建 WorldModel；只做引用与投影。**依赖**：P0-1→P0-2→P0-4（最小闭环），**P0-3 不阻塞 P0-4**。
 - P0 不是"让代码库证明自己会成长"——分层验收（§14.2）。
+- **P0-4 控制**：固定 Goal/Task/Env/初始态/capabilities/model/temperature/Prompt baseline，唯一变量 = X→Recognition→D；确保 attribution experiment 非普通 retry。
+- **P0-4 允许 FAIL**：实验失败首先是架构证据，禁止为 PASS 反复调 Prompt/规则补丁（ER2/A11/A12 纪律）。
 
 **P1（支撑，不抢 P0）**：WorldModel 持久化 · Experience/Memory/Wisdom 三层收敛 · Knowledge→Self/Worldview 边界 · Skill 进成长链。
-**P2（债务，不阻塞 P0）**：registry 统一 · event_store 三处 ownership 裁决 · dead paths / 重复 attention / 超大模块。
+**P2（债务，不阻塞 P0）**：registry 统一 · event_store 三处 ownership 裁决 · dead paths / 重复 attention / 超大模块。**P2 不得为架构干净修改 P0 主体语义，不得再造第二条 Cognitive Runtime**。
 
 **门**：P0-4 为唯一"生命链完成"闸门。PASS→持续主体；FAIL→结构完成而非生命链完成。
