@@ -1,13 +1,17 @@
 # OCOS P1-1 G3 — Worldview Experience→Recognition→Delta→Govern→W1 实施验证报告
 
-> 状态：**G3 IMPLEMENTATION COMPLETE — 提交 Human Gate 裁决（G3 PASS 候选，待终裁）**。
+> 状态：**G3 IMPLEMENTATION COMPLETE — ✅ PASS（Human Gate 裁决收口，FROZEN，不再修改）**。
 > 授权依据：`docs/OCOS_P1-1_G3_IMPLEMENTATION_PLAN.md`（×2 修订稿，Human Gate：**G3 IMPLEMENTATION GO**）。
 > 承接已 FROZEN 的 `WORLDVIEW_SEMANTIC_CONTRACT.md`（§5/§6/§9）与 G1 Physical Seat（PASS/FROZEN）。
 > 本报告为**收口裁决材料**，报告 G3 已落地内容与 V0–V8（含 V-pg/V-oc/V-sg/V-dk）验证证据，并逐项对照
 > Human Gate 三条实现红线（H1 resolver 真实性 / H2 occurrences 无权威 / H3 真实结构 W1）。
 >
-> **EOD Read-only Audit 结论（2026-09-13）**：Scope 未漂移、H1/H2/H3 全部由测试证伪风险关闭、
-> 回归全绿、lint 无新增 —— **建议提交 Human Gate：G3 PASS 候选**。剩余最后一步为 Human Gate 终裁。
+> **Human Gate 最终裁决（2026-09-13，G3 正式收口）**：
+> - G3 IMPLEMENTATION：**PASS ✅**
+> - G3 设计约束已实现，WorldView Recognition/Evidence/Delta formation mechanism **validated**。
+> - G3 冻结范围（RecognitionType / WorldViewExperienceGate / _classify_divergence / WorldViewRecognitionRule /
+>   ClaimKind.WORLDVIEW_JUDGMENT / SelfUpdateContract anchors）作为 G4 / P1-1D 的上游事实链。
+> - **G3 不再修改。G4 / P1-1D / 接线 继续 NOT AUTHORIZED（G4 须另行 Scope Assessment + Human Gate）。**
 
 ---
 
@@ -24,7 +28,9 @@ G3 Implementation（本报告）
         ↓
 G3 Verification V0–V8
         ↓
-Human Gate: G3 PASS / FAIL        ← 当前所在步骤
+Human Gate: G3 PASS ✅ / FROZEN      ← 已收口
+        ↓
+G4 Scope Assessment（另行授权）
 ```
 
 **不越权声明**：G3 只证明 "OCOS 能因**真实经历**形成自己的 Worldview Delta（X→R→W1 可审计、可恢复）"。
@@ -181,15 +187,64 @@ WorldView Claim → Delta → Govern → W1
 
 ---
 
-## 7. Human Gate（收口）
+## 7. Human Gate（终裁收口）
 
 - 本报告 = **G3 Implementation Evidence / Verification Report**。
-- 建议裁决：**G3 PASS**（WorldView Recognition/Evidence/Delta formation mechanism validated）。
-- 与 G1 一致的能力表述纪律：
-  - ❌ "OCOS 已获得 Worldview formation capability"（capability 未被 Gate Accepted）
-  - ✅ "G3 Implementation 已完成，并通过 V0–V8 设计约束测试证明具备进入 Worldview formation capability 验收阶段的条件"
-- 冻结纪律不变：实现授权范围内文件可继续审计，但 G4/P1-1D/schema/接线**仍禁止**。
+- **Human Gate 终裁（2026-09-13）：G3 PASS ✅ — FROZEN，不再修改**。
+
+### 7.1 终裁理由（八项）
+
+1. Implementation scope 未漂移（仅 §1 授权 3 文件，worldview.py/self_state.py/schema/render/decision 未触碰）。
+2. H1 resolver provenance gate 通过（FAKE/归属/证据哈希三重 fail-closed）。
+3. H2 occurrences authority gate 通过（candidate 数据流完全无权威）。
+4. H3 semantic delta gate 通过（W1≠W0 必须 judgment/frame/stance 结构变化；PASS 路径出现真实结构 W1）。
+5. V0–V8（含 V-pg/V-oc/V-sg/V-dk）全通过。
+6. Regression clean（12 new + 98 affected passed；V8 向后兼容）。
+7. X→R→W1 因果链持久可恢复（V7：trigger_experience_id + recognition_type + claim_id/evidence_ids + 叶子 continuity）。
+8. 无新增 authority / runtime / storage（新增面核对：仅类型/规则/分支/2 可选字段）。
+
+### 7.2 能力表述（收口后保持）
+
+- ✅ **G3 Worldview Recognition/Evidence/Delta formation mechanism validated.**
+- ❌ "OCOS 已获得 Worldview capability"（capability Accepted 不属于 G3；行为改变 Y≠Z 未验证）。
+
+### 7.3 G3 Final Freeze
+
+**冻结范围（新增面，作为 G4/P1-1D 上游事实链）**：
+
+```text
+RecognitionType
+WorldViewExperienceGate
+_classify_divergence
+WorldViewRecognitionRule
+ClaimKind.WORLDVIEW_JUDGMENT
+SelfUpdateContract anchors（recognition_type / trigger_experience_id）
+```
+
+**冻结语义（以后 G4、P1-1D 只允许消费此链，不得绕过）**：
+
+```text
+Experience
+ ↓
+Evidence
+ ↓
+Provenance Gate
+ ↓
+Derived statistics（occurrences）
+ ↓
+Recognition（judgment/frame/stance/recognition_type 全推导）
+ ↓
+Claim
+ ↓
+Delta
+ ↓
+Govern
+ ↓
+WorldView W1
+```
+
+**冻结纪律**：G3 文件不再修改；不得以 G3 实现为理由进入 Thinking 接线、Decision 消费或行为 Delta。下一步为 **G4 Scope Assessment（只读审计，另行授权）**。
 
 ---
 
-*本报告为 G3 收口裁决材料。G3 实现 + V0–V8 验证已完成，等待 Human Gate 终裁。*
+*本报告为 G3 收口裁决材料。G3 实现 + V0–V8 验证已完成，Human Gate 终裁：G3 PASS ✅（FROZEN）。下一步 G4 Scope Assessment 另行授权。*
