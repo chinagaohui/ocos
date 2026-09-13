@@ -1772,6 +1772,18 @@ class ChatResponder:
         USE| 动作行 → 沙盒执行观察 → 观察累积回注 → 再推理，
         直到给出最终回答或工具预算（_MAX_TOOL_ROUNDS）耗尽。"""
         context = self.build_context(message, session_id=session_id)
+        # P0-4 B3: Decision₂ attribution trace — 记录本决策所见 S2 版本 + 已消费 D 清单。
+        # 只读记录（零行为偏移）：不改 prompt、不改采样、不改控制流。
+        thinking_trace_id: str | None = None
+        thinking_self_version = 0
+        try:
+            from ocos.self.decision_trace import record_thinking_trace
+            _tr = record_thinking_trace(self._db_path)
+            if _tr is not None:
+                thinking_trace_id = _tr.thinking_trace_id
+                thinking_self_version = _tr.self_version
+        except Exception:
+            thinking_trace_id = None
         # 自检/内视类问题 → 注入深度内视块（实扫模块清单 + 全量内部状态）
         # （2026-09-07 用户实测反馈"自检太简单"——此前只列高层概念）
         if _INTROSPECT_RE.search(message or ""):
@@ -1934,6 +1946,19 @@ class ChatResponder:
                 self._session_manager.append_turn("assistant", out["reply"], session_id=session_id)
             except Exception as e:
                 logger.debug("Session append failed: %s", e)
+        # P0-4 B4: Decision₂ 身份串联（thinking_trace_id → decision_id → action_ids → Y）。
+        # 只读记录 + 在 reply 信封附加 trace identity，供 P0-4 实验 Join；不改决策语义。
+        if thinking_trace_id:
+            try:
+                from ocos.self.decision_trace import record_decision_trace
+                record_decision_trace(
+                    self._db_path, thinking_trace_id,
+                    decision=str(out.get("reply", ""))[:1000],
+                    strategy="", action="", action_ids=())
+            except Exception:
+                pass
+            out["thinking_trace_id"] = thinking_trace_id
+            out["self_version"] = thinking_self_version
         return out
 
     def _generate_stream(self, tg: Any, prompt_i: str,

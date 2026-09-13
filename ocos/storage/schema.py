@@ -1,6 +1,6 @@
 """SQLite Schema 定义 — 所有持久化表的建表语句和数据字典。"""
 
-STORAGE_SCHEMA_VERSION = 8  # v8: self_state 表 (S2 SelfState 专属持久化，非 agent_self_model)
+STORAGE_SCHEMA_VERSION = 9  # v9: P0-4 前置 — counterfactual_baseline(Z) + decision_trace
 
 # ── 表名常量 ────────────────────────────────────────────────────────────────
 
@@ -20,6 +20,9 @@ TABLE_IDENTITY = "identity"
 TABLE_GOAL = "goal"
 TABLE_WISDOM = "wisdom_items"
 TABLE_SELF_STATE = "self_state"  # P0-1: S2 SelfState 专属权威持久化（复不复用 agent_self_model=S1）
+TABLE_COUNTERFACTUAL_BASELINE = "counterfactual_baseline"  # P0-4 A: Z 反事实基线（一等证据）
+TABLE_DECISION_TRACE = "decision_trace"                  # P0-4 B: ThinkingTrace（决策消费 D 证据）
+TABLE_DECISION_TRACE_DECISION = "decision_trace_decision"  # P0-4 B: DecisionRecord（决策/动作 identity）
 
 # ── 建表 SQL ───────────────────────────────────────────────────────────────
 
@@ -297,6 +300,59 @@ CREATE_SELF_STATE = [
     )""",
 ]
 
+# P0-4 A: Z 反事实基线 — 一等证据、append-only、A2 前冻结后可归因。
+# frozen_at IS NULL   = 草稿（不可用于归因；允许同 key 新草稿替换）
+# frozen_at 非空       = 已冻结（baseline_hash 锁定，任何改写 reject）
+# state_key           = sha256(canonical(initial_state))，配合 (goal,state_key)
+#                       唯一索引强制"每个 goal+init_state 仅一份已冻结 Z"。
+CREATE_COUNTERFACTUAL_BASELINE = [
+    """CREATE TABLE IF NOT EXISTS counterfactual_baseline (
+        baseline_id         TEXT PRIMARY KEY,
+        goal                TEXT NOT NULL,
+        state_key           TEXT NOT NULL,
+        initial_state_json  TEXT NOT NULL,
+        decision            TEXT NOT NULL DEFAULT '',
+        strategy            TEXT NOT NULL DEFAULT '',
+        action              TEXT NOT NULL DEFAULT '',
+        predicted_result_json  TEXT NOT NULL DEFAULT '{}',
+        source              TEXT NOT NULL DEFAULT '',
+        evidence_json       TEXT NOT NULL DEFAULT '[]',
+        confidence          REAL NOT NULL DEFAULT 0.0,
+        frozen_at           TEXT,
+        frozen_by           TEXT,
+        baseline_hash       TEXT,
+        created_at          TEXT NOT NULL
+    )""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS uq_cfb_active_frozen
+       ON counterfactual_baseline(goal, state_key)
+       WHERE frozen_at IS NOT NULL""",
+]
+
+# P0-4 B: Decision₂ attribution trace — D→Thinking→Decision₂→Action₂ 同链 identity。
+CREATE_DECISION_TRACE = [
+    """CREATE TABLE IF NOT EXISTS decision_trace (
+        thinking_trace_id       TEXT PRIMARY KEY,
+        self_version            INTEGER NOT NULL,
+        consumed_delta_ids_json TEXT NOT NULL DEFAULT '[]',
+        consumed_evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at              TEXT NOT NULL
+    )""",
+]
+CREATE_DECISION_TRACE_DECISION = [
+    """CREATE TABLE IF NOT EXISTS decision_trace_decision (
+        decision_id       TEXT PRIMARY KEY,
+        thinking_trace_id TEXT NOT NULL,
+        decision          TEXT NOT NULL DEFAULT '',
+        strategy          TEXT NOT NULL DEFAULT '',
+        action            TEXT NOT NULL DEFAULT '',
+        action_ids_json   TEXT NOT NULL DEFAULT '[]',
+        y_ref             TEXT,
+        created_at        TEXT NOT NULL
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_dtd_trace
+       ON decision_trace_decision(thinking_trace_id)""",
+]
+
 STORAGE_TABLES = {
     TABLE_WORKING_MEMORY: CREATE_WORKING_MEMORY,
     TABLE_EVENT_STORE: CREATE_EVENT_STORE,
@@ -314,4 +370,7 @@ STORAGE_TABLES = {
     "user_messages": CREATE_USER_MESSAGES,
     TABLE_WISDOM: CREATE_WISDOM,
     TABLE_SELF_STATE: CREATE_SELF_STATE,
+    TABLE_COUNTERFACTUAL_BASELINE: CREATE_COUNTERFACTUAL_BASELINE,
+    TABLE_DECISION_TRACE: CREATE_DECISION_TRACE,
+    TABLE_DECISION_TRACE_DECISION: CREATE_DECISION_TRACE_DECISION,
 }

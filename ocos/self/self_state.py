@@ -461,6 +461,27 @@ class SelfProjectionAccessor:
         """返回已提交 S2 的只读投影（固定顺序 canonical 结构）。"""
         return _to_canonical(self._manager.current)
 
+    def committed_claims(self) -> list[dict]:
+        """P0-4 B: 已提交 S2 入账的 claim/evidence 清单（只读，无副作用）。
+
+        供 Decision₂ attribution trace 判定"本次决策所见投影消费了哪些 D"。
+        来源 = current.update_history 中的每个 SelfUpdateContract（含 claim_id +
+        evidence_ids）。不写 S2、不改 render/brief/prompt 语义。
+        """
+        s = self._manager.current
+        history = list(getattr(s, "update_history", None) or [])
+        out: list[dict] = []
+        for contract in history:
+            cid = getattr(contract, "claim_id", "") or ""
+            if not cid:
+                continue
+            out.append({
+                "claim_id": cid,
+                "evidence_ids": list(getattr(contract, "evidence_ids", ()) or ()),
+                "target_component": list(getattr(contract, "fields_changed", ()) or ()),
+            })
+        return out
+
     def render(self) -> str:
         """文本投影：由已提交 S2 生成，非 Prompt 源、不读 S1。"""
         s = self._manager.current

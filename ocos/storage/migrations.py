@@ -9,7 +9,10 @@ from ocos.storage.connection import get_connection
 from ocos.storage.schema import (
     CREATE_BELIEF,
     CREATE_CHECKPOINT,
+    CREATE_COUNTERFACTUAL_BASELINE,
     CREATE_DEAD_LETTER_QUEUE,
+    CREATE_DECISION_TRACE,
+    CREATE_DECISION_TRACE_DECISION,
     CREATE_EPISODES,
     CREATE_EVENT_STORE,
     CREATE_GOAL,
@@ -93,6 +96,14 @@ MIGRATIONS: dict[int, tuple[str, list[str]]] = {
     8: (
         "P0-1 Step 1: self_state 表 — S2 SelfState 专属权威持久化（不复用 agent_self_model）",
         [*CREATE_SELF_STATE],
+    ),
+    9: (
+        "P0-4 前置: counterfactual_baseline(Z 反事实基线) + decision_trace(Decision₂ attribution)",
+        [
+            *CREATE_COUNTERFACTUAL_BASELINE,
+            *CREATE_DECISION_TRACE,
+            *CREATE_DECISION_TRACE_DECISION,
+        ],
     ),
 }
 
