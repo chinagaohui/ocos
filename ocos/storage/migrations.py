@@ -22,6 +22,7 @@ from ocos.storage.schema import (
     CREATE_SCHEMA_VERSION,
     CREATE_USER,
     CREATE_WORKING_MEMORY,
+    CREATE_SELF_STATE,
     TABLE_SCHEMA_VERSION,
     STORAGE_SCHEMA_VERSION,
 )
@@ -88,6 +89,10 @@ MIGRATIONS: dict[int, tuple[str, list[str]]] = {
                FROM episodes
                WHERE action='failure_lesson'""",
         ],
+    ),
+    8: (
+        "P0-1 Step 1: self_state 表 — S2 SelfState 专属权威持久化（不复用 agent_self_model）",
+        [*CREATE_SELF_STATE],
     ),
 }
 

@@ -1,6 +1,6 @@
 """SQLite Schema 定义 — 所有持久化表的建表语句和数据字典。"""
 
-STORAGE_SCHEMA_VERSION = 7  # v7: lessons 视图 (episodes WHERE action='failure_lesson')
+STORAGE_SCHEMA_VERSION = 8  # v8: self_state 表 (S2 SelfState 专属持久化，非 agent_self_model)
 
 # ── 表名常量 ────────────────────────────────────────────────────────────────
 
@@ -19,6 +19,7 @@ TABLE_KNOWLEDGE = "knowledge"
 TABLE_IDENTITY = "identity"
 TABLE_GOAL = "goal"
 TABLE_WISDOM = "wisdom_items"
+TABLE_SELF_STATE = "self_state"  # P0-1: S2 SelfState 专属权威持久化（复不复用 agent_self_model=S1）
 
 # ── 建表 SQL ───────────────────────────────────────────────────────────────
 
@@ -282,6 +283,20 @@ CREATE_WISDOM = [
     )""",
 ]
 
+# P0-1 Step 1: S2 SelfState 专属权威持久化（P0-1_PLAN §Step 1）
+# 复不复用 agent_self_model(S1)；一条 identity 只有一行 = 最新 committed 态。
+# state_json    = canonical S2 提交态（固定字段顺序，含 version/identity_ref/组件/有限 update_history）
+# content_hash  = 由提交态 canonical 计算的 sha256（非 Prompt，非 S1 实时值）
+CREATE_SELF_STATE = [
+    """CREATE TABLE IF NOT EXISTS self_state (
+        identity_ref TEXT PRIMARY KEY,
+        version      INTEGER NOT NULL,
+        state_json   TEXT    NOT NULL,
+        content_hash TEXT    NOT NULL,
+        updated_at   TEXT    NOT NULL
+    )""",
+]
+
 STORAGE_TABLES = {
     TABLE_WORKING_MEMORY: CREATE_WORKING_MEMORY,
     TABLE_EVENT_STORE: CREATE_EVENT_STORE,
@@ -298,4 +313,5 @@ STORAGE_TABLES = {
     "pending_actions": CREATE_PENDING_ACTIONS,
     "user_messages": CREATE_USER_MESSAGES,
     TABLE_WISDOM: CREATE_WISDOM,
+    TABLE_SELF_STATE: CREATE_SELF_STATE,
 }

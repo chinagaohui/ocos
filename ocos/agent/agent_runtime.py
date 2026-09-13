@@ -247,6 +247,8 @@ class AgentRuntime:
         self._goal_store: Any = None
         self._memory_hub: Any = None
         self._wm_store: Any = None
+        # P0-1 Step 1: 唯一 S2 SelfState（SelfStateManager），boot 时激活
+        self._self_state: Any = None
         self._engine_loader = engine_loader
         # UX-J 即时推送: goal_result episode 落库后的回调（daemon 注册
         # _push_goal_results，实现"完成即推"，避免等 5-tick 节拍）
@@ -379,6 +381,22 @@ class AgentRuntime:
             self._attention = CognitiveAttentionController()
         return self._attention
 
+    @property
+    def self_state(self) -> Any:
+        """P0-1 Step 1: 唯一 S2 SelfState 属主（SelfStateManager）。
+
+        Thinking / Self projection 只能经 `self_state.accessor` 读取 S2，
+        不得直接消费 S1（agent_self_model）作为权威 Self。
+        """
+        return self._self_state
+
+    @property
+    def self_projection(self) -> Any:
+        """P0-1 Step 1: 唯一 S2 只读 projection accessor（Thinking 的唯一 Self 输入槽位）。"""
+        if self._self_state is None:
+            return None
+        return self._self_state.accessor
+
     def boot(self) -> None:
         """启动运行时。Identity > Memory 顺序。"""
         with self._lock:
@@ -394,6 +412,9 @@ class AgentRuntime:
 
             # 0. Phase 21: 初始化持久化层
             self._init_persistence()
+
+            # 0.7 Phase 40 (P0-1 Step 1): 激活唯一 S2 SelfState（持久化/所有权/boot-reload）
+            self._init_self_state()
 
             # 0.5 Phase 34B: 恢复 Cognitive State（当前焦点/未完成任务/上次注意力）
             self._restore_working_memory()
@@ -523,6 +544,39 @@ class AgentRuntime:
                     logger.debug("EngineLoader: skip %s — %s", engine_id, e)
             self.engine_bridge.register_all()
             logger.info("Dynamic engines loaded: %s", self.engine_bridge.get_available_engines())
+
+    def _init_self_state(self) -> None:
+        """Phase 40 (P0-1 Step 1): 激活唯一 S2 SelfState。
+
+        必须在 `_init_persistence()` 恢复 Identity 之后调用。
+        S2 只依赖 identity_ref（agent_id 字符串），**不从 S1 推导真身**。
+        无历史 → 建初始态并原子提交 v1；有历史 → 恢复最后 committed 态。
+        唯一 accessor（self_state.accessor）是 Thinking / Self projection 的唯一读入口。
+        """
+        from ocos.self.self_state import SelfStateManager
+
+        # S2 需要真实持久化载体（跨 restart 恢复 committed 态）。:memory: 无载体，
+        # 且 get_connection(":memory:") 每次返回独立连接，schema 无法跨调用保持 → 跳过。
+        if self._db_path == ":memory:":
+            logger.warning("S2 SelfState skipped for :memory: db (no durable carrier).")
+            return
+
+        identity = getattr(self.agent, "identity", None)
+        identity_ref = None
+        if identity is not None and hasattr(identity, "get_identity_id"):
+            identity_ref = identity.get_identity_id()
+        if not isinstance(identity_ref, str) or not identity_ref.strip():
+            logger.warning(
+                "No valid identity_ref (%r) — skipping S2 SelfState activation.",
+                identity_ref,
+            )
+            return
+        self._self_state = SelfStateManager(self._db_path)
+        self._self_state.boot(identity_ref)
+        logger.info(
+            "S2 SelfState activated v%d (identity_ref=%s)",
+            self._self_state.version, identity_ref,
+        )
 
     def _init_user_model(self) -> None:
         """Phase G: 初始化 User Model — 用户画像与记忆中枢."""
