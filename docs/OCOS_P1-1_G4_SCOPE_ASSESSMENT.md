@@ -1,6 +1,8 @@
 # OCOS P1-1 G4 Scope — Worldview → Thinking Consumption 评估（只读审计/设计）
 
-> 状态：**G4 = NOT AUTHORIZED**（仅 Scope Assessment / Read Path Audit / 防假消费判据设计，**不写任何生产代码**）。
+> 状态：**G4 SCOPE = ACCEPTED ✅**（授权进入 G4 Implementation Plan 编写阶段；**G4 Implementation = 仍 NOT AUTHORIZED**）。
+> Human Gate 终裁（2026-09-13）：G4 Scope Assessment 达到裁决条件，ACCEPTED candidate。
+> 授权边界：仅允许产出 **G4 Implementation Plan（设计）**；**不授权 G4 Implementation GO**，须再次提交 Plan → Human Gate → GO。
 > 承接：G3 已 **PASS / FROZEN**（`docs/OCOS_P1-1_G3_IMPLEMENTATION_VERIFICATION.md`，2026-09-13 收口）。
 > 依据：`WORLDVIEW_SEMANTIC_CONTRACT.md`（§5/§6/§9，FROZEN）；G1 Shape Design；G3 冻结语义链。
 > 本文件是 **G4 Gate 的前置论证材料**，回答 "W1 形成后，OCOS 的 Thinking 是否真的读取它、怎么读才算真实消费"，
@@ -175,12 +177,46 @@ Reasoning output changed（对同一问题/同一输入，因 W1 存在推理可
 
 ---
 
-## 7. Human Gate
+## 7. Human Gate（终裁收口）
 
 - 本文件 = **G4 Scope Assessment / Read Path Audit / 防假消费判据设计（只读，未实现）**。
-- Gate 裁决选项：**G4 SCOPE ACCEPTED**（→ 仅授权产出实现方案） / **G4 SCOPE AMENDED** / **G4 NOT AUTHORIZED**（维持冻结）。
-- 冻结纪律不变：G4 授权前**不写任何生产代码、不改任何接入点**；G3 frozen 链不受本评估影响。
+- **Human Gate 终裁（2026-09-13）：G4 SCOPE ACCEPTED ✅** — 授权进入 G4 Implementation Plan 编写阶段；**G4 Implementation 仍 NOT AUTHORIZED**。
+
+### 7.1 授权范围
+
+**允许进入**：G4 Implementation Plan（设计）。**不授权**：G4 Implementation GO。
+须再次提交：`G4 Implementation Plan → Human Gate → G4 IMPLEMENTATION GO`。
+
+### 7.2 接受原因（六项）
+
+1. G3 frozen semantic chain intact（G4 未改链，仅在其上新增读路径）。
+2. W1 read path audit complete（render/brief/context/decision 零读取现状已实证）。
+3. Consumption boundary identified（唯一 S2 读入口 = `SelfProjectionAccessor`；生产 prompt 经 `accessor.brief()`）。
+4. Anti-fake-consumption criteria established（G4-D/E 双 diff 链，拒绝 context augmentation 冒充认知消费）。
+5. G4 does not overlap P1-1D behavior delta（G4-E 限定为结构化 reasoning output diff，不要求任务成功率/行为改善）。
+6. No production mutation proposed（本评估零生产改动）。
+
+### 7.3 实施边界冻结（进入 Plan 阶段的硬约束）
+
+**G4 允许（新增，仅读）**：
+- `WorldViewReadAdapter` 或 `ThinkingContextProvider`（读取 committed S2 worldview → 结构化 worldview 块）。
+- 消费原则：`S2 committed worldview → Read Adapter → Thinking input`。
+
+**G4 禁止（绝对不触碰）**：
+```text
+worldview.py 修改 ❌
+self_evidence.py 修改 ❌（G3 frozen 链）
+WorldViewRecognitionRule 修改 ❌
+DecisionBridge 修改 ❌
+AgentRuntime 行为修改 ❌
+Execution 修改 ❌
+```
+
+### 7.4 G4-E 克制定义（防提前侵入 P1-1D）
+
+- **允许**：结构化 reasoning output diff（如 `risk_assessment: unknown → high` + `reason=worldview.frame mismatch`；candidate ranking 变化）。
+- **不要求**：最终任务成功率提升、行为改善、长期策略变化 —— 这些属 P1-1D。
 
 ---
 
-*本文件为 G4 前置评估材料，非代码。等待 Human Gate 裁决。*
+*本文件为 G4 Scope 前置评估材料，非代码。G4 SCOPE ACCEPTED ✅，下一步编写 G4 Implementation Plan（设计，另行 GO）。*
