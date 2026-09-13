@@ -1,0 +1,8 @@
+Goal G (frozen SPEC):
+Reorganize the target files in INIT_DIR according to their 'kind' tag:
+  - src_*.txt with a first line 'kind:SOURCE'   -> move into ./src_out/
+  - doc_*.md  with a first line 'kind:DOC'      -> move into ./doc_out/
+Each file must first be CLASSIFIED by detecting its kind tag (requires the
+'category-detect' capability). A file whose kind cannot be confidently detected
+MUST be reported as a classification failure (do NOT guess/move it).
+After handling all files, write the per-file outcome (moved/verdict) into OUT.
