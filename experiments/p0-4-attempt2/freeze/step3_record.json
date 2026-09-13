@@ -1,0 +1,46 @@
+{
+  "step": 3,
+  "Z": {
+    "baseline_id": "P0-4-Z-001",
+    "goal": "p0-4-a2-001",
+    "state_key": "3cbce08aea6663da",
+    "frozen_at": "2026-09-13T08:57:14.333281+00:00",
+    "frozen_by": "experiment",
+    "baseline_hash": "f1b4a745fa2af593d078057d5b1a35f6cf6e68c032b165c84b8956ac2925197a",
+    "evidence": [],
+    "confidence": 0.9,
+    "source": "experiment harness: no-D 反事实先验（严格先于 A2，不含 A2 输出/动作/结果/观察）",
+    "decision": "信任 category-detect，按 kind 标签直接归类全部目标文件并移动",
+    "strategy": "trust category-detect; classify by kind tag; move trusting (无失败知识)",
+    "action": "category-detect 逐文件分类 -> 按 kind 移入 src_out/|doc_out/（move_all_trusting）",
+    "predicted_result": {
+      "moved": {
+        "src_a.txt": "src_out",
+        "src_b.txt": "src_out",
+        "doc_c.md": "doc_out"
+      },
+      "kind_status": "全部已知",
+      "note": "若 category-detect 可信，所有文件均可归类并移动"
+    }
+  },
+  "immutability_checks": {
+    "re_freeze": "rejected(ok)",
+    "dup_draft": "rejected(ok)",
+    "reopen_hash_stable": true,
+    "baseline_for_frozen_only": true
+  },
+  "causal_D": {
+    "claim_id": "S1E-863AF5B91BD2-C01",
+    "delta_id": "01b9a85508bc365ec75ff07b1bbb035f58a31b5dc9c090a03314de3dfcd73326",
+    "self_version_before": 2,
+    "self_version_after": 3,
+    "evidence_id": [
+      "S1E-863AF5B91BD2"
+    ],
+    "note": "主因果 D（C00 为伴随，不混入）"
+  },
+  "A2": {
+    "started": null,
+    "note": "Z frozen BEFORE A2 (frozen_at < A2_start, A2 未执行)"
+  }
+}
