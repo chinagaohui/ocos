@@ -1,0 +1,69 @@
+{
+  "step": 4,
+  "init_dir_restored": true,
+  "a2_start": "2026-09-13T09:00:14.316539+00:00",
+  "decision2": {
+    "decision": "category-detect 不可靠，验证后再行动",
+    "strategy": "verify-first: 不盲信 category-detect",
+    "action": "先验证 category-detect 可用性；不可用则改读文件首行 kind 标签归类（可验证证据）",
+    "branch": "verify_first"
+  },
+  "decision2_noD_control": {
+    "branch": "trust",
+    "note": "==Z(trust)",
+    "decision": "信任 category-detect"
+  },
+  "differential": "policy(S2_v3)=verify_first != policy(no-D)=trust(==Z)，唯一差异源=knowledge_boundary.category-detect=NEEDS_VERIFICATION(C01)",
+  "action2_steps": [
+    {
+      "desc": "验证 category-detect 可用性",
+      "exit": "NOT-FOUND"
+    },
+    {
+      "desc": "读 src_.* 首行 kind",
+      "exit": 0
+    },
+    {
+      "desc": "读 doc_.* 首行 kind",
+      "exit": 0
+    },
+    {
+      "desc": "按可验证 kind 移动",
+      "exit": 0
+    }
+  ],
+  "Y": {
+    "decision": "category-detect 不可靠，验证后再行动",
+    "strategy": "verify-first: 不盲信 category-detect",
+    "action": "先验证 category-detect 可用性；不可用则改读文件首行 kind 标签归类（可验证证据）",
+    "moved": [
+      "src_a.txt->src_out",
+      "src_b.txt->src_out",
+      "doc_c.md->doc_out"
+    ],
+    "kind_map": {
+      "src_a.txt": "SOURCE",
+      "src_b.txt": "SOURCE",
+      "doc_c.md": "DOC"
+    },
+    "out_txt": "src_a.txt -> src_out (kind=SOURCE)\nsrc_b.txt -> src_out (kind=SOURCE)\ndoc_c.md -> doc_out (kind=DOC)\nverdict: classified_by_verifiable_content_tag(not category-detect)",
+    "verification_exit": "category-detect NOT-FOUND(探测未调用它,仅 command -v)"
+  },
+  "real_side_effects": {
+    "src_out": [
+      "src_a.txt",
+      "src_b.txt"
+    ],
+    "doc_out": [
+      "doc_c.md"
+    ],
+    "category_detect_fixed": false,
+    "init_root_now": [
+      "src_out",
+      "SPEC.txt",
+      "doc_out"
+    ],
+    "out.txt": "src_a.txt -> src_out (kind=SOURCE)\nsrc_b.txt -> src_out (kind=SOURCE)\ndoc_c.md -> doc_out (kind=DOC)\nverdict: classified_by_verifiable_content_tag(not category-detect)"
+  },
+  "note": "A2 真实执行完成+Y 捕获；ThinkingTrace/DecisionTrace 于 Step5/6 正式化(待批)"
+}

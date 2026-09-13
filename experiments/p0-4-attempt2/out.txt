@@ -1,0 +1,4 @@
+src_a.txt -> src_out (kind=SOURCE)
+src_b.txt -> src_out (kind=SOURCE)
+doc_c.md -> doc_out (kind=DOC)
+verdict: classified_by_verifiable_content_tag(not category-detect)
