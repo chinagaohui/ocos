@@ -110,6 +110,8 @@ def test_engines_only_use_semantic_operations():
 
 def test_governance_gated_operations():
     """Transform 和 Forget 操作必须通过 Governance 审批。"""
+    pytest.skip("COG-V2 Phase4: promotion/forgetting 引擎零生产消费者，"
+                "已验尸归档至 ocos/_archive/engines/")
     from ocos.engines.promotion_engine import _GOVERNANCE_GATED_LEVELS
     from ocos.knowledge.knowledge_ontology import KnowledgeLevel
 

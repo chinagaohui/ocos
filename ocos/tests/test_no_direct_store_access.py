@@ -36,12 +36,9 @@ DIRECT_ACCESS_WHITELIST = {
     "ocos.engines.reasoning_engine",   # Phase 19 Reasoning Engine（需访问 WorkingMemory）
     "ocos.engines.planning_engine",    # Phase 19 Planning Engine（需访问 WorkingMemory）
     "ocos.engines.decision_making_engine",  # Phase 19 DecisionMaking Engine（需访问 WorkingMemory）
-    "ocos.engines.policy_engine",           # Phase 19 Policy Engine（需访问 WorkingMemory）
-    "ocos.engines.goal_arbitration_engine",   # Phase 19 GoalArbitration Engine（需访问 WorkingMemory）
-    "ocos.engines.simulation_engine",           # Phase 19 Simulation Engine（需访问 WorkingMemory）
+    # Phase4 验尸归档：policy/goal_arbitration/simulation/prediction → _archive
     "ocos.engines.learning_engine",              # Phase 19 Learning Engine（需访问 WorkingMemory）
     "ocos.engines.reflection_engine",             # Phase 19 Reflection Engine（需访问 WorkingMemory）
-    "ocos.engines.prediction_engine",              # Phase 19 Prediction Engine（需访问 WorkingMemory）
     "ocos.agent.engine_bridge",                     # Phase 26 Agent-Engine Bridge（需访问 WorkingMemory）
     "ocos.daemon.factory",                          # P1-B 生产装配层（需访问 WorkingMemory）
     "ocos.engines.writer_engine",                   # Phase 27 Writer Engine（需访问 WorkingMemory）

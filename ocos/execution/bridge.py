@@ -41,6 +41,20 @@ from ocos.execution.pending import approval_disabled
 
 logger = logging.getLogger(__name__)
 
+
+def _deny_pattern_hits(pattern: str, command: str) -> bool:
+    """deny.patterns 命中判断：纯字母 token 用词边界，其余子串。
+
+    AUD-FIX (2026-09-12): 原裸子串匹配让一条毒 lesson（pattern='eval'，
+    源自沙盒拒绝文案误提取）把含 "retrieval/evaluation" 的合法检索命令
+    全部 veto 7 天。词边界后 'eval' 仍命中 `eval rm ...` 形态，
+    不再命中 retrieval/evaluation。
+    """
+    if pattern.isalpha():
+        return re.search(rf"\b{re.escape(pattern)}\b", command,
+                         re.IGNORECASE) is not None
+    return pattern in command
+
 # ── P0-1/P1-1 (2026-09-08 事件复盘): 创作/分析类任务判定 ─────────────────
 # 事件链: 「制定升级计划」目标 → 规划 LLM 输出 ANSWER|<计划正文> → 旧闸门
 # 裸词「验证」命中描述末尾的"验证标准" → 误判执行意图 → 强制重试 → LLM 被
@@ -1165,6 +1179,10 @@ class DecisionBridge:
             return {"ok": False, "error": "empty agent name for install"}
         if self._installer is None:
             return {"ok": False, "error": "没有可用安装执行器 — 安装被拒"}
+        # AUD-FIX (2026-09-12): auto 模式彻底关闭审批 — 不入待批队列,
+        # 直通安装（installer 内部白名单校验仍然生效, 安全底线保留）
+        if not approval_id and not already_approved and approval_disabled():
+            already_approved = True
         if not approval_id and not already_approved:
             self._enqueue_pending(
                 action_type="agent_install",
@@ -1267,6 +1285,7 @@ class DecisionBridge:
                     "RUN|curl -s --max-time 15 \"https://api.github.com/search/repositories?"
                     "q=关键词&per_page=5&sort=stars\" | python3 -c \"import json,"
                     "sys; d=json.load(sys.stdin); items=d.get('items',[]); "
+                    "print('total_count=', d.get('total_count', 0)); "
                     "[print(r['full_name'],'|',r['stargazers_count'],'|',"
                     "(r.get('description') or '')[:150]) for r in items]\" "
                     "提取精简字段（必须用 d.get() 防御），再对代表性项目用 "
@@ -1275,6 +1294,72 @@ class DecisionBridge:
                     "\"https://api.github.com/repos/<owner>/<repo>/readme\" "
                     "抓取 README（注意: raw.githubusercontent.com 在部分网络"
                     "不可达，一律走 api.github.com）\n"
+                    # AUD-FIX (2026-09-12): 关键词宽度策略 — 生产实锤: 4 词 AND
+                    # 查询 (shell+quoting+escape+safety) 必然 total_count=0,
+                    # 任务因"部分失败"拖垮。多词=AND 语义必须控制在 2 词内,
+                    # 空结果自动放宽重试, 拿到核心数据即视为达成。
+                    "⚠️ GitHub search 关键词规则 (违反必然 0 结果):\n"
+                    "  - 多词查询是 AND 关系 — **最多 2 个词**, 宁少勿多\n"
+                    "  - 管道必须打印 total_count (空结果要能看到 'total_count= 0', "
+                    "不是静默空输出)\n"
+                    "  - 若 total_count=0: 换**更短**的关键词 (1-2 个核心词) 重试一次, "
+                    "不要报告'API 无输出/限流' — 那是关键词太窄\n"
+                    "  - 部分成功即达成: 只要拿到头部仓库+star 数等核心数据, "
+                    "就算个别查询空结果也应正常交付 ANSWER, 不要整体判失败\n"
+                    # AUD-FIX (2026-09-12): 任务-工具匹配 — 生产实锤: 'Kappa/ICC
+                    # 阈值设定'类文献调研目标被全投给 GitHub 仓库搜索, 只能找到
+                    # 代码实现, 拿不到 Landis&Koch 分级/ICC 0.75 等方法学文献,
+                    # 任务诚实降级为失败。给学术检索配方。
+                    # QUOTA-FLIP (2026-09-12): OpenAlex 已改每日额度制（$0 用尽
+                    # 429 到 UTC 午夜）→ arXiv 免费无额度升为主用; OpenAlex 降兜底。
+                    "⚠️ 任务-工具匹配 (选错工具必然失败):\n"
+                    "  - 目标要 '阈值/文献依据/选型准则/方法学/惯例/论文/研究现状' → "
+                    "GitHub 只能找到代码实现, 必须搭配学术检索:\n"
+                    "  主用: RUN|python3 /home/laogao/.ocos/scripts/arxiv.py "
+                    "\"<1-3个英文标准术语>\" [条数, 默认5]\n"
+                    "  (arXiv 免费无每日额度; 脚本内部处理限流退避与 XML 解析 — "
+                    "只传查询词, 禁止自己拼 URL 或手写 python -c 抓取。"
+                    "输出含 ABS 摘要正文, 阈值/分级等方法学结论通常就在摘要里)\n"
+                    "  ⚠️ arXiv 语料边界: 它是 1991 年后的 STEM 预印本库 — "
+                    "1990 前经典期刊文献与统计阈值标准 (Landis&Koch 1977 / Fleiss "
+                    "1981 / Altman 1991 类) 大概率不收录, 检索结果只有应用类论文"
+                    "不是失败, 是语料没有 → 此类目标改用 websearch.py 查权威二手"
+                    "来源 (统计指南/综述/教材页, 引用二手源+标注), OpenAlex 额度"
+                    "恢复后再核原文元数据\n"
+                    "  兜底: OpenAlex (有每日免费额度, UTC 午夜重置):\n"
+                    "  RUN|curl -s --max-time 15 "
+                    "\"https://api.openalex.org/works?search=<1-3个英文标准术语>&per-page=3\" | "
+                    "python3 /home/laogao/.ocos/scripts/openalex.py\n"
+                    "  (OpenAlex 返回 count= None 或 Rate limit = 当日额度耗尽 → "
+                    "直接换 arxiv.py 或 websearch.py, 不要反复重试)\n"
+                    "  学术检索词用标准英文术语 (如 inter-rater reliability / kappa / "
+                    "intraclass correlation), 不要用中文\n"
+                    "  ⚠️ 文献调研的达标线: 拿到 3-5 篇高被引权威文献的 标题+年份+引用数+摘要要点 "
+                    "就足以交付归纳结论 (引用文献作为来源标注) — 本环境抓不到全文 PDF, "
+                    "不要因'只有摘要没有全文'把任务判失败\n"
+                    "  - 目标要 '工具/开源库/实现/代码' → 继续用上面的 GitHub 配方\n"
+                    # WEB-SEARCH (2026-09-12): 通用网页搜索通道 — cn.bing.com
+                    # 免 key 实测可达 (DDG/Wikipedia 被墙, Mojeek Captcha,
+                    # Baidu 302 反爬); 解析器落盘脚本, LLM 只传查询词。
+                    "  - 目标要 '新闻/现状/评价/口碑/对比/教程/价格/产品/博客' 类一般网页信息"
+                    " (非学术非代码) → 通用网页搜索:\n"
+                    "  RUN|python3 /home/laogao/.ocos/scripts/websearch.py "
+                    "\"<查询词, 中英文均可, 2-6 词>\" [条数]\n"
+                    "  (⚠️ cn.bing 是中文引擎: 英文技术词会返回品牌/人名垃圾"
+                    "(实锤: 'Cohen kappa thresholds' → Cohen's d 效应量+歌手"
+                    "+运动品牌) — 用中文关键词如 'kappa系数 一致性 判定标准', "
+                    "英文术语可保留, 脚本内部抓取解析; "
+                    "输出 标题|URL|摘要, 要看详情再对结果 URL 用 curl -s --max-time 15 抓正文)\n"
+                    "  ⚠️ 结果列表混合噪音是常态 (实锤: 4 条里 2 条品牌页 + 2 条"
+                    "统计学教程) — 有 2-3 条相关条目就逐条 curl 抓正文提取答案, "
+                    "禁止因列表含无关结果把整体判失败; 相关≠前两条, 看标题逐条判\n"
+                    "  ⚠️ 强触发: 任务含 '评价/口碑/怎么样/对比/推荐/新闻/最新动态' 且信息"
+                    "不在单个代码仓库里 → 必须至少调用 websearch.py 一次 (GitHub 只有仓库"
+                    "数据, 拿不到社区口碑); Reddit/HN 等若搜不到, 如实报告'未检索到', "
+                    "禁止编造来源\n"
+                    "  ⚠️ 来源真实性红线: 结论只能引用实际执行命令返回的数据 — "
+                    "禁止声称'检索到某网站/某教程'却拿不出对应命令输出 (这是撒谎, "
+                    "比任务失败严重得多)\n"
                     "查对话历史/成长叙事/记忆 → 不要尝试读 markdown/jsonl 文件，"
                     "直接用: RUN|sqlite3 /home/laogao/.ocos/ocos.db \"SELECT rowid,"
                     "action, substr(decision,1,100), created_at FROM episodes "
@@ -1465,10 +1550,17 @@ class DecisionBridge:
         # 确保提炼前后行为完全一致（Phase 3 接 Mutation Engine 时 actions 将成为消费入口）
         _actions = self._parse_actions(raw)
         _reconstructed = self._actions_to_lines(_actions)
-        if _reconstructed != _lines:
-            # 不 crash，但记录 error（Phase 2 纯重构，不应出现不等价）
-            logger.error("Phase2-PARSE-DIVERGENCE: _lines vs _actions_to_lines differ! "
+        # AUD-FIX (2026-09-12): 只对 RUN| 行集合判 divergence — planner 的
+        # prose/注释行本就不该执行（parser 忽略是正确行为），此前把
+        # "13 行 prose + 1 条 RUN|" 全记 error（53 次/天）造成误报。
+        if ([ln for ln in _lines if ln.startswith("RUN|")]
+                != [ln for ln in _reconstructed if ln.startswith("RUN|")]):
+            logger.error("Phase2-PARSE-DIVERGENCE: RUN| lines lost in parse! "
                          "lines=%d actions=%d", len(_lines), len(_reconstructed))
+        elif _reconstructed != _lines:
+            logger.debug("Phase2 parse: prose-only diff (lines=%d actions=%d) "
+                         "— RUN| set identical, ignored",
+                         len(_lines), len(_reconstructed))
         # Phase 3 (Mutation): Mutation Engine 硬否决层
         # 位置: _parse_actions 之后, ANSWER_GUARD / _agent_forced_call / sandbox 之前
         _actions_before = [dict(a) for a in _actions]  # FIX-V1: veto 检测快照
@@ -1714,6 +1806,14 @@ class DecisionBridge:
                     _internet_hint += (
                         "→ curl 和网络都可用，完全可以用 RUN|curl -s --max-time 15 "
                         "真正抓取外部内容。请输出具体的 curl 命令行，不要再说无法联网。\n")
+                    # AUD-FIX (2026-09-12): 重规划路径补检索语法规则 — 与
+                    # _handler_dag_task 的 _rules (L1283) 同套。重规划时若
+                    # 只说"能联网"不说语法, LLM 会再次生成窄关键词查询
+                    # (多词 AND → total_count=0 → 二次失败)。
+                    _internet_hint += (
+                        "⚠️ GitHub search 语法: 多词查询是 AND — 关键词最多 2 个; "
+                        "管道必须打印 total_count; total_count=0 时换更短的 1-2 词重试, "
+                        "那不是 API 限流; 拿到核心数据即可交付, 不要整体判失败。\n")
                 elif curl_ok and not net_ok:
                     _internet_hint += "→ curl 可用但外网不通（可能是代理/DNS问题）。"
                 elif not curl_ok and py_ok:
@@ -1743,6 +1843,39 @@ class DecisionBridge:
                 # approval_id ("task-approved") 绕过守门；无 approval_id
                 # 一律入待批队列，无论 OCOS_APPROVAL_MODE 为何值。
                 approval_id = payload.get("approval_id")
+                # AUD-FIX (2026-09-12): auto 模式彻底关闭审批 — 不入待批
+                # 队列等待人工, 直接经 digital_world file_ops 执行。
+                # 安全底线保留: file_ops._is_protected 拒绝 ~/.ssh//etc/
+                # /root 等敏感路径; gateway 扫描在更上游仍然生效。
+                if not approval_id and approval_disabled():
+                    target_path = parts[1].strip()
+                    try:
+                        from ocos.digital_world.base import DigitalOperation
+                        from ocos.digital_world import file_ops as _fw
+                        _op = DigitalOperation(
+                            op_id=f"OP-{uuid.uuid4().hex[:10]}",
+                            op_type="file_write", target=target_path,
+                            requester=self._agent_id,
+                            params={"content": parts[2]},
+                            approval_id="auto-mode")
+                        _res = _fw.file_write(_op)
+                        self._audit_record(
+                            contract_id=f"FW-{uuid.uuid4().hex[:8]}",
+                            status="completed" if _res.status == "success"
+                            else "failed",
+                            summary=(f"file_write(auto-mode) {target_path}: "
+                                     f"{_res.status} {_res.output or _res.error}"))
+                        if _res.status == "success":
+                            return {"ok": True, "blocked": False,
+                                    "exit_code": 0,
+                                    "stdout": _res.output or
+                                    f"wrote {target_path}"}
+                        return {"ok": False, "blocked": _res.status == "rejected",
+                                "error": _res.error or _res.output or
+                                f"file_write {_res.status}"}
+                    except Exception as _fw_e:
+                        return {"ok": False,
+                                "error": f"file_write(auto-mode): {_fw_e}"}
                 if not approval_id:
                     self._enqueue_pending(
                         action_type="file_op",
@@ -1825,7 +1958,7 @@ class DecisionBridge:
         )
 
     def _memory_decision_context(self, description: str,
-                                 limit: int = 5) -> str:
+                                 limit: int = 9) -> str:
         """记忆直接参与决策 — 统一记忆决策上下文（用户方向）。
 
         把历史经验/信念/技能/反思聚合为一个**结构化量化决策块**注入规划
@@ -2544,7 +2677,7 @@ class DecisionBridge:
 
             if level == "action":
                 for p in deny.get("patterns", []):
-                    if p and p in cmd:
+                    if p and _deny_pattern_hits(p, cmd):
                         return {
                             "reason": f"action deny pattern '{p}' hits command '{cmd}'",
                             "policy_match": {"type": "action", "rule": p},
@@ -2802,13 +2935,39 @@ class DecisionBridge:
         deny_section = "\n".join(dict.fromkeys(deny_lines))  # 去重保序
         alt_section = "\n".join(dict.fromkeys(alt_lines))
 
+        # AUD-FIX (2026-09-12): 注入宿主机已落盘的正规工具姿势 — 生产中
+        # retry LLM 反复徒手 python3 -c urllib（超时/被封）而不知道
+        # ~/.ocos/scripts/ 下有现成脚本。工具不可用类 veto 尤其需要。
+        tool_hints = ""
+        if re.search(r"学术|文献|论文|openalex|arxiv| scholar", cmd + " "
+                     + veto.get("reason", ""), re.IGNORECASE):
+            tool_hints = (
+                "\n✅ 本机现成工具（优先使用）:\n"
+                "  arXiv 学术检索（主用, 免费无每日额度）:\n"
+                "    python3 /home/laogao/.ocos/scripts/arxiv.py "
+                "\"<1-3个英文标准术语>\" [条数]\n"
+                "  OpenAlex 学术检索（兜底, 每日额度 UTC 午夜重置; "
+                "count=None/Rate limit = 额度耗尽就别再试）:\n"
+                "    curl -s --max-time 20 "
+                "\"https://api.openalex.org/works?search=<URL编码关键词>&per-page=3\""
+                " | python3 /home/laogao/.ocos/scripts/openalex.py\n"
+            )
+        elif re.search(r"搜索|网页|web|最新资讯|bing|duckduck",
+                       cmd + " " + veto.get("reason", ""), re.IGNORECASE):
+            tool_hints = (
+                "\n✅ 本机现成工具（优先使用）:\n"
+                "  通用网页搜索（cn.bing，无需审批）:\n"
+                "    python3 /home/laogao/.ocos/scripts/websearch.py \"<关键词>\" [数量]\n"
+            )
+
         return (
             f"你之前的命令: RUN|{cmd}\n"
             f"已被拒绝（违反已知失败策略）\n"
             f"拒绝原因: {veto.get('reason', '')}\n"
             f"\n禁止的策略:\n{deny_section}\n"
-            f"\n替代方向:\n{alt_section}\n"
+            f"\n替代方向:\n{alt_section}{tool_hints}\n"
             f"\n请输出一行新的 RUN| 命令（或 NONE|诚实说明），不要解释。"
+            f"新命令不得包含被禁路径/关键词。"
         )
 
     def _prior_task_results(self, description: str, limit: int = 2) -> str:

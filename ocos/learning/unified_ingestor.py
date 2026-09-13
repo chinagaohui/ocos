@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -21,6 +22,22 @@ from enum import Enum
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+# COG-V2 Phase 0.2: 语义质量门（确定性、零 LLM）。
+# 生产实测 808 条 knowledge 中 64% 是垃圾：LLM 拒答 191 条、
+# 认知循环套娃引用 213 条。拒答只在文本头部判定（误伤最小化）。
+_REFUSAL_RE = re.compile(
+    r"无法确认|无法提供|没有关于.{0,20}权威"
+    r"|我没有.{0,12}(?:权威|相关知识|相关信息|资料|可靠来源)"
+    r"|as an ai|i don'?t have (?:access|information|specific|enough)"
+    r"|i can(?:not|'t) provide",
+    re.IGNORECASE,
+)
+_REFUSAL_SCAN_HEAD = 200
+_RECURSIVE_RE = re.compile(
+    r"evo[\s\-]?plan|new_knowledge|新知识\s*\[|deepen_topic",
+    re.IGNORECASE,
+)
 
 
 class SourceChannel(str, Enum):
@@ -161,6 +178,39 @@ class UnifiedIngestor:
                 status=IngestStatus.FILTERED_LOW_QUALITY,
                 message=f"质量分数 {quality:.2f} < {self.MIN_QUALITY_THRESHOLD}",
                 details={"quality_score": quality},
+            )
+
+        # AUD-FIX (2026-09-12): 执行日志闸 — 纯 JSON/结构化日志不是知识。
+        # experience 通道曾把 goal_result 的 {"success": ..., "cycle": ...}
+        # 原样当 procedure 知识沉淀（生产 52 条垃圾），后续反思/Pump 跟着
+        # 放大出一批"学习这条日志"的重复任务。所有渠道统一在此拦截。
+        _head = (art.content or "").lstrip()[:1]
+        if _head == "{":
+            return IngestResult(
+                status=IngestStatus.FILTERED_LOW_QUALITY,
+                message="执行日志 JSON 不是知识 (content 以 '{' 开头)",
+                details={"content_head": (art.content or "")[:80]},
+            )
+
+        # COG-V2 Phase 0.2: 拒答门 — LLM "无法确认/我没有权威来源/as an AI"
+        # 是对话性回避, 不构成知识（生产 191 条此类垃圾）。
+        _scan = (art.content or "")[:_REFUSAL_SCAN_HEAD]
+        m_refuse = _REFUSAL_RE.search(_scan)
+        if m_refuse:
+            return IngestResult(
+                status=IngestStatus.FILTERED_LOW_QUALITY,
+                message=f"LLM 拒答不是知识 (命中: {m_refuse.group(0)[:30]})",
+                details={"match": m_refuse.group(0)[:40]},
+            )
+
+        # 套娃门 — 认知循环把"新知识 [procedure] 说 'EVO-Plan: new_knowledge…'"
+        # 当知识反复入库（生产 213 条递归垃圾）。
+        m_rec = _RECURSIVE_RE.search(art.content or "")
+        if m_rec:
+            return IngestResult(
+                status=IngestStatus.FILTERED_LOW_QUALITY,
+                message=f"套娃引用不是知识 (命中: {m_rec.group(0)[:30]})",
+                details={"match": m_rec.group(0)[:40]},
             )
 
         # 2. 幂等检查

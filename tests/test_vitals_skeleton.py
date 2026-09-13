@@ -53,8 +53,12 @@ def _add_episode(db, eid, created_at, tags="[]", decision=""):
     conn.close()
 
 
-NOW = "2026-09-06T00:00:00+00:00"
-OLD = "2026-08-01T00:00:00+00:00"   # 窗口外（7 天窗）
+# COG-V2 Phase4.5: 时间常量必须动态生成——硬编码 2026-09-06 在
+# 7 天滚动窗口下于 09-13 自然滑出窗，造成与代码无关的日期定时炸弹。
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+NOW = _dt.now(_tz.utc).isoformat()
+OLD = (_dt.now(_tz.utc) - _td(days=30)).isoformat()   # 窗口外（7 天窗）
 
 
 class TestAutonomyMetrics:

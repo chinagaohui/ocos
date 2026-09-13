@@ -41,6 +41,67 @@ except (ImportError, ValueError, OSError):   # 非主线程注册等场景静默
     pass
 
 
+# ── COG-V2 Phase4.5: 自进化防灌水（2026-09-13）──────────────────────────
+# 生产实锤：goals 835 行仅 357 唯一描述；同一条工具探索目标被生成 50 次、
+# 同标题 EVO-Plan 43 次；LLM 把执行结果回显（✓/✗）复读成新方案标题。
+# 两个零 LLM 确定性闸门：历史标题去重 + 回声产物拒绝。
+_SELF_EVO_DEDUP_DAYS = 7
+
+
+def _like_escape(s: str) -> str:
+    """转义 SQLite LIKE 的 %/_/\\（[] 在 SQLite 本是普通字符，一并转义）。"""
+    return (s.replace("\\", "\\\\").replace("%", "\\%")
+             .replace("_", "\\_").replace("[", "\\[").replace("]", "\\]"))
+
+
+def _recent_goal_exists(db, title: str,
+                        days: int = _SELF_EVO_DEDUP_DAYS) -> bool:
+    """近 N 天 goals 表是否已有同标题目标——任意状态（含 COMPLETED/ABANDONED）。
+
+    自进化目标 description 第一行即方案标题，锚定开头匹配。
+    时间归一化：created_at 存两种格式（ISO 带 T / 'YYYY-MM-DD HH:MM:SS'）。
+    """
+    if not title:
+        return False
+    pat = _like_escape(title.strip()[:80]) + "%"
+    row = db.execute(
+        "SELECT 1 FROM goals WHERE description LIKE ? ESCAPE '\\' "
+        "AND substr(replace(COALESCE(created_at,''),'T',' '),1,19) "
+        ">= datetime('now', ?) LIMIT 1",
+        (pat, f"-{days} days")).fetchone()
+    return row is not None
+
+
+def _echo_artifact_reason(title: str, summary: str) -> str:
+    """反思产物回声判定：命中返回拒绝原因，空串表示允许 Pump 转 goal。
+
+    生产实锤的回声形态：
+      1. Mini-Plan 旧固定模板（"建议增加 follow-up goal"，无真实行动）
+      2. 引用体是执行日志 JSON（{"success": false, ...}）
+      3. 套娃：知识复述知识（Q: 新知识…）
+      4. 引用体是执行结果回显（✓/✗ 开头，如 '✓ EVO-Plan: new_knowledge…'）
+         —— 2026-09-13 旧闸漏网，同型目标复读 25 次
+    """
+    t = (title or "").strip()
+    if t.startswith("Mini-Plan:"):
+        return "Mini-Plan 固定模板不转 goal"
+    src = ""
+    try:
+        src = (summary or title).split("说 ", 1)[1][:80]
+    except Exception:
+        src = ""
+    clean = src.strip().strip("'\"").lstrip()
+    if clean.startswith("{"):
+        return "引用体是执行日志 JSON"
+    if clean.startswith("Q: 新知识"):
+        return "套娃：知识复述知识"
+    if src.strip().startswith("'") and clean.startswith("Q: "):
+        return "套娃：知识复述知识"
+    if clean[:1] in ("✓", "✗"):
+        return "引用体是执行结果回显（✓/✗），禁止复读为新目标"
+    return ""
+
+
 class DaemonState(Enum):
     STOPPED = auto()
     STARTING = auto()
@@ -124,6 +185,7 @@ class ResidentRuntime:
                 from ocos.perception.file_sensor import FileSensor
                 from ocos.perception.sensor_types import SensorConfig, SensorModality
                 import os as _os
+                from pathlib import Path as _Path
                 _sensors = [
                     ProcessSensor(
                         config=SensorConfig(
@@ -138,7 +200,10 @@ class ResidentRuntime:
                             poll_interval=5.0,
                             modalities=[SensorModality.FILE],
                         ),
-                        _watch_paths=[_os.path.expanduser("~/.ocos")],
+                        # AUD-FIX: 必须传 Path — 传 str 会绕过 watch() 的类型
+                        # 转换, _check_file 里 str.exists() → AttributeError,
+                        # 被 PS52-02 静默吞掉 → 传感器自 Phase 4 起一直瞎着
+                        _watch_paths=[_Path(_os.path.expanduser("~/.ocos"))],
                     ),
                 ]
                 self._perception_pipeline = build_perception_pipeline(
@@ -248,6 +313,17 @@ class ResidentRuntime:
         # LEVEL>=1 才提案，低风险 LEVEL>=2 直接进 goals 表，其余待批。
         self._motivation: Any = None
         self._autonomous_inflight: deque = deque()   # 在途自主目标（FIFO 近似配对）
+        # 严格串行调度（2026-09-12 用户裁决）: 在途目标最多 1 个，做完再领。
+        # goal_id → 认领 epoch 秒；域层 store 是唯一认领入口，此映射仅用于
+        # 超时判定（重启后用 goals.updated_at 兜底）。
+        self._serial_claimed_at: dict[str, float] = {}
+        # COG-V2 Phase 0.1: 60s 持续认知循环默认归档（System2 事件触发替代）。
+        # 设 OCOS_CONTINUOUS_COGNITION=1 可临时恢复旧行为。
+        self._continuous_cognition_enabled = (
+            os.environ.get("OCOS_CONTINUOUS_COGNITION", "0") == "1"
+        )
+        self._last_cognition_ts: float = 0.0
+        self._cognition_fail_streak: int = 0
         try:
             from ocos.daemon.motivation import MotivationHub
 
@@ -388,7 +464,41 @@ class ResidentRuntime:
         GAP-P1-4 (2026-09-11): 自动注入 self._event_bus 到 pipeline
         （Observation → CognitiveEvent 断链修复后的生产装配闭合）。
         """
+        # AUD-FIX: 必须在覆盖前捕获内部旧管线 (覆盖后 is not 永远 False)
+        _old_pipeline = self._perception_pipeline
         self._perception_pipeline = pipeline
+
+        # AUD-FIX (2026-09-12): 生产装配时序 bug — `ocos run` 无 --watch-dir 时
+        # run.py attach 零传感器管线, 把 __init__ 里 Phase 4 默认构建的
+        # ProcessSensor + FileSensor[~/.ocos] 整个顶掉 → tick_loop 每 tick
+        # 空转, 感知链生产路径自 Phase 4 起零事件 (tick_trace no_events×5715 证据).
+        # 修复: 外部管线零传感器而内部有 → 传感器迁移进外部管线, 保留
+        # 外部管线的 bus/world 装配语义, 不丢 Phase 4 默认感知.
+        try:
+            _in_engine = getattr(pipeline, "_engine", None)
+            _old_engine = getattr(_old_pipeline, "_engine", None) \
+                if _old_pipeline is not None and _old_pipeline is not pipeline \
+                else None
+            if (_in_engine is not None and _old_engine is not None
+                    and not getattr(_in_engine, "sensors", {})
+                    and getattr(_old_engine, "sensors", {})):
+                for _name, _sensor in list(_old_engine.sensors.items()):
+                    _in_engine.register_sensor(_sensor)
+                # AUD-FIX: 迁移含 FileSensor 时必须补文件语义 resolver —
+                # 否则 WorldValidator fail-closed 拒绝全部文件观察
+                # （accepted=0, 世界模型学不到文件变化）
+                try:
+                    from ocos.daemon.factory import ensure_file_semantics
+                    if ensure_file_semantics(pipeline):
+                        logger.info(
+                            "🧠 AUD-FIX: 文件语义 resolver 已注入迁移后管线")
+                except Exception:
+                    logger.exception("AUD-FIX ensure_file_semantics failed")
+                logger.info(
+                    "🧠 AUD-FIX: 外部零传感器管线 ← 迁移 Phase 4 默认传感器 %s",
+                    list(_old_engine.sensors.keys()))
+        except Exception:
+            logger.exception("AUD-FIX sensor migration failed")
 
         # GAP-P1-4: 确保 PerceptionPipeline、AgentRuntime、daemon 使用同一 EventBus
         # 三实例 identity 必须一致 — 否则 StimulusScanner 和 FileSensor
@@ -778,33 +888,40 @@ class ResidentRuntime:
                         logger.exception("Dream cycle failed")
 
                 # ── 持续认知循环 (R5 continuous cognition) ────────────
-                # 每 60s 做一次: 反思 → LLM验证学习 → 制定计划
-                # 独立于 dream cycle (200 ticks ≈ 16min), 时刻保持大脑在工作
-                # 用时间戳而非 tick 取模 — agent 执行 goal 时 tick 可能不规律
-                try:
-                    from datetime import datetime, timezone
-                    now_ts = datetime.now(timezone.utc).timestamp()
-                    last_cog = getattr(self, "_last_cognition_ts", 0)
-                    diff = now_ts - last_cog
-                    if diff >= 60 and self._autonomy_level >= 1 and not self._braked:
-                        logger.info("🧠 Cognition Loop firing (gap=%.0fs, L%d braked=%s)", diff, self._autonomy_level, self._braked)
-                        self._run_continuous_cognition()
-                        self._last_cognition_ts = now_ts
-                        self._cognition_fail_streak = 0  # 成功 → 清零
-                    elif diff > 0:
-                        logger.debug("🧠 cognition cooldown: %.0fs since last, need 60s", diff)
-                except Exception as e:
-                    # U1: 连续失败计数 — 3 轮以上 → 主动告警
-                    streak = getattr(self, "_cognition_fail_streak", 0) + 1
-                    self._cognition_fail_streak = streak
-                    if streak >= 3:
-                        logger.critical(
-                            "🧠⚠️ Cognition Loop has failed %d consecutive times! "
-                            "Last error: %s — cognition is DEGRADED",
-                            streak, e,
-                        )
-                    else:
-                        logger.warning("continuous cognition failed (%d/3): %s", streak, e, exc_info=True)
+                # COG-V2 (2026-09-12 认知引擎升级 Phase 0.1): 60s 定时空转
+                # 已归档 — 生产实测 688 LLM 调用/天, 66% 反思点是"新知识
+                # 说了什么"的递归, 产物 64% 垃圾且对决策零可见。深度思考
+                # 改为 System2 事件触发 (Phase 3 落地); failure_lesson 仍
+                # 经 AgentRuntime._inject_failure_lessons 进 MEM_CTX。
+                # 方法体 _run_continuous_cognition 保留, 仅关闭触发。
+                if self._continuous_cognition_enabled:
+                    # 每 60s 做一次: 反思 → LLM验证学习 → 制定计划
+                    # 独立于 dream cycle (200 ticks ≈ 16min), 时刻保持大脑在工作
+                    # 用时间戳而非 tick 取模 — agent 执行 goal 时 tick 可能不规律
+                    try:
+                        from datetime import datetime, timezone
+                        now_ts = datetime.now(timezone.utc).timestamp()
+                        last_cog = getattr(self, "_last_cognition_ts", 0)
+                        diff = now_ts - last_cog
+                        if diff >= 60 and self._autonomy_level >= 1 and not self._braked:
+                            logger.info("🧠 Cognition Loop firing (gap=%.0fs, L%d braked=%s)", diff, self._autonomy_level, self._braked)
+                            self._run_continuous_cognition()
+                            self._last_cognition_ts = now_ts
+                            self._cognition_fail_streak = 0  # 成功 → 清零
+                        elif diff > 0:
+                            logger.debug("🧠 cognition cooldown: %.0fs since last, need 60s", diff)
+                    except Exception as e:
+                        # U1: 连续失败计数 — 3 轮以上 → 主动告警
+                        streak = getattr(self, "_cognition_fail_streak", 0) + 1
+                        self._cognition_fail_streak = streak
+                        if streak >= 3:
+                            logger.critical(
+                                "🧠⚠️ Cognition Loop has failed %d consecutive times! "
+                                "Last error: %s — cognition is DEGRADED",
+                                streak, e,
+                            )
+                        else:
+                            logger.warning("continuous cognition failed (%d/3): %s", streak, e, exc_info=True)
 
                 # Phase 33: 将队列中的目标导入 runtime 的 goal_store
                 self._drain_goal_queue()
@@ -903,19 +1020,42 @@ class ResidentRuntime:
                                         "AND created_at >= datetime('now','-6 hours')"
                                     ).fetchone()[0]
                                     # 有没有活跃的 explore goal (避免重复)
+                                    # AUD-FIX (2026-09-12): goal.status 是整数
+                                    # (1=pending), 字符串 IN 永远 False → 去重
+                                    # 失效 → 同描述目标 ×5 连发。双表 + 状态
+                                    # 兼容: goal(整数) + goals(大写字符串) +
+                                    # goals 同描述精确去重。
                                     _recent_explore = _conn.execute(
                                         "SELECT goal_id FROM goal "
                                         "WHERE (domain='exploration' OR "
                                         "       description LIKE '%工具%' OR "
                                         "       description LIKE '%probe%' OR "
                                         "       description LIKE '%explore%') "
-                                        "AND status IN ('pending', 'running') "
+                                        "AND status IN (1, 2) "
                                         "ORDER BY rowid DESC LIMIT 1"
                                     ).fetchone()
+                                    _recent_dup_desc = _conn.execute(
+                                        # 注意: LIKE 里 '[]' 是字符集通配符,
+                                        # 用无方括号的稳定子串匹配
+                                        "SELECT id FROM goals "
+                                        "WHERE description LIKE '%环境能力探索%' "
+                                        "AND UPPER(status) IN ('PENDING','ACTIVE','RUNNING') "
+                                        "LIMIT 1"
+                                    ).fetchone()
+                                    # COG-V2 Phase4.5: 历史去重 — 同型探索
+                                    # 近 7 天做过/放弃过（任意状态）就不再
+                                    # 生成。旧逻辑只查活跃态 → 完成即放行，
+                                    # 生产实锤同一条工具探索被生成 50 次。
+                                    _explored_recently = _recent_goal_exists(
+                                        _conn, "[内生] 环境能力探索")
                                     _conn.close()
 
-                                    # curiosity 足够 + 没在 explore → 生成
-                                    if _fl_count >= 2 and _recent_explore is None:
+                                    # curiosity 足够 + 没在 explore + 无同描述在途
+                                    # + 近 7 天没做过同型探索
+                                    if (_fl_count >= 2
+                                            and _recent_explore is None
+                                            and _recent_dup_desc is None
+                                            and not _explored_recently):
                                         _gid = f"GOAL-AUTO-{_uuid.uuid4().hex[:8]}"
                                         _desc = (
                                             f"[内生] 环境能力探索: 近 6h 有 {_fl_count} "
@@ -1070,6 +1210,28 @@ class ResidentRuntime:
                     self._perception_pipeline.tick()
                 except Exception:
                     logger.exception("Perception pipeline tick failed")
+                # AUD-FIX: 传感器健康巡检 — PS52 隔离设计会吞掉 sensor 异常,
+                # 若不巡检, 传感器死亡是静默的 (FileSensor str-bug 存活数周的教训)
+                try:
+                    for _sensor in getattr(
+                            getattr(self._perception_pipeline, "_engine", None),
+                            "sensors", {}).values() or []:
+                        try:
+                            _h = _sensor.get_health()
+                            _err = getattr(_h, "last_error_msg", "") or ""
+                            if _err and _err != getattr(_sensor, "_audit_last_err", None):
+                                logger.warning(
+                                    "🧠 sensor[%s] ERROR: %s",
+                                    getattr(_sensor.config, "sensor_name", "?"),
+                                    _err[:120])
+                                try:
+                                    _sensor._audit_last_err = _err
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
             # 降速逻辑（可选）
             if self._max_idle_cycles > 0 and self._idle_ticks >= self._max_idle_cycles:
@@ -1281,14 +1443,37 @@ class ResidentRuntime:
                         "WHERE tags LIKE '%goal_result%'").fetchone()[0]
                     self._result_cursor_init = True
                     return
+                # 测试/旧库 episodes 表可能无 goal/context 列 — 动态容错
+                _cols = {r[1] for r in conn.execute(
+                    "PRAGMA table_info(episodes)")}
+                _goal_sel = "goal" if "goal" in _cols else "NULL"
+                _ctx_sel = "context" if "context" in _cols else "NULL"
                 rows = conn.execute(
-                    "SELECT rowid, substr(decision,1,4000), created_at, outcome,"
-                    " goal FROM episodes WHERE tags LIKE '%goal_result%' AND rowid > ? "
-                    "ORDER BY rowid LIMIT 5",
+                    f"SELECT rowid, substr(decision,1,4000), created_at, outcome,"
+                    f" {_goal_sel}, {_ctx_sel} FROM episodes"
+                    " WHERE tags LIKE '%goal_result%'"
+                    " AND rowid > ? ORDER BY rowid LIMIT 5",
                     (self._last_result_rowid,)).fetchall()
             finally:
                 conn.close()
-            for rid, decision, created, outcome, ep_goal in rows:
+            for rid, decision, created, outcome, ep_goal, ep_context in rows:
+                # 严格串行+UI 分流（2026-09-12）：自主目标结果不推主对话
+                # outbox（前端 goal feed 按 origin 收进侧栏聚合），人类目标
+                # 仍走主对话结果卡。
+                ep_origin = ""
+                try:
+                    ep_origin = (json.loads(ep_context or "{}")
+                                 .get("origin_level", ""))
+                except (ValueError, TypeError):
+                    pass
+                if ep_origin not in ("SELF", "SYSTEM", "HUMAN") and ep_goal:
+                    # 兜底：episode context 缺失 → 查域层 goals 表
+                    try:
+                        grow = self._domain_goal_store.get(ep_goal)
+                        ep_origin = (grow or {}).get("origin_level", "") or ""
+                    except Exception:
+                        ep_origin = ""
+                is_auto_result = ep_origin in ("SELF", "SYSTEM")
                 # UX-J2 摘要化 + retry 去重
                 summary = self._summarize_goal_result(decision, outcome)
                 # 提取 goal key (目标标题前 30 字) 用于 retry 去重
@@ -1302,11 +1487,14 @@ class ResidentRuntime:
                 if now_ts - last_ts < RETRY_WINDOW and retry_cnt > 1:
                     # 窗口内 retry — 只推简短重试计数（不刷完整摘要）
                     short_text = f"↻ retry #{retry_cnt}: {summary[:100]}"
-                    self._user_inbox.post_outbound(short_text)
+                    if not is_auto_result:
+                        self._user_inbox.post_outbound(short_text)
                 else:
-                    # 首次或窗口外 — 推完整摘要
+                    # 首次或窗口外 — 推完整摘要（自主目标仅入侧栏 feed，
+                    # 不刷主对话）
                     result_text = f"目标执行完成（{created[11:19]}）：\n{summary}"
-                    self._user_inbox.post_outbound(result_text)
+                    if not is_auto_result:
+                        self._user_inbox.post_outbound(result_text)
 
                 self._recent_goal_push[goal_key] = now_ts
                 self._goal_retry_counts[goal_key] = retry_cnt
@@ -1319,6 +1507,20 @@ class ResidentRuntime:
                     self._goal_retry_counts.pop(k, None)
 
                 self._dispatch_result(summary)  # L2-3: 结果类附加外发（用摘要版）
+                # COG-V2 Phase 3.1: 事件驱动慢思考 — 目标失败且预算闸
+                # （≤8/天、间隔 >300s、开关）允许时，以真实 cause/cmd 做
+                # 一次 LLM 反思，产物过质量门写 lesson_note。不区分
+                # 人类/自主目标；失败静默，绝不阻断推送主链。
+                try:
+                    _oc = json.loads(outcome or "{}")
+                    if isinstance(_oc, dict) and _oc.get("success") is False:
+                        self._maybe_event_reflect(
+                            ep_goal or goal_key, _oc)
+                except (ValueError, TypeError):
+                    pass
+                except Exception:
+                    logger.debug("event reflection dispatch failed",
+                                 exc_info=True)
                 self._last_result_rowid = rid
                 # L3 防跑飞: 在途自主目标的结果 → 连续失败计数/自动降级。
                 # FIFO 配对为近似（daemon 单线程串行认领），诚实标注于
@@ -1431,6 +1633,40 @@ class ResidentRuntime:
         except Exception:
             logger.exception("ReflectionEngine failed")
 
+        # COG-V2 Phase 3.2: 成功配方沉淀（确定性，零 LLM）— 同工具姿势
+        # 近 7 天成功 ≥2 次 → tool_recipe 知识，经 RecallRouter 进工作空间
+        try:
+            stats = self._sediment_recipes()
+            if stats.get("sedimented"):
+                logger.info("🍳 Recipe sediment: %d new tool recipes",
+                            stats["sedimented"])
+        except Exception:
+            logger.exception("Recipe sedimentation failed")
+
+        # COG-V2 Phase 4.1: 遗忘（确定性，零 LLM）— 30d 无引用衰减/
+        # 90d 过期、配方 30d 过期、情景 180d 归档；引用即强化。
+        try:
+            fstats = self._run_forgetting()
+            if fstats.get("ran") and any((
+                    fstats.get("semantic_decayed"),
+                    fstats.get("semantic_expired"),
+                    fstats.get("recipes_expired"),
+                    fstats.get("episodes_archived"))):
+                logger.info(
+                    "🧹 Forgetting: decay=%d expire=%d recipe=%d archive=%d",
+                    fstats["semantic_decayed"], fstats["semantic_expired"],
+                    fstats["recipes_expired"], fstats["episodes_archived"])
+        except Exception:
+            logger.exception("Forgetting failed")
+
+    def _run_forgetting(self) -> dict:
+        """dream 附属：记忆经济学衰减/过期/归档（env OCOS_FORGETTING=0 关）。"""
+        from ocos.memory.forgetting import ForgettingService
+        db_path = getattr(self, "_db_path", None)
+        if not db_path:
+            return {}
+        return ForgettingService(db_path).run()
+
     def _run_reflection(self, db_path: str) -> None:
         """ReflectionEngine 双层反思回环 — 挂在 dream cycle 末尾."""
         from ocos.autonomous.reflection_engine import ReflectionEngine
@@ -1459,6 +1695,41 @@ class ResidentRuntime:
                 report.gaps_resolved, len(report.gaps_remaining),
             )
 
+    # ── COG-V2 Phase 3: 事件反思 + 配方沉淀（懒加载，失败不阻断主链）────
+
+    def _event_reflector(self):
+        """懒构建 EventReflector（tutor/ingestor 各一份，跨 tick 复用）。"""
+        from ocos.learning.event_reflection import EventReflector
+        if getattr(self, "_event_reflector_obj", None) is None:
+            db_path = getattr(self, "_db_path", None)
+            self._event_reflector_obj = EventReflector(
+                db_path=db_path,
+                tutor=self._build_tutor(),
+                ingestor=self._build_ingestor(db_path),
+            )
+        return self._event_reflector_obj
+
+    def _maybe_event_reflect(self, goal: str, outcome: dict) -> None:
+        """goal 失败 → 预算制慢思考（≤8/天，间隔 >300s）。"""
+        reflector = self._event_reflector()
+        res = reflector.reflect_failure(goal, outcome)
+        if res.get("ran"):
+            logger.info(
+                "Event reflection: cause=%s stored=%s reason=%s goal=%s",
+                res.get("cause"), res.get("stored"), res.get("reason"),
+                str(goal)[:60])
+
+    def _sediment_recipes(self) -> dict:
+        """dream 附属：成功工具姿势 → 确定性 recipe 知识。"""
+        from ocos.learning.recipe_sedimentor import RecipeSedimentor
+        db_path = getattr(self, "_db_path", None)
+        if not db_path:
+            return {}
+        if getattr(self, "_recipe_ingestor", None) is None:
+            self._recipe_ingestor = self._build_ingestor(db_path)
+        return RecipeSedimentor(db_path).maybe_sediment(
+            ingestor=self._recipe_ingestor)
+
     def _build_ingestor(self, db_path: str) -> "UnifiedIngestor":
         """构建完整注入的 UnifiedIngestor (KnowledgeRegistry + SemanticStore + AccessMatrix).
 
@@ -1478,8 +1749,9 @@ class ResidentRuntime:
             # F2: 给所有会调 ingest 的 owner 都加写权限
             for lvl in KnowledgeLevel:
                 for owner in ("daemon_experience", "epistemic_llm",
-                              "epistemic_web", "epistemic_research",
-                              "daily_self_evolution", "reflection_engine"):
+                          "epistemic_web", "epistemic_research",
+                          "daily_self_evolution", "reflection_engine",
+                          "event_reflection", "recipe_sedimentor"):
                     access_matrix.set_permission(
                         owner, lvl, can_read=True, can_write=True,
                     )
@@ -1555,14 +1827,20 @@ class ResidentRuntime:
 
     @staticmethod
     def _make_consumption_key(reflection_point: dict) -> str:
-        """P0-B: 生成幂等消费键 — (source + question_prefix + hint_prefix + episode_rowid)."""
+        """P0-B: 生成幂等消费键 — (source + question_prefix + hint_prefix + episode_rowid).
+
+        SELF-EVO (2026-09-12): 重考型反思（反思池冷却重考）携带 _revisit
+        日期盐 — 同一 rowid 不同日期产生不同键，冷却期后可再考一次；
+        同日内键不变，幂等红线不破。
+        """
         import hashlib
         src = reflection_point.get("source", "unknown")
         q = reflection_point.get("question", "")[:60]
         h = reflection_point.get("hint", "")[:40]
         # V3-fix: 加入 episode_rowid 防止不同 rowid 截断碰撞
         eid = reflection_point.get("_consumed_episode_rowid") or reflection_point.get("_knowledge_rowid") or ""
-        raw = f"{src}|{q}|{h}|{eid}"
+        rv = reflection_point.get("_revisit", "")
+        raw = f"{src}|{q}|{h}|{eid}|{rv}"
         digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
         return f"R:{digest}"
 
@@ -1685,9 +1963,17 @@ class ResidentRuntime:
                         # 限频更新
                         self._last_llm_cognition_ts = now_ts
                         # 沉淀到 knowledge
+                        # AUD-FIX (2026-09-12): 套娃沉淀闸 — 反思源是知识
+                        # (source=new_knowledge) 时, 产物 "Q: 新知识 [...] 说
+                        # '...'" 是知识引用知识, 回灌 knowledge 表只会无限
+                        # 递归膨胀。学习成果已在 llm_findings 里体现于本轮
+                        # 认知, 不再二次入库。只沉淀外部/失败/主题型反思。
+                        _ingest_ok = (
+                            reflection_point.get("source") != "new_knowledge")
                         try:
                             ingestor = self._build_ingestor(db_path=db_path)
-                            if ingestor is not None and llm_findings:
+                            if (ingestor is not None and llm_findings
+                                    and _ingest_ok):
                                 from ocos.learning.unified_ingestor import IngestArtifact, SourceChannel
                                 art = IngestArtifact(
                                     channel=SourceChannel.LLM_QA,
@@ -1725,7 +2011,9 @@ class ResidentRuntime:
             plan = self._build_plan_from_reflection(reflection_point, llm_findings, db_path)
             if plan:
                 logger.info("🧠 Cognition Loop Step③ plan generated: %s", plan.get("title", "")[:80])
-                # 写 PENDING evolution artifact (需人工审核)
+                # 写 evolution artifact — SELF-EVO: 有真实学习结果的方案
+                # 直接进自动批准通道（Pump: LOW + conf>=0.55 + 去重闸），
+                # 不再人工审核卡断（用户裁决: 思考结果直接让 agent 执行）
                 try:
                     from ocos.evolution.artifacts import EvolutionArtifactStore, EvolutionArtifact, ArtifactType
                     store = EvolutionArtifactStore(db_path=db_path)
@@ -1734,11 +2022,11 @@ class ResidentRuntime:
                         title=plan["title"],
                         summary=plan["summary"],
                         content=plan["content"],
-                        confidence=0.6,
+                        confidence=0.7,
                         source_agent="continuous_cognition",
-                        tags=["cognition_loop", "auto_generated", "mini_plan"],
+                        tags=["cognition_loop", "auto_generated", "self_evolution"],
                         risk_level="LOW",
-                        human_review_required=True,
+                        human_review_required=False,
                     )
                     store.save(art)
                     logger.info("🧠 Cognition Loop Step③ saved PENDING plan → %s", art.artifact_id)
@@ -1923,6 +2211,7 @@ class ResidentRuntime:
                 f"SELECT rowid, substr(statement,1,80) as s, scope_domain "
                 f"FROM knowledge "
                 f"WHERE scope_domain IN ('lesson','principle','procedure','debug') "
+                f"AND statement NOT LIKE '{{%' "
                 f"{_excl} "
                 f"ORDER BY rowid DESC LIMIT 1",
                 _consumed_kids,
@@ -1931,21 +2220,59 @@ class ResidentRuntime:
                 row = conn.execute(
                     f"SELECT rowid, substr(statement,1,80) as s, scope_domain "
                     f"FROM knowledge "
-                    f"WHERE scope_domain = 'concept' AND statement NOT LIKE '%Q: 新知识%' "
+                    f"WHERE scope_domain = 'concept' "
+                    # AUD-FIX: 排除所有 LLM_QA 自产知识 (statement 以 'Q: '
+                    # 开头) — 反思"上一轮反思的产物"是知识套娃递归源
+                    # (生产实锤: 反思 'Q: 深入学习...' → 产出 'Q: 新知识 [
+                    # concept] 说 Q: 深入学习...' 第二层套娃)
+                    f"AND statement NOT LIKE 'Q: %' "
+                    f"AND statement NOT LIKE '{{%' "
                     f"{_excl} "
                     f"ORDER BY rowid DESC LIMIT 1",
                     _consumed_kids,
                 ).fetchone()
+            # SELF-EVO (2026-09-12): 冷却重考回退 — 反思池饥饿实锤:
+            # 159 条 lesson 全部 consumed、seed 全 used，pick_reflect
+            # 永远 None → 思考结果断供 → 自进化停摆。新鲜源耗尽时，
+            # 取 2h 冷却期外的 lesson/principle/procedure 重考。
+            # 冷却期依据: 消费速率 1 条/60s ≈ 120 条/h，池深 159 ≈
+            # 2.6h 耗尽 → 24h 冷却必然饥饿 21h，2h 冷却可持续供血；
+            # 最久未考优先（last_seen ASC）→ 池内自然轮转不轰炸同一条。
+            # _revisit 日期盐入键 → 同日同条幂等不破红线。
+            _revisit = ""
+            if not row:
+                row = conn.execute(
+                    "SELECT k.rowid, substr(k.statement,1,80) as s, "
+                    "       k.scope_domain "
+                    "FROM knowledge k "
+                    "WHERE k.scope_domain IN "
+                    "  ('lesson','principle','procedure','debug') "
+                    "AND k.statement NOT LIKE '{%' "
+                    "AND k.statement NOT LIKE 'Q: %' "
+                    "AND (SELECT MAX(c2.consumed_at) FROM cognition_consumed c2 "
+                    "     WHERE c2.knowledge_rowid = k.rowid) "
+                    "       <= datetime('now', '-2 hours') "
+                    "ORDER BY (SELECT MAX(c.consumed_at) FROM cognition_consumed c "
+                    "          WHERE c.knowledge_rowid = k.rowid) ASC "
+                    "LIMIT 1"
+                ).fetchone()
+                if row:
+                    _revisit = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+                    logger.info(
+                        "🧠 pick_reflect hit (c-revisit) knowledge rowid=%d "
+                        "(冷却重考, 池饥饿回退)", row[0])
             if row and row[1]:
                 _krowid, _stmt, _domain = row
                 conn.close()
-                logger.info("🧠 pick_reflect hit (c) knowledge rowid=%d", _krowid)
+                if not _revisit:
+                    logger.info("🧠 pick_reflect hit (c) knowledge rowid=%d", _krowid)
                 return {
                     "source": "new_knowledge",
                     "question": (f"新知识 [{_domain}] 说 '{_stmt}' — "
                                  f"这个对 OCOS 架构意味着什么? 有什么可以落地的改进?"),
                     "hint": "知识落地建议",
                     "_knowledge_rowid": _krowid,  # Phase 2: 让 _mark_consumed 存
+                    "_revisit": _revisit,
                 }
             logger.debug("🧠 pick_reflect (c) no knowledge")
         except Exception as e:
@@ -1954,15 +2281,22 @@ class ResidentRuntime:
         # (d) deepen topics
         try:
             row = conn.execute(
-                "SELECT topic FROM reflection_seed_topics WHERE used=0 ORDER BY rowid DESC LIMIT 1"
+                "SELECT rowid, topic FROM reflection_seed_topics WHERE used=0 ORDER BY rowid DESC LIMIT 1"
             ).fetchone()
             logger.debug("🧠 pick_reflect (d) row=%s", row)
             if row:
+                # AUD-FIX (2026-09-12): pick 后必须 mark used — 否则同一 topic
+                # 每 60s 被反思一次 → 每分钟新 artifact (不同 id) → Pump 每条
+                # 转一个同主题 goal → goal 洪流 (生产证据: 同主题 ×10)
+                conn.execute(
+                    "UPDATE reflection_seed_topics SET used=1 WHERE rowid=?",
+                    (row[0],))
+                conn.commit()
                 conn.close()
                 logger.info("🧠 pick_reflect hit (d) deepen topic")
                 return {
                     "source": "deepen_topic",
-                    "question": f"深入学习: {row[0]}",
+                    "question": f"深入学习: {row[1]}",
                     "hint": "反思引导",
                 }
         except Exception as e:
@@ -1974,38 +2308,55 @@ class ResidentRuntime:
 
     def _build_plan_from_reflection(
             self, reflection: dict, llm_findings: str, db_path: str) -> dict | None:
-        """Step③: 从反思 + LLM 学习结果构建一个 mini-plan."""
+        """Step③: 从反思 + LLM 学习结果构建可执行优化方案（自进化）.
+
+        SELF-EVO (2026-09-12): 原 Mini-Plan 是固定模板（"建议增加一个
+        follow-up goal 深入探索"），无真实行动 → Pump 闸拦截 → 思考结果
+        永远到不了 agent（用户裁决: 思考结果必须能直接让 agent 执行优化
+        升级）。改造:
+          1. 仅当 Step② 有真实 LLM 学习结果（≥30 字符）才产方案 —
+             防止无学习结果的空转 goal（垃圾闸语义前移到源头）。
+          2. 行动 = agent 直接调研并实施优化（~/.ocos 非敏感路径），
+             带可验证 success_criteria — 符合项目约定（conf>=0.7 +
+             可验证 criteria → 自动批准）。
+          3. 标题改为 "EVO-Plan:" 前缀 — Pump 的 Mini-Plan 模板闸
+             只拦旧模板产物，新方案自然放行。
+        """
         if not reflection:
+            return None
+        findings = (llm_findings or "").strip()
+        if len(findings) < 30:
+            logger.debug("🧠 Step③ skip: 无真实 LLM 学习结果，不产空转方案")
             return None
 
         src = reflection.get("source", "reflection")
         q = reflection.get("question", "")[:100]
-        h = reflection.get("hint", "")
 
-        # 构建 plan content (简短, 因为是每 60s 一次)
         content_lines = [
-            f"# Mini-Plan: 来自持续认知循环",
+            f"# EVO-Plan: 思考结果驱动优化",
             f"",
             f"## 触发源",
             f"- 来源: {src}",
             f"- 问题: {q}",
-            f"- 提示: {h}",
             f"",
+            f"## LLM 学习结果",
+            f"{findings[:600]}",
+            f"",
+            f"## 执行行动（agent 直接执行，禁止只复述方案）",
+            f"1. 调研上述学习结果指出的改进点（只读探测，先产出证据）",
+            f"2. 改进可落地 → 对 ~/.ocos/ 下非敏感路径（scripts/"
+            f"artifacts/self_knowledge.md/config）直接实施优化变更；"
+            f"敏感路径（~/.ssh、/etc、/root、身份/宪法相关）一律跳过",
+            f"3. 改进超出本机可执行范围 → 产出实施方案文档到 "
+            f"~/.ocos/artifacts/plans/ 并写明所需授权与阻塞原因",
+            f"",
+            f"## success_criteria",
+            f"- 产出证据文件或变更清单（episodes 可查，含实际执行的命令）",
+            f"- 每项变更附验证命令及其执行结果",
+            f"- 未实施时必须给出具体阻塞原因（禁止静默跳过）",
         ]
-        if llm_findings:
-            content_lines.extend([
-                f"## LLM 学习结果",
-                f"{llm_findings[:600]}",
-                f"",
-            ])
-        content_lines.extend([
-            f"## 建议行动",
-            f"1. 基于以上分析, 增加一个 follow-up goal 深入探索",
-            f"2. 下次 dream consolidation 时重点关注这个方向",
-            f"3. 如果 LLM 学习结果有代码架构启发, 记入 knowledge principle",
-        ])
 
-        title = f"Mini-Plan: {src} — {q[:40]}"
+        title = f"EVO-Plan: {src} — {q[:40]}"
         return {
             "title": title[:80],
             "summary": f"[{src}] {q[:60]}",
@@ -2362,6 +2713,24 @@ class ResidentRuntime:
             logger.exception("UserInbox drain failed")
             return 0
         for msg in messages:
+            # R10-UNIFY (2026-09-12): 用户消息双写 — 观测 + 路由并行。
+            # 修复双输入体系旁路（R10 审计实锤: FIX-03 把 say 收件箱改成
+            # 纯目标路由后, 用户消息从不再成为 Cognitive Runtime 的
+            # Observation, inject_user_message 12h 零调用）。现在每条
+            # 收件箱消息先进感知(EventBus→Attention→WM→MEM_CTX), 再走
+            # 目标路由; 注入失败不阻断路由。
+            try:
+                if self._runtime is not None:
+                    self._runtime.inject_user_message(
+                        msg["content"], sender="say")
+            except Exception:
+                logger.debug("inject_user_message dual-write failed",
+                             exc_info=True)
+            # R10-UNIFY: kind="observe" = 感知镜像（WebUI converse 等旁路
+            # 源投递）— 只进感知通道, 不路由目标、不回复（原文已在调用方
+            # 同步处理, 这里只补观测, 防止重复建 goal）。
+            if msg.get("kind") == "observe":
+                continue
             # FIX-03: 改用 respond_auto 以统一路由逻辑
             if self._responder is not None:
                 try:
@@ -2627,7 +2996,22 @@ class ResidentRuntime:
                 aid = row["artifact_id"]
                 title = row["title"] or f"Evolution plan {aid[:8]}"
                 summary = row["summary"] or ""
-                desc = f"{title}\n\n{summary[:200]}"   # 写入 goals 的 description
+                content = row["content"] or ""
+                # SELF-EVO (2026-09-12): goal description 携带方案正文
+                # （行动 + success_criteria）— agent 认领后按方案直接执行，
+                # 而非只看到 title+summary 无从下手。
+                desc = f"{title}\n\n{summary[:200]}\n\n{content[:1200]}"
+
+                # AUD-FIX (2026-09-12) + COG-V2 Phase4.5 (2026-09-13):
+                # 反思产物回声闸（根治循环）— Mini-Plan 固定模板 / 执行日志
+                # JSON 当知识 / 知识套娃 / ✓✗执行回显复读，统一由
+                # _echo_artifact_reason 判定（生产实锤同型 goal 165→50 条堆积）。
+                echo_reason = _echo_artifact_reason(title, summary)
+                if echo_reason:
+                    store.mark_applied(aid)
+                    logger.info(
+                        "Pump: skip artifact %s (%s)", aid[:8], echo_reason)
+                    continue
 
                 # 精确去重: 查 goals.metadata 里的 artifact_id（而非 title LIKE）
                 dup = db.execute(
@@ -2641,13 +3025,30 @@ class ResidentRuntime:
                     goals_created += 0         # 不占 cap 但记一次处理
                     continue
 
-                # 写入 goals 表 (PENDING, source=evolution_artifact)
+                # COG-V2 Phase4.5: 标题历史去重（任意状态，含 COMPLETED/
+                # ABANDONED，7 天窗）。artifact_id 去重只防同一产物重转，
+                # 防不住 LLM 反复产出同标题新方案（生产实锤：同标题
+                # EVO-Plan 43 次、工具探索 50 次）。
+                if _recent_goal_exists(db, title):
+                    store.mark_applied(aid)
+                    logger.info(
+                        "Pump: skip artifact %s (同标题目标 7 天内已存在: %s)",
+                        aid[:8], title[:60])
+                    continue
+
+                # 写入 goals 表 (PENDING, origin_level=SELF — SELF-EVO
+                # 修复: 原先不设 origin_level 默认 SYSTEM, 认领通道只认
+                # HUMAN/SELF → 271 条 EVO-GOAL 全部 ABANDONED, 思考结果
+                # 到不了 agent。approved=true = Pump 自动批准即 authority
+                # (与 B1 LOW-risk 自动批准语义一致), claim_pending_approved_self
+                # 可直接认领)
                 db.execute("""
                     INSERT OR IGNORE INTO goals
-                    (id, level, description, status, source, priority,
-                     created_at, updated_at, metadata)
-                    VALUES (?, 'AUTO', ?, 'PENDING', 'evolution_artifact', ?,
-                            datetime('now'), datetime('now'), ?)
+                    (id, level, origin_level, description, status, source,
+                     priority, created_at, updated_at, metadata)
+                    VALUES (?, 'AUTO', 'SELF', ?, 'PENDING',
+                            'evolution_artifact', ?, datetime('now'),
+                            datetime('now'), ?)
                 """, (
                     f"EVO-GOAL-{aid[:8]}",
                     desc,
@@ -2656,6 +3057,8 @@ class ResidentRuntime:
                         "artifact_id": aid,
                         "confidence": row["confidence"],
                         "autonomous": True,
+                        "approved": True,
+                        "self_evolution": True,
                     }),
                 ))
                 db.commit()
@@ -2684,6 +3087,66 @@ class ResidentRuntime:
         """
         if self._domain_goal_store is None:
             return 0
+        # ── 严格串行闸（2026-09-12 用户裁决）─────────────────────────
+        # 在途有 ACTIVE 目标时不认领新目标（做完一个再领下一个）。
+        # 超时让位: 自主目标 8 分钟无收尾 → ABANDONED；有人类目标排队时
+        # 自主目标 60s 即让位（人类快车道）；人类目标 30 分钟安全超时。
+        SERIAL_AUTO_TIMEOUT_S = 8 * 60
+        SERIAL_HUMAN_PREEMPT_S = 60
+        SERIAL_HUMAN_TIMEOUT_S = 30 * 60
+        now_ts = time.time()
+        # ResidentRuntime 等无 __init__ 注入的宿主：防御性初始化
+        if not hasattr(self, "_serial_claimed_at"):
+            self._serial_claimed_at = {}
+        try:
+            live_rows = self._domain_goal_store.load_active()
+            active_rows = [g for g in live_rows if g.get("status") == "ACTIVE"]
+            has_pending_human = any(
+                g.get("status") == "PENDING"
+                and g.get("origin_level") == "HUMAN"
+                for g in live_rows)
+        except Exception:
+            logger.exception("serial gate: load_active failed")
+            active_rows, has_pending_human = [], False
+
+        survivors: list[str] = []
+        for g in active_rows:
+            gid = g["id"]
+            claimed_ts = self._serial_claimed_at.get(gid)
+            if claimed_ts is None:
+                # 本进程未认领过（重启遗留）→ 用 updated_at 兜底
+                try:
+                    _u = datetime.fromisoformat(g.get("updated_at", ""))
+                    if _u.tzinfo is None:
+                        _u = _u.replace(tzinfo=timezone.utc)
+                    claimed_ts = _u.timestamp()
+                except ValueError:
+                    claimed_ts = now_ts
+            age = now_ts - claimed_ts
+            is_human = g.get("origin_level") == "HUMAN"
+            timeout = (SERIAL_HUMAN_TIMEOUT_S if is_human
+                       else SERIAL_HUMAN_PREEMPT_S if has_pending_human
+                       else SERIAL_AUTO_TIMEOUT_S)
+            if age > timeout:
+                try:
+                    self._domain_goal_store.abandon(
+                        gid, f"serial timeout age={age:.0f}s "
+                             f"origin={g.get('origin_level')}")
+                    self._serial_claimed_at.pop(gid, None)
+                except Exception:
+                    logger.exception("serial gate: abandon failed: %s", gid)
+                    survivors.append(gid)
+            else:
+                survivors.append(gid)
+
+        # 映射 GC：已不在途的认领时间戳清掉
+        for stale_id in [k for k in self._serial_claimed_at
+                         if k not in {g["id"] for g in active_rows}]:
+            self._serial_claimed_at.pop(stale_id, None)
+
+        if survivors:
+            return 0
+        # ── 串行闸结束 ─────────────────────────────────────────────
         try:
             claimed = self._domain_goal_store.claim_pending_human(limit=1)
             if not claimed:
@@ -2701,6 +3164,8 @@ class ResidentRuntime:
             logger.exception("Goal claim failed")
             return 0
         for row in claimed:
+            # 串行闸: 记录认领时刻（域层此刻已原子置 ACTIVE）
+            self._serial_claimed_at[row["id"]] = now_ts
             src_channel = row.get("source") or "daemon"
             metadata = row.get("metadata")
             if isinstance(metadata, str):
@@ -2737,7 +3202,8 @@ class ResidentRuntime:
                             f"（domain={domain}，"
                             f"{'自主' if is_autonomous else '人工'}目标 — "
                             f"执行完成后结果自动回推本对话）",
-                            kind="progress")
+                            # 自主目标只进侧栏（progress），人类目标进主对话
+                            kind="progress" if is_autonomous else "human_progress")
                     except Exception:
                         logger.debug("claim progress outbound failed",
                                      exc_info=True)

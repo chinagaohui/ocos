@@ -283,6 +283,30 @@ class GoalStore:
             conn.rollback()
             raise
 
+    def abandon(self, goal_id: str, reason: str = "") -> bool:
+        """串行调度闸（2026-09-12）: 超时无进展的在途目标 → ABANDONED。
+
+        严格串行下在途目标最多 1 个，卡死目标会永久堵住认领队列，
+        故 daemon 对超期自主目标调用本方法让位。终止态不倒退。
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._conn()
+        try:
+            cur = conn.execute(
+                "UPDATE goals SET status = 'ABANDONED', updated_at = ? "
+                "WHERE id = ? AND status NOT IN "
+                "('COMPLETED', 'CANCELLED', 'FAILED', 'ABANDONED', "
+                "'SUPERSEDED', 'EXPIRED')",
+                (now, goal_id),
+            )
+            conn.commit()
+            if cur.rowcount > 0 and reason:
+                logger.warning("goal abandoned: %s (%s)", goal_id, reason[:120])
+            return cur.rowcount > 0
+        except Exception:
+            conn.rollback()
+            raise
+
     def update_progress(self, goal_id: str, progress: float) -> bool:
         """更新 Goal 进度。progress 自动钳制到 [0.0, 1.0]。"""
         clamped = min(1.0, max(0.0, progress))

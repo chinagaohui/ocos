@@ -299,6 +299,42 @@ def build_health_loop(runtime=None, interval_ticks: int = 100):
     return health_loop
 
 
+def ensure_file_semantics(pipeline: Any) -> bool:
+    """AUD-FIX (2026-09-12): 为管线注入文件实体/状态解析器（幂等）。
+
+    PW-5.1: 文件观察必须带 entity=path, state=exists/size 才能被
+    WorldValidator 接受（fail-closed 设计）。此前 file_semantics 只在
+    build_perception_pipeline 构造期生效 — 传感器是后迁移进来的场景
+    （daemon attach 迁移 Phase 4 默认传感器）管线已建成，无法再传
+    file_semantics=True → 文件观察全部被诚实拒绝（accepted=0）。
+
+    返回 True 表示本次实际注入了 resolver（已有时返回 False）。
+    """
+    if getattr(pipeline, "_entity_resolver", None) is not None:
+        return False
+
+    def _file_meta(obs) -> dict:
+        """文件观察的语义载荷: content（dict）或 metadata。"""
+        for src_attr in ("content", "metadata"):
+            v = getattr(obs, src_attr, None)
+            if isinstance(v, dict) and v.get("operation"):
+                return v
+        return {}
+
+    def entity_resolver(obs):
+        return _file_meta(obs).get("path") or None
+
+    def state_resolver(obs):
+        meta = _file_meta(obs)
+        if meta.get("operation") == "created":
+            return {"exists": True, "size": meta.get("size", 0)}
+        return None
+
+    pipeline._entity_resolver = entity_resolver
+    pipeline._state_resolver = state_resolver
+    return True
+
+
 def build_perception_pipeline(sensors: Optional[list] = None,
                               file_semantics: bool = False,
                               event_bus: Optional[Any] = None):

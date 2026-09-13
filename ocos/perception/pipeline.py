@@ -257,5 +257,9 @@ class PerceptionPipeline:
         payload.setdefault("source_sensor", obs.source_sensor)
         payload.setdefault("confidence", obs.confidence)
         payload.setdefault("observation_type", obs.type.value)
+        # AUD-TRACE: trace_id 进 payload → EventNormalizer 原样透传到
+        # CognitiveEvent.metadata → attention/WM/决策上下文全链可 join
+        payload.setdefault(
+            "trace_id", getattr(obs, "trace_id", "") or f"TRC-{obs.id}")
 
         return RawEvent(source=source, payload=payload)

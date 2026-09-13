@@ -321,6 +321,17 @@ class ReflectionEngine:
             )
             now = datetime.now(timezone.utc).isoformat()
             for t in topics:
+                # AUD-FIX (2026-09-12): 同 topic 去重 — 原来无条件 INSERT,
+                # 失败主题被 reflection 反复回灌成 seed → MotivationHub 反复
+                # 生成同主题 follow-up goal → 执行又失败 → 死循环。
+                # 已存在（无论 used 与否）就跳过: 一个主题最多进入一次
+                # 学习循环, 失败的知识沉淀走 failure_lesson, 不走重复注入。
+                exists = c.execute(
+                    "SELECT 1 FROM reflection_seed_topics WHERE topic = ? LIMIT 1",
+                    (t,),
+                ).fetchone()
+                if exists:
+                    continue
                 c.execute(
                     "INSERT INTO reflection_seed_topics VALUES (?,?,?,0)",
                     (t, "reflection", now),

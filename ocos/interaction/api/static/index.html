@@ -741,6 +741,12 @@ body {
       <div style="color:var(--muted);font-size:10px;text-align:center;padding:16px">无待批项</div>
     </div>
 
+    <div class="section-title">后台自主活动</div>
+    <div id="autoSummary" style="font-size:10px;color:var(--cyan);padding:2px 0 6px 0">近 5 分钟 ✓ 0 · ✗ 0 · 排队 0</div>
+    <div id="autoFeed">
+      <div style="color:var(--muted);font-size:10px;text-align:center;padding:10px" id="autoFeedEmpty">暂无后台活动</div>
+    </div>
+
     <div class="section-title">最近突触</div>
     <div id="recentEpisodes">
       <div style="color:var(--muted);font-size:10px;text-align:center;padding:16px">加载中...</div>
@@ -1099,10 +1105,16 @@ async function refreshAll() {
     const recent = d.recent_episodes || [];
     const recentHtml = recent.slice(0, 6).map(e => {
       const time = e.created_at?.slice(11, 16) || '--:--';
-      const ok = e.decision?.includes('completed') || e.decision?.includes('success');
-      const icon = ok ? '✓' : '✗';
-      const statusClass = ok ? 'ok' : 'fail';
-      const text = (e.decision || e.context || '').slice(0, 40);
+      // AUD-FIX: 仅明确失败信号 (✗ 开头/含'失败') 才标红, 信息型条目
+      // (问候/自省等中性内容) 不再误标 ✗
+      const bad = e.decision?.startsWith('✗') || e.decision?.includes('失败');
+      const icon = bad ? '✗' : '✓';
+      const statusClass = bad ? 'fail' : 'ok';
+      // AUD-FIX: 优先 decision; 回退时显示 action 标签而非原始 dict
+      // (服务端已不再输出 context dict — 泄漏 {'identity_hash':...} 已根除)
+      let text = (e.decision || '').trim();
+      if (!text) text = `[${e.action || 'event'}]`;
+      text = text.slice(0, 40);
       return `<div class="episode-item"><span class="time">${time}</span><span class="status ${statusClass}">${icon}</span><span>${text}...</span></div>`;
     }).join('');
     document.getElementById('recentEpisodes').innerHTML = recentHtml || '<div style="color:var(--muted);font-size:10px">暂无</div>';
@@ -1173,12 +1185,19 @@ async function refreshAll() {
       daemonText.textContent = '离线';
     }
 
-    const recentErrors = (d.recent_episodes || []).filter(e =>
-      e.decision?.includes('proxy') || e.decision?.includes('失败')
-    );
+    // AUD-FIX: 徽标语义修正 — 原条件 (含'proxy'或'失败') 让历史失败记录
+    // 使 ⚠ PROXY ERROR 几乎常亮 (误导: proxy 错误 ≠ 执行失败)。现在:
+    //   'proxy' 命中 → PROXY ERROR 徽标; '失败' → 独立计数徽标
+    const recentEps = d.recent_episodes || [];
+    const proxyErr = recentEps.some(e => e.decision?.includes('proxy'));
+    const failCount = recentEps.filter(e => e.decision?.includes('失败')).length;
     const warningEl = document.getElementById('brainWarning');
-    if (recentErrors.length > 0) {
+    if (proxyErr) {
       warningEl.style.display = 'block';
+      warningEl.textContent = '⚠ PROXY ERROR';
+    } else if (failCount > 0) {
+      warningEl.style.display = 'block';
+      warningEl.textContent = `⚠ 近期失败 ${failCount} 条`;
     } else {
       warningEl.style.display = 'none';
     }
@@ -1195,22 +1214,80 @@ let _feedSince = null;
 let _feedPolling = false;
 let _lastActiveGoalId = null;
 
+// ═══ 后台自主活动（串行调度后：自主目标只进侧栏，不淹主对话）═══
+const _autoStats = { ok: [], fail: [] };  // 完成/失败时间戳（5min 滑窗）
+const _autoRunSeen = new Set();            // 进行中目标去重（徽章/outbox 双通道）
+let _pendingGoals = 0;
+
+function _goalKey(s) {
+  // 归一化目标 id（兼容 EVO-GOAL-* 与 GOAL-*），无匹配返回 null
+  const m = String(s || '').match(/(?:EVO-)?GOAL-[A-Za-z0-9_-]+/);
+  return m ? m[0] : null;
+}
+
+function _autoPrune() {
+  const cutoff = Date.now() - 5 * 60 * 1000;
+  _autoStats.ok = _autoStats.ok.filter(t => t > cutoff);
+  _autoStats.fail = _autoStats.fail.filter(t => t > cutoff);
+}
+
+function renderAutoSummary() {
+  _autoPrune();
+  const el = document.getElementById('autoSummary');
+  if (el) el.textContent = `近 5 分钟 ✓ ${_autoStats.ok.length} · ✗ ${_autoStats.fail.length} · 排队 ${_pendingGoals}`;
+}
+
+function addAutoEntry(icon, text, outcome, dedupKey) {
+  // outcome: 'ok' | 'fail' | 'run' | null；dedupKey: 目标 id（进行中事件去重）
+  const key = _goalKey(dedupKey);
+  if (outcome === 'run' && key) {
+    if (_autoRunSeen.has(key)) return;
+    _autoRunSeen.add(key);
+  }
+  if ((outcome === 'ok' || outcome === 'fail') && key) {
+    _autoRunSeen.delete(key);
+  }
+  const feed = document.getElementById('autoFeed');
+  if (!feed) return;
+  document.getElementById('autoFeedEmpty')?.remove();
+  if (outcome === 'ok') _autoStats.ok.push(Date.now());
+  if (outcome === 'fail') _autoStats.fail.push(Date.now());
+  const div = document.createElement('div');
+  div.className = 'episode-item';
+  const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const cls = outcome === 'ok' ? 'ok' : (outcome === 'fail' ? 'fail' : '');
+  div.innerHTML = `<span class="time">${time}</span><span class="status ${cls}">${icon}</span><span>${escapeHtml(text.slice(0, 46))}</span>`;
+  feed.prepend(div);
+  while (feed.children.length > 12) feed.lastChild.remove();
+  renderAutoSummary();
+}
+
 function updateActivityBadge(act) {
   const chip = document.getElementById('ctxActivity');
   if (!chip) return;
   const g = act.active_goal;
   const d = act.daemon || {};
+  if (typeof act.pending_goals === 'number') {
+    _pendingGoals = act.pending_goals;
+    renderAutoSummary();
+  }
   if (g) {
     chip.textContent = `⟳ 执行中·${Math.round(g.elapsed_s || 0)}s`;
     chip.title = `目标 ${g.id}（${g.origin || 'SELF'}）：${g.description}`;
     chip.className = 'ctx-badge executing';
     if (_lastActiveGoalId !== g.id) {
       _lastActiveGoalId = g.id;
-      addMessage({
-        reply: `**目标已认领，开始执行**\n\n📋 ${g.description}\n\n完成后结果自动出现在本对话里。`,
-        thinking_trace: null,
-        isMock: false
-      }, false, false);
+      if (g.origin === 'HUMAN') {
+        // 人类目标：认领与结果都进主对话
+        addMessage({
+          reply: `**目标已认领，开始执行**\n\n📋 ${g.description}\n\n完成后结果自动出现在本对话里。`,
+          thinking_trace: null,
+          isMock: false
+        }, false, false);
+      } else {
+        // 自主目标：只在侧栏记一行，不刷主对话
+        addAutoEntry('⟳', g.description, 'run', g.id);
+      }
     }
   } else {
     _lastActiveGoalId = null;
@@ -1247,12 +1324,20 @@ async function pollGoalFeed() {
         const icon = it.success ? '✅' : '❌';
         const steps = lines.length > 1 ? lines.slice(1, 6).map(l => ({ text: l.slice(0, 120), status: it.success ? 'success' : 'fail' })) : null;
 
-        addMessage({
-          reply: `**${icon} ${title}**\n${body ? ('\n' + body) : ''}`,
-          thinking_trace: null,
-          steps: steps,
-          isMock: !it.success
-        }, false, !it.success);
+        if (it.origin === 'SELF' || it.origin === 'SYSTEM') {
+          // 自主目标结果只进侧栏（去状态符号，一行）
+          addAutoEntry(it.success ? '✓' : '✗',
+                       title.replace(/^[✓✗]\s*/, '').replace(/^[^\s]{0,12}\s/, ''),
+                       it.success ? 'ok' : 'fail');
+        } else {
+          // 人类目标：完整卡片进主对话
+          addMessage({
+            reply: `**${icon} ${title}**\n${body ? ('\n' + body) : ''}`,
+            thinking_trace: null,
+            steps: steps,
+            isMock: !it.success
+          }, false, !it.success);
+        }
       }
       _feedSince = (d.data.server_time) || _feedSince;
     } else {
@@ -1319,6 +1404,14 @@ async function pollOutbox() {
     for (const m of j.data.messages) {
       const content = m.content || '';
       if (!content || content.includes('LLM 规划失败') || content.includes('proxy')) continue;
+
+      // kind=progress = 自主目标认领播报，只进侧栏，不刷主对话
+      if (m.kind === 'progress') {
+        const titleLine = content.split('\n')[0].replace(/^⟳\s*/, '').slice(0, 60);
+        addAutoEntry('⟳', titleLine, 'run', content);
+        outboxCursor = Math.max(outboxCursor, m.rid);
+        continue;
+      }
 
       // 把 OCOS 主动说的话也结构化: 标题\n正文\n建议
       const lines = content.split('\n');

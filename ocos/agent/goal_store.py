@@ -35,6 +35,28 @@ def _domain_from_str(value: str) -> "GoalDomain":
         return GoalDomain.WRITING
 
 
+def _enum_safe(cls, raw, default, field_name: str):
+    """枚举安全解析（2026-09-12 崩溃循环修复）。
+
+    boot 时 restore_from_store 加载全部 active goal，一条脏枚举值
+    （如 origin_level='self' 小写）曾致 daemon 反复崩溃。策略：
+    先按 value 构造，失败后做大小写归一化重试，仍失败回退默认值
+    并打 WARNING，禁止单条脏行炸掉 boot。
+    """
+    try:
+        return cls(raw)
+    except (ValueError, KeyError, TypeError):
+        pass
+    try:
+        return cls[str(raw).upper()]
+    except (ValueError, KeyError, TypeError):
+        pass
+    logger.warning(
+        "goal row has invalid %s=%r, fallback to %s", field_name, raw, default
+    )
+    return default
+
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS goal (
     goal_id         TEXT PRIMARY KEY,
@@ -173,10 +195,13 @@ class GoalSQLiteStore:
             priority=d.get("priority", 1.0),
             created_at=created_at,
             deadline=deadline,
-            status=GoalStatus[d.get("status", "PENDING")],
+            status=_enum_safe(GoalStatus, d.get("status", "PENDING"),
+                              GoalStatus.PENDING, "status"),
             result=result,
-            origin_level=GoalOriginLevel(d.get("origin_level", "SYSTEM")),
-            authority=GoalAuthority(d.get("authority", "AUTONOMOUS")),
+            origin_level=_enum_safe(GoalOriginLevel, d.get("origin_level", "SYSTEM"),
+                                    GoalOriginLevel.SYSTEM, "origin_level"),
+            authority=_enum_safe(GoalAuthority, d.get("authority", "AUTONOMOUS"),
+                                 GoalAuthority.AUTONOMOUS, "authority"),
             domain=_domain_from_str(d.get("domain", "writing")),
             caller=d.get("caller", "unknown"),
         )

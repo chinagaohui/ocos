@@ -33,5 +33,23 @@
     "e3b0c44298fc1c14",
     "e3b0c44298fc1c14",
     "e3b0c44298fc1c14"
-  ]
+  ],
+  "post_freeze_disposition": {
+    "2026-09-13_COG-V2_Phase4": {
+      "moved_to_ocos/_archive": [
+        "ocos/cognitive_nutrition (整包：零生产根引用)",
+        "ocos/engines/narrative_pipeline.py (零生产根引用)",
+        "ocos/engines/forgetting_engine.py (仅测试引用；现役遗忘服务=ocos.memory.forgetting.ForgettingService)",
+        "ocos/engines/goal_arbitration_engine.py (仅测试引用)",
+        "ocos/engines/policy_engine.py (仅测试引用)",
+        "ocos/engines/prediction_engine.py (仅测试引用)",
+        "ocos/engines/promotion_engine.py (仅测试引用)",
+        "ocos/engines/simulation_engine.py (仅测试引用)"
+      ],
+      "kept_in_situ": [
+        "ocos.cognitive_loop / ocos.cognitive_continuity：仍属 v1 冻结 ABI，且被冻结旧 Runtime(autonomous_loop) 与 master_agent/converse 链路引用，不做物理移动"
+      ],
+      "method": "git mv 归档不删除；归档测试加 archived_ 前缀；生产/测试零新增失败"
+    }
+  }
 }

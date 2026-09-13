@@ -864,7 +864,13 @@ class AgentRuntime:
                     logger.warning("goal_store.load_active failed (event loop): %s", _gs_e)
 
                 candidate_score = event.candidate_score
-                source_type = getattr(event, 'source_type', 'file_change')
+                # R10-FIX (2026-09-12): 原 getattr(event, 'source_type',
+                # 'file_change') 恒落默认值 — CognitiveEvent 无 source_type
+                # 属性, 所有事件在置信度评分里都伪装成 file_change。
+                # 改取 event.source.name (如 user_input/system/file_change)。
+                source_type = str(getattr(
+                    getattr(event, "source", None), "name",
+                    "unknown")).lower()
 
                 # Phase 35: 存储原始事件数据供 step 2 使用
                 event_data = {
@@ -874,6 +880,9 @@ class AgentRuntime:
                     "candidate_score": candidate_score,
                     "source_type": source_type,
                     "active_goals": active_goals,
+                    # AUD-TRACE: 观察全链追踪 ID (pipeline→payload→metadata 透传)
+                    "trace_id": (event.metadata.get("trace_id", "")
+                                 if isinstance(event.metadata, dict) else ""),
                 }
                 events_for_attention.append(event_data)
 
@@ -883,6 +892,7 @@ class AgentRuntime:
                     "type": event.event_type,
                     "summary": event.summary,
                     "score": candidate_score,
+                    "trace_id": event_data["trace_id"],
                 })
 
             # Phase 35: 存储事件供 step 2 使用
@@ -995,6 +1005,19 @@ class AgentRuntime:
         # Phase 35: 执行 Attention WM 分配指令
         decisions = self._last_attention_decisions
         if decisions:
+            # R10-UNIFY (2026-09-12): event_id → {trace_id, summary} 反查表
+            # (step 1 存的 event_data)。summary 随 WM 落盘，Recall 阶段
+            # 才能拿到观测内容而非仅元数据。
+            _event_by_id: dict[str, dict[str, str]] = {
+                ed.get("event_id", ""): {
+                    "trace_id": ed.get("trace_id", ""),
+                    "summary": ed.get("summary", ""),
+                    "source": ed.get("source_type", ""),
+                }
+                for ed in (self._last_ingestion_events or [])
+                if isinstance(ed, dict)
+            }
+
             for d in decisions:
                 if d.wm_allocation is None:
                     continue
@@ -1008,6 +1031,7 @@ class AgentRuntime:
                 # 写入 WorkingMemory Store
                 if hasattr(self, "_wm_store") and self._wm_store is not None:
                     try:
+                        _ev = _event_by_id.get(event_id, {})
                         self._wm_store.store(
                             key=f"attention:{slot}:{event_id}",
                             value={
@@ -1015,6 +1039,12 @@ class AgentRuntime:
                                 "slot": slot,
                                 "attention_weight": weight,
                                 "decision": d.decision.value,
+                                # AUD-TRACE: 观察全链追踪 ID, 与源 Observation 同值
+                                "trace_id": _ev.get("trace_id", ""),
+                                # R10-UNIFY: 观测摘要随 WM 落盘（Recall 可读）
+                                "summary": _ev.get("summary", ""),
+                                # R10-FIX: 来源类型落盘 — Recall 按 user_input 优先
+                                "source": _ev.get("source", ""),
                             },
                             ttl=3600 if slot == "environmental_scan" else None,
                         )
@@ -1453,6 +1483,23 @@ class AgentRuntime:
                 if _cap:
                     _cap_success[_cap] = bool(
                         _cap_success.get(_cap, True)) and bool(r.get("success"))
+            # 严格串行/UI 分流（2026-09-12）: 结果 episode 标注当前目标
+            # id 与来源层，供 /converse/feed 区分人类/自主目标（自主结果
+            # 只进侧栏，不再淹没主对话）。
+            _goal_id = None
+            _origin = None
+            try:
+                _cur = self.agent.goal_stack.peek()
+                if _cur is None and self._goal_store is not None:
+                    _dag_gid = getattr(self, "_active_dag_goal_id", None)
+                    if _dag_gid:
+                        _cur = self._goal_store.load(_dag_gid)
+                if _cur is not None:
+                    _goal_id = getattr(_cur, "goal_id", None)
+                    _ol = getattr(_cur, "origin_level", None)
+                    _origin = getattr(_ol, "value", str(_ol)) if _ol else None
+            except Exception:
+                pass
             episode = Episode(
                 id=f"EPI-{uuid.uuid4().hex[:12]}",
                 experience_id=f"EXP-GOAL-{uuid.uuid4().hex[:8]}",
@@ -1460,6 +1507,8 @@ class AgentRuntime:
                 session_id=f"tick_{self._cycle_count}",
                 context={"task_count": len(results),
                          "kind": "goal_execution_result",
+                         "goal_id": _goal_id,
+                         "origin_level": _origin,
                          # P2: 此前 context 无 agent 键 → 自我模型把全部
                          # 目标归到 "?"，agent 级成功率永远失真
                          "agent": next((r.get("agent") for r in results
@@ -1479,6 +1528,17 @@ class AgentRuntime:
             )
             self._memory_hub.episode.save(episode)
             logger.info("Goal result episode saved (%d tasks)", len(results))
+            # COG-V2 Phase 2.3: 自我模型增量校准 — 每次目标闭合后更新能力
+            # 实测胜率 / 反复失败模式 / 当前专注，使决策前必读的 [self]
+            # 反映最新状态。确定性聚合零 LLM；失败静默不阻断主链。
+            try:
+                _sm = getattr(self, "_self_model", None)
+                if _sm is not None and hasattr(_sm, "calibrate"):
+                    _sm.calibrate(
+                        capability_names=getattr(
+                            self, "_self_model_caps", None) or None)
+            except Exception as _sm_e:
+                logger.debug("self-model calibrate skipped: %s", _sm_e)
             # UX-J 即时推送: 通知宿主（daemon）立刻推送出站消息，
             # 不等 5-tick 节拍；回调失败不阻断主流程
             cb = getattr(self, "_on_goal_result", None)
@@ -1879,6 +1939,14 @@ class AgentRuntime:
         import re
         _cmd = (cmd or "").strip()
         _stderr = (stderr or "").strip()
+
+        # AUD-FIX (2026-09-12): 沙盒 BLOCKED_COMMANDS 拦截 → 不生成 mutation_policy。
+        # 生产实锤: 沙盒文案 "matches 'eval' in BLOCKED_COMMANDS" 的引号词被
+        # 当成"被拒路径"提取 → deny.patterns=['eval'] → 子串匹配把
+        # retrieval/evaluation 查询全封 7 天（48 次 vetoes/2026-09-12）。
+        # 沙盒黑名单是确定性防线，每次执行都会再拦，学习层重复拦截只有毒化价值。
+        if "BLOCKED_COMMANDS" in _stderr:
+            return None
 
         # 只有三种 cause 生成 mutation_policy（BV4 范围）
         if cause == "permission_denied":
@@ -2827,13 +2895,18 @@ class AgentRuntime:
     def learning_artifacts(
         self,
         description: str,
-        limit: int = 5,
+        limit: int = 9,
         min_confidence: float = 0.6,
     ) -> list[dict[str, Any]]:
-        """聚合检索决策可用学习产物（beliefs + knowledge + skills + reflection + failure_lessons）。
-          - beliefs: 置信度 >= min_confidence 的已持有信念，按与描述的关键
-            词重叠度排序（重叠越多越相关），取 top-k。
-          - knowledge: 全文 search(描述) 命中 + 置信度过滤。
+        """聚合检索决策可用学习产物，经全局工作空间配额竞争后返回。
+
+        COG-V2 Phase 1（子记忆系统 + 全局工作空间）：
+          - 记忆来源分属五个子系统: self / episodic / semantic /
+            procedural / observation（+gap），各自有独立配额；
+          - RecallRouter 直读 DB 的 knowledge/belief/episodes/self_model
+            （此前 dream 产物对决策零可见，见认知引擎梳理 P0 断链）；
+          - 全局去重（statement 前 80 字）+ 子库配额 + 总预算 9；
+          - 命中的 DB 记忆写 recall_citation 引用计数（供强化/遗忘）。
         每项含 artifact_id（belief.statement 或 triple.id）——ER-2 归因用。
         无匹配时返回空列表（决策侧据此走"无经验注入"基线路径）。
         """
@@ -2925,9 +2998,193 @@ class AgentRuntime:
         except Exception:
             pass
 
+        # R10-UNIFY (2026-09-12): WM 观测召回 — 最近高关注 Observation 进决策上下文。
+        # 此前 WM 是"写多读少"仓库: 观测只进不出，决策 prompt 看不到观测内容，
+        # Observation→Attention→WM→Recall 链断在最后一步（R10 审计实锤:
+        # WM slot 100% environmental_scan 且零消费）。
+        # R10-FIX2 (2026-09-12 行为级 A/B 二轮实锤): sensor 每 tick 写 10+
+        # 条新观测, recent(limit=2) 窗口内 marker 几分钟即被挤出 — 扩窗到
+        # 20 并按 source 优先排序: user_input（用户刚说的话）永远排在
+        # sensor 噪声前, 否则观测对决策不可见 = 感知白做。
+        try:
+            _wm_store = getattr(self, "_wm_store", None)
+            if _wm_store is not None:
+                _obs_pool = _wm_store.recent(prefix="attention:", limit=20)
+                # R10-FIX: user_input 保底召回 — sensor 噪声吞吐（每秒数十条）
+                # 可在数秒内把 user_input 观测挤出时间窗口（行为级 A/B 实锤:
+                # marker 落库 3s 后即不可召回），按信源直取兜底，去重后置前。
+                _seen_keys = {o.get("key") for o in _obs_pool}
+                if hasattr(_wm_store, "recent_by_source"):
+                    for _g in _wm_store.recent_by_source(
+                            prefix="attention:", source="user_input",
+                            limit=2):
+                        if _g.get("key") not in _seen_keys:
+                            _obs_pool.insert(0, _g)
+                # user_input 优先（保持各自内部时间倒序），其余观测垫底
+                _obs_pool.sort(
+                    key=lambda o: (o.get("value") or {}).get("source", "")
+                    == "user_input",
+                    reverse=True)
+                for _obs in _obs_pool[:3]:
+                    _val = _obs.get("value") or {}
+                    _summary = str(_val.get("summary", "") or "").strip()
+                    if not _summary:
+                        continue
+                    # R10-FIX2: user_input 观测 = 用户刚说的话, 上下文显著性
+                    # 最高 — score 6 压过 belief/knowledge 的关键词重叠分,
+                    # 防止被挤出 top-5；sensor 观测维持 2。
+                    _obs_score = 6 if _val.get("source") == "user_input" else 2
+                    artifacts.append({
+                        "artifact_id": (f"obs:{_val.get('trace_id') or ''}"
+                                        or _obs.get("key", "")),
+                        "type": "observation",
+                        "text": (f"[观测 slot={_val.get('slot', '?')} "
+                                 f"trace={_val.get('trace_id', '')}] "
+                                 f"{_summary}")[:240],
+                        "confidence": 0.85,
+                        "score": _obs_score,
+                    })
+                    logger.info(
+                        "R10 observation recalled into MEM_CTX: trace=%s text=%s",
+                        _val.get("trace_id", ""), _summary[:80],
+                    )
+        except Exception:
+            logger.debug("WM observation recall failed", exc_info=True)
+
         artifacts.sort(key=lambda a: (a["score"], a["confidence"]),
                        reverse=True)
-        return artifacts[:limit]
+
+        # COG-V2 Phase 1: RecallRouter — DB 陈述性/情景/自我记忆直读召回。
+        # OCOS_DECLARATIVE_RECALL=0 可即时回退到旧路径（仅内存来源）。
+        router_items: list[dict[str, Any]] = []
+        if os.environ.get("OCOS_DECLARATIVE_RECALL", "1") != "0":
+            try:
+                if getattr(self, "_recall_router", None) is None:
+                    from ocos.memory.recall_router import RecallRouter
+                    self._recall_router = RecallRouter(self._db_path)
+                router_items = self._recall_router.recall(description)
+                for it in router_items:
+                    it["_from_router"] = True
+                artifacts.extend(router_items)
+            except Exception:
+                logger.debug("RecallRouter recall failed", exc_info=True)
+
+        selected = self._workspace_select(artifacts, total=limit)
+
+        # 1.3 引用计数：进入工作空间的 DB 记忆命中即记一笔（供强化/遗忘）。
+        cited = [a for a in selected if a.get("_from_router")]
+        if cited:
+            try:
+                self._record_recall_citations(cited)
+            except Exception:
+                logger.debug("recall citation write failed", exc_info=True)
+
+        return selected
+
+    @staticmethod
+    def _subsystem_of(artifact: dict[str, Any]) -> str:
+        sub = artifact.get("subsystem")
+        if sub:
+            return str(sub)
+        return {
+            "failure_lesson": "procedural",
+            "skill": "procedural",
+            "recipe": "procedural",
+            "belief": "semantic",
+            "knowledge": "semantic",
+            "reflection": "semantic",
+            "observation": "observation",
+            "episode": "episodic",
+            "self": "self",
+            "gap": "gap",
+        }.get(artifact.get("type", ""), "semantic")
+
+    def _workspace_select(
+        self, artifacts: list[dict[str, Any]], total: int = 9
+    ) -> list[dict[str, Any]]:
+        """全局工作空间仲裁：去重 → 子系统配额 → 余量按全局分补足。"""
+        from ocos.memory.recall_router import DEFAULT_BUDGETS
+
+        ordered = sorted(
+            artifacts,
+            key=lambda a: (a.get("score", 0), a.get("confidence", 0.0)),
+            reverse=True,
+        )
+        # 全局去重（去空白后前 80 字）
+        seen: set[str] = set()
+        dedup: list[dict[str, Any]] = []
+        for a in ordered:
+            key = re.sub(r"\s+", "", str(a.get("text") or ""))[:80]
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            dedup.append(a)
+
+        chosen_idx: set[int] = set()
+        counts: dict[str, int] = {}
+        # 先按子系统配额选
+        for sub, budget in DEFAULT_BUDGETS.items():
+            for i, a in enumerate(dedup):
+                if i in chosen_idx:
+                    continue
+                if counts.get(sub, 0) >= budget:
+                    break
+                if self._subsystem_of(a) == sub:
+                    chosen_idx.add(i)
+                    counts[sub] = counts.get(sub, 0) + 1
+        # 余量按全局分数补足到 total（仍受各子系统硬配额约束，
+        # 防止单一子库垄断黑板）
+        for i, a in enumerate(dedup):
+            if len(chosen_idx) >= total:
+                break
+            sub = self._subsystem_of(a)
+            if counts.get(sub, 0) >= DEFAULT_BUDGETS.get(sub, total):
+                continue
+            if i not in chosen_idx:
+                chosen_idx.add(i)
+                counts[sub] = counts.get(sub, 0) + 1
+
+        chosen = [dedup[i] for i in sorted(
+            chosen_idx, key=lambda i: (
+                dedup[i].get("score", 0), dedup[i].get("confidence", 0.0)),
+            reverse=True)]
+        return chosen[:total]
+
+    def _record_recall_citations(self, items: list[dict[str, Any]]) -> None:
+        """recall_citation：DB 记忆被决策引用的流水（强化/遗忘的数据基础）。"""
+        import hashlib
+        import sqlite3 as _sqlite3
+
+        if not self._db_path:
+            return
+        conn = _sqlite3.connect(self._db_path, timeout=5)
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS recall_citation ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "subsystem TEXT NOT NULL, text_hash TEXT NOT NULL, "
+                "artifact_id TEXT, cited_at TEXT NOT NULL DEFAULT (datetime('now')))"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recall_citation_hash "
+                "ON recall_citation(text_hash, cited_at)"
+            )
+            conn.executemany(
+                "INSERT INTO recall_citation "
+                "(subsystem, text_hash, artifact_id) VALUES (?,?,?)",
+                [
+                    (
+                        self._subsystem_of(a),
+                        hashlib.sha1(
+                            str(a.get("text") or "").encode("utf-8")).hexdigest(),
+                        str(a.get("artifact_id") or "")[:80],
+                    )
+                    for a in items
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     # ── P2 (2026-09-11): failure_signature — 精确检索辅助 ────────────────
 
@@ -3100,6 +3357,21 @@ class AgentRuntime:
                 continue
 
             # 简短摘要（hypothesis 已含关键信息）
+            # AUD-FIX (2026-09-12): recall 去重 — 同一 lesson 30 分钟内不重复
+            # 注入 MEM_CTX（生产实锤: 6h 内同 6 条 lesson 重复灌 306 次，
+            # 决策 prompt 被噪声淹没却未改变行为）。30 分钟窗口保证同一任务
+            # 的多次决策仍可见，跨任务不重复。
+            import time as _time
+            _seen = getattr(self, "_lesson_recall_seen", None)
+            if _seen is None:
+                _seen = self._lesson_recall_seen = {}
+            _now = _time.monotonic()
+            if _now - _seen.get(r["rowid"], 0) < 1800:
+                continue
+            _seen[r["rowid"]] = _now
+            if len(_seen) > 64:
+                for _k in [k for k, t in _seen.items() if _now - t > 1800]:
+                    _seen.pop(_k, None)
             artifacts.append({
                 "artifact_id": f"lesson:{r['rowid']}",
                 "type": "failure_lesson",

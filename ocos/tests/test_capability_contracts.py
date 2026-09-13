@@ -1,7 +1,10 @@
 """Capability Contract 强制验证测试。
 
 每个 Engine 的「绝不能」通过 AST 检查或接口约定验证。
-测试覆盖 14 个标准引擎。
+覆盖现役 8 个标准引擎。
+
+COG-V2 Phase4 验尸归档：forgetting/goal_arbitration/policy/prediction/
+promotion/simulation 六引擎零生产消费者，已移至 ocos/_archive/engines/。
 
 方法：对每个引擎文件做 AST 静态分析 + 运行时接口检查。
 """
@@ -17,22 +20,16 @@ import pytest
 
 ENGINE_DIR = Path(__file__).resolve().parent.parent / "engines"
 
-# 14 个标准引擎的模块名
+# 现役标准引擎的模块名（Phase4: 14 → 8，6 个 test-only 引擎已归档）
 STANDARD_ENGINES = [
     "address_resolver",
     "consolidation_engine",
     "decision_making_engine",
-    "forgetting_engine",
-    "goal_arbitration_engine",
     "learning_engine",
     "planning_engine",
-    "policy_engine",
-    "prediction_engine",
-    "promotion_engine",
     "reasoning_engine",
     "reflection_engine",
     "retrieval_engine",
-    "simulation_engine",
 ]
 
 

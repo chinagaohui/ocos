@@ -58,6 +58,24 @@ MEM_BAD_G    = _env_float("OCOS_MEM_BAD_G",    1.0)     # 内存可用 < 1G → 
 MEM_WARN_G   = _env_float("OCOS_MEM_WARN_G",   2.0)     # 内存可用 < 2G → WARN
 CPU_LOAD_BAD = _env_float("OCOS_CPU_LOAD_BAD", 4.0)     # load1 > 4 → BAD
 CPU_LOAD_WARN= _env_float("OCOS_CPU_LOAD_WARN",2.5)     # load1 > 2.5 → WARN
+
+
+def _cpu_load_thresholds() -> tuple[float, float, int]:
+    """CPU load 阈值按核数归一化（loadavg 满载线 ≈ nproc）。
+
+    4 核时代默认 BAD=4.0 恰为满载；12 核机器 load1=4.8 仅 40% 占用，
+    不该报过载（2026-09-13 切本地 qwen 模型后该误报必现）。
+    未显式设 env 时按 nproc/4 缩放；env 显式值保持绝对值语义。
+    """
+    nproc = max(1, os.cpu_count() or 1)
+    scale = nproc / 4.0
+    bad_env = os.environ.get("OCOS_CPU_LOAD_BAD", "").strip()
+    warn_env = os.environ.get("OCOS_CPU_LOAD_WARN", "").strip()
+    bad = float(bad_env) if bad_env else CPU_LOAD_BAD * scale
+    warn = float(warn_env) if warn_env else CPU_LOAD_WARN * scale
+    return bad, warn, nproc
+
+
 IOWAIT_BAD   = _env_float("OCOS_IOWAIT_BAD",   15.0)    # iowait% > 15 → BAD
 NET_TIMEOUT  = _env_int("OCOS_NET_TIMEOUT",     5)      # 单 URL 探测超时秒
 COGNITION_MAX_GAP = _env_int("OCOS_COGNITION_MAX_GAP", 120)  # 认知循环最大间隔秒
@@ -143,10 +161,14 @@ def probe_host_resources(heavy: bool = False) -> ComponentHealth:
             load5 = float(parts[1])
             load15 = float(parts[2])
             metrics.update({"load1": load1, "load5": load5, "load15": load15})
-            if load1 > CPU_LOAD_BAD:
-                warnings.append(f"CPU load1={load1:.1f} > {CPU_LOAD_BAD} (过载)")
-            elif load1 > CPU_LOAD_WARN:
-                warnings.append(f"CPU load1={load1:.1f} > {CPU_LOAD_WARN} (偏高)")
+            bad_thr, warn_thr, nproc = _cpu_load_thresholds()
+            metrics["cpu_count"] = nproc
+            if load1 > bad_thr:
+                warnings.append(
+                    f"CPU load1={load1:.1f}/{nproc}核 > {bad_thr:.1f} (过载)")
+            elif load1 > warn_thr:
+                warnings.append(
+                    f"CPU load1={load1:.1f}/{nproc}核 > {warn_thr:.1f} (偏高)")
         except (ValueError, IndexError):
             pass
 

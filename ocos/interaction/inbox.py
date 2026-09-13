@@ -62,16 +62,21 @@ class UserInbox:
         conn.commit()
         return conn
 
-    def post(self, content: str, sender: str = "cli") -> str:
-        """投递一条用户消息，返回消息 id。"""
+    def post(self, content: str, sender: str = "cli", kind: str = "") -> str:
+        """投递一条用户消息，返回消息 id。
+
+        R10-UNIFY (2026-09-12): kind="observe" = 感知镜像 — daemon 消费时
+        仅注入 Cognitive Runtime 观测通道（EventBus→Attention→WM），不走
+        目标路由、不回复。供 WebUI /ocos/converse 等旁路输入源补写观测。
+        """
         mid = f"MSG-{uuid.uuid4().hex[:8]}"
         conn = self._conn()
         conn.execute(
             """INSERT INTO user_messages
-               (id, sender, content, status, created_at)
-               VALUES (?, ?, ?, 'queued', ?)""",
+               (id, sender, content, status, created_at, kind)
+               VALUES (?, ?, ?, 'queued', ?, ?)""",
             (mid, sender, content[:2000],
-             datetime.now(timezone.utc).isoformat()),
+             datetime.now(timezone.utc).isoformat(), kind[:20]),
         )
         conn.commit()
         logger.info("UserInbox: %s posted (sender=%s)", mid, sender)

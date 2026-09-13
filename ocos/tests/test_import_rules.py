@@ -217,13 +217,12 @@ ALLOWED_IMPORTS = {
     "ocos.health_examination": ["ocos.health_examination"],
     # Phase 58.1: Living Test Protocol
     "ocos.living_test": ["ocos.living_test"],
-    # Phase 58.2: Cognitive Nutrition Protocol
-    "ocos.cognitive_nutrition": ["ocos.cognitive_nutrition"],
+    # Phase 58.2: Cognitive Nutrition Protocol — COG-V2 Phase4 验尸归档
+    # （零生产根引用）→ ocos/_archive/cognitive_nutrition，allow edge 移除
     # Phase 58.3: Recovery & Resilience Test
     "ocos.recovery_resilience": ["ocos.recovery_resilience"],
     "ocos.opentale_bridge": [
         "ocos.opentale_bridge",
-        "ocos.cognitive_nutrition",
         "ocos.attention",  # U5.3/I6（2026-08-19）：Deterministic Attention 服务写作决策 reasoning 上下文（只读，Authority 冻结）
         "ocos.agent.belief_system",  # I7（2026-08-20）：BeliefGate 读取 held beliefs（只读，Governance 接入）
     ],
@@ -423,17 +422,14 @@ def test_engines_cannot_import_runtime():
         pytest.skip("engines 目录尚不存在")
 
     # Phase 19+ Capability engines 允许 import runtime（见 ALLOWED_IMPORTS）
-    # 豁免已知能力引擎
+    # 豁免已知能力引擎（policy/goal_arbitration/simulation/prediction 已
+    # 于 COG-V2 Phase4 验尸归档至 _archive，豁免条目随之移除）
     EXEMPT_ENGINES = frozenset({
         "engines/reasoning_engine.py",
         "engines/planning_engine.py",
         "engines/decision_making_engine.py",
-        "engines/policy_engine.py",
-        "engines/goal_arbitration_engine.py",
-        "engines/simulation_engine.py",
         "engines/learning_engine.py",
         "engines/reflection_engine.py",
-        "engines/prediction_engine.py",
         "engines/writer_engine.py",
     })
 

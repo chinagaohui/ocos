@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from datetime import datetime
@@ -43,6 +44,23 @@ def _db() -> str:
 
 # ── 对话（R1: ChatResponder 直答） ──────────────────────────────────
 
+def _observe_mirror(message: str) -> None:
+    """R10-UNIFY (2026-09-12): 对话输入的感知镜像。
+
+    WebUI converse 走 ChatResponder.respond_auto 直达目标路由，历史上
+    完全绕过 Perception（R10 审计实锤的"双输入体系旁路"在 Web 通道的
+    残留）。此处向 UserInbox 投一条 kind=observe 镜像，daemon 消费时
+    仅注入 Cognitive Runtime 观测通道（EventBus→Attention→WM→MEM_CTX），
+    不重复建 goal。失败静默——感知补写不得阻断对话主链路。
+    """
+    try:
+        from ocos.interaction.inbox import UserInbox
+        UserInbox(db_path=_db()).post(
+            message, sender="web-observe", kind="observe")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.post("/ocos/converse", tags=["converse"])
 async def converse(body: dict[str, Any]) -> APIResponse:
     """POST /ocos/converse — 与数字生命对话（同步回复）。
@@ -54,6 +72,9 @@ async def converse(body: dict[str, Any]) -> APIResponse:
     message = str(body.get("message", "")).strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
+
+    # R10-UNIFY: 感知镜像 — 消息同时进入 Cognitive Runtime 观测通道
+    _observe_mirror(message)
 
     # FIX-8: 客户端会话 id 贯穿到对话记忆（无状态 ChatResponder 的会话归属）
     session_id = str(body.get("session_id", "") or "").strip()[:64] or "web"
@@ -91,6 +112,9 @@ async def converse_stream(body: dict[str, Any]) -> StreamingResponse:
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
     session_id = str(body.get("session_id", "") or "").strip()[:64] or "web"
+
+    # R10-UNIFY: 感知镜像 — 消息同时进入 Cognitive Runtime 观测通道
+    _observe_mirror(message)
 
     from ocos.interaction.converse import (ChatResponder,
                                            make_default_tool_executor)
@@ -222,8 +246,12 @@ async def converse_feed(since: str = "") -> APIResponse:
 
     conn = _sq.connect(f"file:{_db()}?mode=ro", uri=True)
     try:
+        # 旧库/测试夹具 episodes 表可能无 context 列 — 缺则退化为纯文本分类
+        _cols = {r[1] for r in conn.execute(
+            "PRAGMA table_info(episodes)")}
+        _ctx_sel = "context" if "context" in _cols else "NULL"
         rows = conn.execute(
-            "SELECT id, created_at, decision, outcome "
+            f"SELECT id, created_at, decision, outcome, {_ctx_sel} "
             "FROM episodes WHERE action='goal_result' "
             "ORDER BY created_at DESC LIMIT 25").fetchall()
         activity = _goal_activity(conn)
@@ -231,8 +259,22 @@ async def converse_feed(since: str = "") -> APIResponse:
         conn.close()
     activity["daemon"] = _daemon_activity()
 
+    # 自主目标结果文本标记（context 无 origin 时的兜底 — 旧 episode 兼容）
+    _AUTO_DECISION_RE = re.compile(r"EVO-Plan|new_knowledge|EVO-GOAL|GOAL-AUTO|【内生】")
+
+    def _classify_origin(ctx_raw: str, decision: str) -> str:
+        """HUMAN → 主对话；SELF/SYSTEM → 侧栏。context 优先，文本标记兜底。"""
+        try:
+            ctx = json.loads(ctx_raw) if ctx_raw else {}
+            origin = str(ctx.get("origin_level") or "").upper()
+            if origin in ("HUMAN", "SELF", "SYSTEM"):
+                return origin
+        except Exception:
+            pass
+        return "SELF" if _AUTO_DECISION_RE.search(decision or "") else "HUMAN"
+
     items: list[dict[str, Any]] = []
-    for rid, created, decision, outcome in rows:
+    for rid, created, decision, outcome, ctx_raw in rows:
         try:
             row_dt = _dt.fromisoformat(str(created))
             if row_dt.tzinfo is None:
@@ -246,9 +288,17 @@ async def converse_feed(since: str = "") -> APIResponse:
             success = bool(json.loads(outcome or "{}").get("success", True))
         except Exception:
             pass
+        origin = _classify_origin(ctx_raw, decision)
+        goal_id = None
+        try:
+            goal_id = json.loads(ctx_raw or "{}").get("goal_id")
+        except Exception:
+            pass
         items.append({"id": rid, "created_at": str(created),
                       "decision": str(decision or "")[:1600],
-                      "success": success})
+                      "success": success,
+                      "origin": origin,
+                      "goal_id": goal_id})
         if len(items) >= 5:
             break
     items.reverse()   # 升序：前端按序追加

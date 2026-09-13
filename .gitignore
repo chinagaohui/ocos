@@ -53,6 +53,10 @@ htmlcov/
 .backup_tasks/
 .batch_progress/
 
+# IDE workspace + 意外产物
+.trae/
+None
+
 # OS
 .DS_Store
 Thumbs.db

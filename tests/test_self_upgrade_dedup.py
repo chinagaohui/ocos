@@ -25,23 +25,32 @@ def knowledge_file(tmp_path, monkeypatch):
 
 
 class TestSelfUpgradeDedup:
+    # P0-A 治理硬闸门 (2026-09-11): apply 必须携带 APPROVED state +
+    # 真实 ApprovalRecord。用例统一经此助手调用以聚焦去重行为本身。
+    _APPROVAL = {"actor": "test-approver", "timestamp": "2026-09-12T00:00:00+00:00"}
+
+    @classmethod
+    def _apply(cls, change: str) -> str:
+        return sel.apply_self_upgrade(
+            change, proposal_state="APPROVED", approval_record=cls._APPROVAL)
+
     def test_apply_appends_once(self, knowledge_file):
-        out = sel.apply_self_upgrade("遇到超时应先重试一次再降级")
+        out = self._apply("遇到超时应先重试一次再降级")
         assert "updated" in out
         content = knowledge_file.read_text(encoding="utf-8")
         assert content.count("遇到超时应先重试一次再降级") == 1
 
     def test_apply_same_change_is_skipped(self, knowledge_file):
-        sel.apply_self_upgrade("遇到超时应先重试一次再降级")
-        out = sel.apply_self_upgrade("遇到超时应先重试一次再降级")
+        self._apply("遇到超时应先重试一次再降级")
+        out = self._apply("遇到超时应先重试一次再降级")
         assert "already applied" in out
         # 两次日期不同也不追加 — 剥日期戳归一化比对
         content = knowledge_file.read_text(encoding="utf-8")
         assert content.count("遇到超时应先重试一次再降级") == 1
 
     def test_different_change_still_appends(self, knowledge_file):
-        sel.apply_self_upgrade("规则 A")
-        out = sel.apply_self_upgrade("规则 B")
+        self._apply("规则 A")
+        out = self._apply("规则 B")
         assert "updated" in out
         content = knowledge_file.read_text(encoding="utf-8")
         assert "规则 A" in content and "规则 B" in content
@@ -50,8 +59,15 @@ class TestSelfUpgradeDedup:
         """手工预置旧条目（不同日期戳）→ 同文变更仍被识别为已应用。"""
         knowledge_file.write_text(
             "- [2026-09-05] 遇到超时应先重试一次再降级\n", encoding="utf-8")
-        out = sel.apply_self_upgrade("遇到超时应先重试一次再降级")
+        out = self._apply("遇到超时应先重试一次再降级")
         assert "already applied" in out
+
+    def test_hard_gate_denies_unapproved_apply(self, knowledge_file):
+        """P0-A: 无治理凭证的 apply 一律 DENY（fail-closed）。"""
+        out = sel.apply_self_upgrade("无凭证变更")
+        assert "GOVERNANCE-DENY" in out
+        assert not knowledge_file.exists() or "无凭证变更" not in (
+            knowledge_file.read_text(encoding="utf-8"))
 
     def test_apply_approved_goes_through_dedup(self, knowledge_file, tmp_path,
                                                monkeypatch):

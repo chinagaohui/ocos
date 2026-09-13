@@ -116,7 +116,10 @@ class TestDaemonClaimProgress:
             claim_pending_human=lambda limit: rows,
             claim_pending_approved_self=lambda **k: [])
 
-    def test_claim_posts_progress_outbound(self):
+    def test_claim_posts_progress_outbound(self, monkeypatch):
+        # 2026-09-12 UI 分流：chat 来源 = 人类目标 → human_progress
+        # （主对话）；自主目标 → progress（侧栏）。
+        monkeypatch.setenv("OCOS_AUTONOMY_LEVEL", "2")
         store = self._store([
             {"id": "GOAL-1", "description": "测试任务描述",
              "source": "chat",
@@ -129,9 +132,28 @@ class TestDaemonClaimProgress:
         assert rt._claim_persisted_goals() == 1
         assert len(posted) == 1
         content, kind = posted[0]
-        assert kind == "progress"
+        assert kind == "human_progress"
         assert "GOAL-1" in content
         assert "测试任务描述" in content
+
+    def test_autonomous_claim_uses_progress_kind(self, monkeypatch):
+        # 自主目标（metadata.autonomous=True）→ kind=progress（侧栏聚合）
+        monkeypatch.setenv("OCOS_AUTONOMY_LEVEL", "2")
+        self_row = {"id": "GOAL-AUTO-1", "description": "内生探索任务",
+                    "source": "motivation",
+                    "metadata": json.dumps({"autonomous": True})}
+        store = SimpleNamespace(
+            load_active=lambda: [],
+            claim_pending_human=lambda limit: [],
+            claim_pending_approved_self=lambda **k: [self_row])
+        posted: list[tuple[str, str]] = []
+        inbox = SimpleNamespace(
+            post_outbound=lambda content, kind="result":
+                posted.append((content, kind)))
+        rt = self._runtime(store, inbox)
+        assert rt._claim_persisted_goals() == 1
+        assert posted and posted[0][1] == "progress"
+        assert "GOAL-AUTO-1" in posted[0][0]
 
     def test_claim_without_inbox_silent(self):
         """_user_inbox 未装配 → 认领照常、不炸、不发消息。"""

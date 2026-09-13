@@ -142,15 +142,21 @@ def test_axiom_1_3_no_direct_reality_access():
 
 def test_axiom_7_no_information_override():
     """Axiom 7: 代码不应允许 Information 推翻 Reality 验证。"""
-    content = (ENGINES_DIR / "promotion_engine.py").read_text(encoding="utf-8")
-    # PromotionEngine 的 governance_approved 参数必须是可选且不强制 true
-    # 以允许外部 Reality 信号 override 内部 Information
-    assert (
-        "governance_approved: bool = False" in content
-    ), "Axiom 7 违反: PromotionEngine 的 governance_approved 必须默认为 False"
+    # COG-V2 Phase4: promotion/forgetting 引擎验尸归档至 _archive/engines
+    promo = ENGINES_DIR / "promotion_engine.py"
+    fe_path = ENGINES_DIR / "forgetting_engine.py"
+    if not promo.exists() and not fe_path.exists():
+        pytest.skip("Axiom-7 承载引擎（promotion/forgetting）已归档")
+
+    if promo.exists():
+        content = promo.read_text(encoding="utf-8")
+        # PromotionEngine 的 governance_approved 参数必须是可选且不强制 true
+        # 以允许外部 Reality 信号 override 内部 Information
+        assert (
+            "governance_approved: bool = False" in content
+        ), "Axiom 7 违反: PromotionEngine 的 governance_approved 必须默认为 False"
 
     # 同样检查 ForgettingEngine
-    fe_path = ENGINES_DIR / "forgetting_engine.py"
     if fe_path.exists():
         fe_content = fe_path.read_text()
         assert (

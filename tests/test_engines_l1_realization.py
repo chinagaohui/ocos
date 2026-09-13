@@ -274,6 +274,7 @@ class TestDecisionMakingEngineL1:
 # ── SimulationEngine ─────────────────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="COG-V2 Phase4: simulation_engine 零生产消费者，已归档 _archive")
 class TestSimulationEngineL1:
     def _make(self):
         from ocos.engines.simulation_engine import SimulationEngine
@@ -368,6 +369,7 @@ class TestReflectionEngineL1:
 # ── PredictionEngine ─────────────────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="COG-V2 Phase4: prediction_engine 零生产消费者，已归档 _archive")
 class TestPredictionEngineL1:
     def _make(self, store=None):
         from ocos.engines.prediction_engine import PredictionEngine
@@ -497,6 +499,7 @@ class TestLearningEngineL1:
 # ── 自主级别闸门挂接 ─────────────────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="COG-V2 Phase4: policy/goal_arbitration 零生产消费者，已归档 _archive")
 class TestAutonomyGateWiring:
     def test_policy_engine_gate(self):
         from ocos.engines.policy_engine import PolicyEngine

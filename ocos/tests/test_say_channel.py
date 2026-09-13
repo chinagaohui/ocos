@@ -109,6 +109,74 @@ class TestDaemonInboxDrain:
         assert UserInbox(db).count_queued() == 0
 
 
+class TestObserveMirror:
+    """R10-UNIFY: kind=observe 感知镜像 — 只进感知通道, 不路由不回复。"""
+
+    def _make_rt(self, db_file: str):
+        import types
+        from ocos.agent.agent_runtime import AgentRuntime
+        from ocos.daemon import ResidentRuntime
+        from ocos.daemon.factory import build_master_agent
+
+        rt = ResidentRuntime.__new__(ResidentRuntime)
+        rt._responder = None
+        _agent, _ = build_master_agent("t", db_path=":memory:")
+        # WM store 仅在文件路径 db 上装配（:memory: 跳过）
+        rt._runtime = AgentRuntime(agent=_agent, max_cycles=10,
+                                   db_path=db_file)
+        rt._runtime.boot()
+        return rt
+
+    def test_observe_message_enters_wm_not_routed(self, db, tmp_path):
+        from ocos.interaction.inbox import UserInbox
+
+        rt = self._make_rt(str(tmp_path / "obs_wm.db"))
+        rt._user_inbox = UserInbox(db)
+
+        calls = []
+
+        class _SpyResponder:
+            def respond_auto(self, text, **kw):
+                calls.append(text)
+                return {"accepted": True, "reply": "x"}
+
+        rt._responder = _SpyResponder()
+
+        UserInbox(db).post("观测镜像 R10ZEBRA7741",
+                           sender="web-observe", kind="observe")
+        n = rt._drain_user_inbox()
+        assert n == 1
+        assert UserInbox(db).count_queued() == 0
+        assert not calls, "observe 消息不得触发目标路由"
+
+        # 感知通道: 注入的事件在下一 tick 进 WM
+        rt._runtime.tick()
+        keys = rt._runtime._wm_store.list_keys("attention:%")
+        assert any("R10ZEBRA7741" in ((rt._runtime._wm_store.load(k) or {})
+                                      .get("summary") or "")
+                   for k in keys), "observe 消息必须成为 WM 观测"
+
+    def test_normal_message_still_routed(self, db, tmp_path):
+        """回归: 普通消息仍走路由（observe 分支不影响原语义）。"""
+        from ocos.interaction.inbox import UserInbox
+
+        rt = self._make_rt(str(tmp_path / "norm_wm.db"))
+        rt._user_inbox = UserInbox(db)
+
+        calls = []
+
+        class _SpyResponder:
+            def respond_auto(self, text, **kw):
+                calls.append(text)
+                return {"accepted": True, "reply": "x"}
+
+        rt._responder = _SpyResponder()
+
+        UserInbox(db).post("普通消息", sender="cli")
+        rt._drain_user_inbox()
+        assert calls == ["普通消息"], "普通消息必须仍走 respond_auto"
+
+
 class TestReplyLoop:
     """R1-R3: 回话闭环 — respond + 回写 + --wait 取回。"""
 

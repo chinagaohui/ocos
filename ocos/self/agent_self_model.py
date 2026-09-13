@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS agent_self_model (
 
 _REPLY_STYLE_SHORT = 200   # 平均回复 <200 字符 = 简洁风格
 _FOCUS_LIMIT = 3
+_FAILURE_MODES_LIMIT = 4
+_BRIEF_MAX = 120
 
 
 class AgentSelfModel:
@@ -52,6 +54,13 @@ class AgentSelfModel:
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
         conn.execute(_DDL)
+        # COG-V2: 旧库（无 failure_modes 列）幂等迁移 — 仅加列不改数据。
+        try:
+            conn.execute(
+                "ALTER TABLE agent_self_model ADD COLUMN failure_modes "
+                "TEXT NOT NULL DEFAULT '[]'")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
         return conn
 
     # ── boot 加载 ─────────────────────────────────────────────────────
@@ -62,18 +71,20 @@ class AgentSelfModel:
         try:
             row = conn.execute(
                 "SELECT version, capabilities, personality, focus, "
-                "content_hash, calibrated_at "
+                "failure_modes, content_hash, calibrated_at "
                 "FROM agent_self_model WHERE id = 1").fetchone()
         finally:
             conn.close()
         if row is None:
             return None
-        return {"version": int(row[0]),
-                "capabilities": json.loads(row[1]),
-                "personality": json.loads(row[2]),
-                "focus": json.loads(row[3]),
-                "content_hash": row[4],
-                "calibrated_at": row[5]}
+        cols = list(row)
+        return {"version": int(cols[0]),
+                "capabilities": json.loads(cols[1]),
+                "personality": json.loads(cols[2]),
+                "focus": json.loads(cols[3]),
+                "failure_modes": json.loads(cols[4]) if cols[4] else [],
+                "content_hash": cols[5],
+                "calibrated_at": cols[6]}
 
     # ── tick 校准 ─────────────────────────────────────────────────────
 
@@ -86,7 +97,9 @@ class AgentSelfModel:
         capabilities = self._stat_capabilities(capability_names)
         personality = self._stat_personality()
         focus = self._stat_focus()
-        content_hash = self._content_hash(capabilities, personality, focus)
+        failure_modes = self._stat_failure_modes()
+        content_hash = self._content_hash(
+            capabilities, personality, focus, failure_modes)
 
         conn = self._conn()
         try:
@@ -96,16 +109,19 @@ class AgentSelfModel:
             conn.execute(
                 "INSERT OR REPLACE INTO agent_self_model "
                 "(id, version, capabilities, personality, focus, "
-                " content_hash, calibrated_at) VALUES (1,?,?,?,?,?,?)",
+                " failure_modes, content_hash, calibrated_at) "
+                "VALUES (1,?,?,?,?,?,?,?)",
                 (version, json.dumps(capabilities, ensure_ascii=False),
                  json.dumps(personality, ensure_ascii=False),
-                 json.dumps(focus, ensure_ascii=False), content_hash,
+                 json.dumps(focus, ensure_ascii=False),
+                 json.dumps(failure_modes, ensure_ascii=False),
+                 content_hash,
                  datetime.now(timezone.utc).isoformat()))
             conn.commit()
         finally:
             conn.close()
-        logger.info("SelfModel calibrated v%d (%d capabilities)",
-                    version, len(capabilities))
+        logger.info("SelfModel calibrated v%d (%d capabilities, %d failure modes)",
+                    version, len(capabilities), len(failure_modes))
         return self.load() or {}
 
     def _stat_capabilities(self, capability_names: list[str] | None) -> list[dict]:
@@ -227,14 +243,57 @@ class AgentSelfModel:
             logger.debug("self-model focus stats skipped: %s", e)
             return []
 
+    def _stat_failure_modes(self) -> list[dict]:
+        """COG-V2 L2 失败模式：近 7 天 failure_lesson 按 cause 聚合。
+
+        从 episodes 表 failure_lesson 的 tags 提取 cause，只保留
+        出现 ≥2 次的反复模式（单次失败是噪声，不值得进自我画像）。
+        输出 [{cause, count, last_at}]，按 count 降序。
+        """
+        try:
+            conn = self._conn()
+            try:
+                rows = conn.execute(
+                    "SELECT tags, created_at FROM episodes "
+                    "WHERE action='failure_lesson' "
+                    "AND created_at >= datetime('now', '-7 days')"
+                ).fetchall()
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("self-model failure stats skipped: %s", e)
+            return []
+
+        rec: dict[str, dict] = {}
+        for tags_raw, last_at in rows:
+            try:
+                tags = json.loads(tags_raw or "[]")
+            except Exception:
+                tags = []
+            for t in tags:
+                if not isinstance(t, str):
+                    continue
+                # 排除工具名/噪声标签，只取已知 cause 类
+                if t in {"sql_schema_mismatch", "dependency_missing",
+                         "tool_unavailable", "permission_denied",
+                         "execution_error", "timeout"}:
+                    r = rec.setdefault(t, {"cause": t, "count": 0,
+                                           "last_at": last_at})
+                    r["count"] += 1
+                    r["last_at"] = last_at
+        out = [r for r in rec.values() if r["count"] >= 2]
+        out.sort(key=lambda r: -r["count"])
+        return out[:_FAILURE_MODES_LIMIT]
+
     # ── V5: 画像内容 hash（跨重启一致性输入） ──────────────────────────
 
     @staticmethod
     def _content_hash(capabilities: list, personality: dict,
-                      focus: list) -> str:
+                      focus: list, failure_modes: list | None = None) -> str:
         payload = json.dumps({"capabilities": capabilities,
                               "personality": personality,
-                              "focus": focus},
+                              "focus": focus,
+                              "failure_modes": failure_modes or []},
                              ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -259,4 +318,40 @@ class AgentSelfModel:
             f"风险偏好: {pers.get('risk_preference', '未知')}",
             f"  当前专注: {'; '.join(focus) if focus else '无'}",
         ]
+        fms = snap.get("failure_modes") or []
+        if fms:
+            fm_s = ", ".join(
+                f"{m['cause']}×{m['count']}" for m in fms)
+            lines.append(f"  反复失败模式: {fm_s}")
         return "\n".join(lines)
+
+    def render_brief(self, snapshot: dict | None = None) -> str:
+        """COG-V2: 全局工作空间 [self] 条目（≤120 字），决策前必读。
+
+        只给高 n（≥3 次）能力 + 反复失败模式 + 当前专注，避免把零样本
+        能力（uncertain）灌进 prompt 误导 LLM。
+        """
+        snap = snapshot if snapshot is not None else self.load()
+        if not snap:
+            return ""
+        caps = snap.get("capabilities") or []
+        parts: list[str] = []
+        # 只取有 ≥3 次实测的能力，避免小样本自信
+        known = [c for c in caps
+                 if isinstance(c.get("attempts"), int) and c["attempts"] >= 3]
+        if known:
+            top = known[:3]
+            parts.append("能力：" + "；".join(
+                f"{c['name']}成功率{c.get('success_rate', 0):.0%}"
+                for c in top))
+        fms = snap.get("failure_modes") or []
+        if fms:
+            parts.append("近期反复失败：" + "/".join(
+                m["cause"] for m in fms[:2]))
+        focus = snap.get("focus") or []
+        if focus:
+            parts.append("当前专注：" + focus[0][:30])
+        brief = " | ".join(parts)
+        if len(brief) > _BRIEF_MAX:
+            brief = brief[:_BRIEF_MAX - 1] + "…"
+        return brief

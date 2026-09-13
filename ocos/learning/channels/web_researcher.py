@@ -1,6 +1,7 @@
 """WebResearcher — 网络搜索调研渠道.
 
-通过 SearchOps（白名单安全边界）调 DuckDuckGo Instant Answer API
+通过 SearchOps（白名单安全边界）调本地 websearch.py 通道
+（cn.bing 免费引擎，免 key；2026-09-12 替换被墙的 DuckDuckGo IA）
 获取网络公开信息，产出 ResearchArtifact → 喂给 UnifiedIngestor.
 
 这是 OCOS "缺口学习" 的主渠道 — EpistemicDrive 发现知识缺口后
@@ -70,9 +71,12 @@ class WebResearcher:
     """网络搜索调研.
 
     依赖 SearchOps（可选）— 没注入时返回空结果（优雅降级）.
-    不做 LLM 调用 — 只调 DuckDuckGo API 拿结构化 JSON.
+    不做 LLM 调用 — 只调本地 websearch.py 通道拿结构化结果.
     """
 
+    # local:// 通道 — SearchOps 白名单内，经熔断/审计边界执行本地脚本
+    SEARCH_URL = "local://websearch"
+    # legacy: DuckDuckGo IA（本网络环境被墙，已弃用，保留常量供审计比对）
     DUCKDUCKGO_IA_URL = "https://api.duckduckgo.com/"
     DEFAULT_MAX_RESULTS = 5
 
@@ -102,17 +106,10 @@ class WebResearcher:
         try:
             from ocos.operations.search_ops import SearchQuery
 
-            # DuckDuckGo Instant Answer API
+            # 本地 websearch 通道（cn.bing）
             query = SearchQuery(
                 query=topic,
-                url=self.DUCKDUCKGO_IA_URL,
-                params={
-                    "q": topic,
-                    "format": "json",
-                    "no_html": "1",
-                    "no_redirect": "1",
-                    "skip_disambig": "1",
-                },
+                url=self.SEARCH_URL,
                 max_results=self._max_results,
             )
             result = self._ops.search(query)

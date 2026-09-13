@@ -126,6 +126,14 @@ class EventNormalizer:
         severity = self._assess_severity(raw, event_type)
         score = self._initial_score(severity, raw.source)
 
+        # R10-UNIFY (2026-09-12): Observation 是一等公民 — 所有事件必须携带
+        # 全链追踪 ID。sensor 管线已在 payload 注入 trace_id（端到端透传，
+        # 禁止覆盖）；EventBus 直推事件（USER_INPUT/TIMER/WEBHOOK 等）在此
+        # 补发 TRC-{uuid12}，与 sensor_types 约定对齐。
+        metadata = dict(raw.payload) if isinstance(raw.payload, dict) else {}
+        if not metadata.get("trace_id"):
+            metadata["trace_id"] = f"TRC-{uuid.uuid4().hex[:12]}"
+
         return CognitiveEvent(
             event_id=raw.event_id,
             source=raw.source,
@@ -133,7 +141,7 @@ class EventNormalizer:
             summary=summary,
             severity=severity,
             candidate_score=score,
-            metadata=raw.payload,
+            metadata=metadata,
         )
 
     def _classify(self, raw: RawEvent) -> str:
@@ -257,6 +265,11 @@ class EventBus:
     def __init__(self, max_pending: int = 1000) -> None:
         self._normalizer = EventNormalizer()
         self._pending: deque[CognitiveEvent] = deque(maxlen=max_pending)
+        # R10-UNIFY (2026-09-12): USER_INPUT 专用车道 — 生产实锤: Step1 每
+        # tick 只 ingest 10 条, sensor 事件洪流 + deque(maxlen) 头部挤兑会
+        # 把排队中的用户消息冲掉（行为级 A/B: marker 注入后 WM 查无此事件）。
+        # 用户消息走独立车道, ingest 优先消费, 不与 sensor 噪声竞争。
+        self._pending_user: deque[CognitiveEvent] = deque(maxlen=max_pending)
         self._traces: deque[IngestionTrace] = deque(maxlen=max_pending)
         self._lock = threading.RLock()
         self._total_received: int = 0
@@ -268,7 +281,10 @@ class EventBus:
         """接收外部原始事件 → 归一化 → 入队。"""
         ce = self._normalizer.normalize(raw)
         with self._lock:
-            self._pending.append(ce)
+            if ce.source == EventSource.USER_INPUT:
+                self._pending_user.append(ce)
+            else:
+                self._pending.append(ce)
             self._total_received += 1
         # S2.9: push 的 DEBUG 日志同样脱敏（原打全文 summary——用户消息明文）
         try:
@@ -323,9 +339,15 @@ class EventBus:
     # ── Ingest (step 1 pulls) ──
 
     def ingest(self, max_events: int = 10) -> list[CognitiveEvent]:
-        """Step 1 拉取待处理事件（drain 语义 — 唯一消费者应在此）。"""
+        """Step 1 拉取待处理事件（drain 语义 — 唯一消费者应在此）。
+
+        R10-UNIFY: USER_INPUT 车道优先 — 用户消息永不被 sensor 事件
+        饿死（sensor 洪流挤兑实锤见 __init__ 注释）。
+        """
         with self._lock:
             events = []
+            while self._pending_user and len(events) < max_events:
+                events.append(self._pending_user.popleft())
             while self._pending and len(events) < max_events:
                 events.append(self._pending.popleft())
             self._total_ingested += len(events)
@@ -334,7 +356,8 @@ class EventBus:
     def peek(self, max_events: int = 10) -> list[CognitiveEvent]:
         """窥视待处理事件但不消费（非 drain — 供 TickPipeline 看但不抢 AgentRuntime 的消费位）。"""
         with self._lock:
-            return list(self._pending)[:max_events]
+            merged = list(self._pending_user) + list(self._pending)
+            return merged[:max_events]
 
     # ── Attention trace recording ──
 
@@ -373,6 +396,7 @@ class EventBus:
         with self._lock:
             return {
                 "pending": len(self._pending),
+                "pending_user": len(self._pending_user),
                 "total_received": self._total_received,
                 "total_ingested": self._total_ingested,
                 "traces_count": len(self._traces),

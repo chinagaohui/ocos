@@ -13,11 +13,11 @@ OCOS 的第一感官系统。
 """
 
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 import time as _time
+import uuid as _uuid
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -137,6 +137,10 @@ class Observation:
     timestamp: float = field(default_factory=_time.time)
     metadata: dict[str, Any] = field(default_factory=dict)
     raw_payload: Any = None
+    # AUD-TRACE (2026-09-12): 观察全链追踪 ID — OBS→RawEvent→CognitiveEvent→
+    # Attention→WM→Decision prompt 共用同一 ID, 让"哪条观察影响了哪个决策"
+    # 变成可审计的 join 键 (此前链路只有 event_id 在 WM 键里孤立存在)
+    trace_id: str = field(default_factory=lambda: f"TRC-{_uuid.uuid4().hex[:12]}")
 
     @property
     def is_reliable(self) -> bool:

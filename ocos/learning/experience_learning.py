@@ -70,8 +70,14 @@ _TOOL_SIGNALS = ["not available", "unavailable", "not registered",
 # /bin/sh: xxx: not found / ModuleNotFoundError / ImportError
 # 注意: "not found" 单独出现太宽（会匹配 file not found 等可重试错误），
 # 必须精确到 shell 格式、exit code、Python 标准异常名
+# AUD-FIX (2026-09-12): 裸 "/bin/sh:" 信号太宽 — 生产实锤:
+# "/bin/sh: 1: Syntax error: Unterminated quoted string" (LLM 手抄命令
+# 引号崩了, exit_code=2, 可重试的 execution_error) 也以 "/bin/sh:" 开头,
+# 被误诊为 dependency_missing → deny.commands=[命令首词] → curl/python3
+# 被 7 天工具级封锁, 后续同类任务全部被 MUTATION-VETO 拦截改走更差工具。
+# 改为精确的 ": not found" 后缀（shell 依赖缺失固定文案）。
 _DEPENDENCY_SIGNALS = [
-    "/bin/sh:",               # /bin/sh: 1: xxx: not found (最可靠的 shell 依赖缺失标志)
+    ": not found",            # /bin/sh: 1: xxx: not found (shell 依赖缺失固定文案)
     "command not found",      # bash 标准文案
     "exit_code=127",          # 典型 command not found exit code
     "ModuleNotFoundError",    # Python 模块缺失

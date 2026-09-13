@@ -56,6 +56,13 @@ CONF_MIN, CONF_MAX = 0.3, 0.6     # 低置信边界（好奇心探测区间）
 LOOKBACK_DAYS = 7
 LOW_GOAL_SUCCESS_RATE = 0.6       # goal_result 低于此 → LEARN 信号
 
+# COG-V2 Phase 3.3: 自我差距刺激源开关（默认开，"0" 回退）
+SELF_GAP_ENV = "OCOS_SELF_GAP_MOTIVATION"
+# efficacy 实测样本不足的能力域阈值（n<5 → 成功率估计不可信 → 练习目标）
+EFFICACY_MIN_SAMPLES = 5
+# 身体/环境先验 TTL：boot_context.json 超过该天数 → 环境复核目标
+PHYSICAL_TTL_DAYS = 7
+
 # LEVEL>=2 可自主执行的低风险 kind 白名单；其余 kind 一律待批
 LOW_RISK_KINDS = ("PROBE", "LEARN")
 
@@ -204,6 +211,17 @@ class MotivationHub:
             candidates.extend(self._from_goal_results())
         except Exception as e:
             logger.warning("goal result signals failed: %s", e)
+        # COG-V2 Phase 3.3: 自我差距刺激（确定性，与 curiosity 通道并列，
+        # 共享每日 cap / 去重 / 熔断闸；每类差距每日自限 1 个目标）
+        if os.environ.get(SELF_GAP_ENV, "1") != "0":
+            try:
+                candidates.extend(self._from_efficacy_gap())
+            except Exception as e:
+                logger.warning("efficacy gap signals failed: %s", e)
+            try:
+                candidates.extend(self._from_physical_ttl())
+            except Exception as e:
+                logger.warning("physical ttl signals failed: %s", e)
         return candidates
 
     def _from_lessons(self) -> list[GoalCandidate]:
@@ -433,6 +451,109 @@ class MotivationHub:
             value=0.6,
             feasibility=round(1.0 - avg, 4),
             evidence=f"goal_result avg_success={avg:.2f} n={len(rates)}",
+        )]
+
+    # ── COG-V2 Phase 3.3: 自我差距刺激源（确定性）──────────────────────
+
+    def _gap_proposed_today(self, marker: str) -> bool:
+        """该类自我差距今天是否已提案过（每类每日最多 1 个目标）。"""
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            conn = _open_ro(self._db_path)
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM episodes "
+                    "WHERE source='autonomous_goal_proposal' "
+                    "AND created_at >= ? "
+                    "AND json_extract(outcome, '$.evidence') LIKE ?",
+                    (day, f"{marker}%")).fetchone()
+                return int(row[0]) > 0
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return False
+
+    def _from_efficacy_gap(self) -> list[GoalCandidate]:
+        """L2 自我差距：实测样本不足（1 ≤ n < 5）的能力域 → LEARN 练习候选。
+
+        数据源 = AgentSelfModel 单行表的 capabilities（goal_result 闭合时
+        确定性校准）。n≥5 的能力已有可信胜率，不构成差距；n=0 的能力无法
+        设计练习，同样不触发。每天最多产出 1 个（取样本最少者）。
+        """
+        if self._gap_proposed_today("efficacy_gap"):
+            return []
+        try:
+            conn = _open_ro(self._db_path)
+            try:
+                row = conn.execute(
+                    "SELECT capabilities FROM agent_self_model "
+                    "ORDER BY id DESC LIMIT 1").fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return []
+        if row is None:
+            return []
+        try:
+            caps = json.loads(row[0] or "[]")
+        except ValueError:
+            return []
+        weak = sorted(
+            (c for c in caps
+             if isinstance(c, dict)
+             and 1 <= int(c.get("attempts", 0)) < EFFICACY_MIN_SAMPLES),
+            key=lambda c: int(c.get("attempts", 0)))
+        if not weak:
+            return []
+        cap = weak[0]
+        name, n = str(cap.get("name", "?")), int(cap.get("attempts", 0))
+        k = int(cap.get("successes", 0))
+        return [GoalCandidate(
+            kind="LEARN",
+            description=(f"能力练习：「{name}」的真实成功率样本不足"
+                         f"（仅 {n} 次实测、{k} 次成功，n<{EFFICACY_MIN_SAMPLES}"
+                         f" 估计不可信）——执行一个同类低风险只读任务，"
+                         f"积累可统计的成功/失败样本"),
+            domain="growth",
+            # 差距越大（样本越少）价值越高；置信后随校准自然消退
+            value=round(0.55 + 0.1 * (EFFICACY_MIN_SAMPLES - n), 4),
+            feasibility=0.8,
+            evidence=f"efficacy_gap {name} n={n} k={k}",
+        )]
+
+    def _from_physical_ttl(self) -> list[GoalCandidate]:
+        """L1 身体差距：boot_context.json 环境先验超过 TTL → PROBE 复核候选。
+
+        boot_context.json 由 boot_awareness 在 daemon 启动时写入（网络/
+        GPU/磁盘等事实）；daemon 长期不重启时这份"身体清单"会过期。
+        每天最多产出 1 个；文件缺失（从未自检）不触发——那是 boot 的职责。
+        """
+        if self._gap_proposed_today("physical_ttl"):
+            return []
+        try:
+            from ocos.daemon.boot_awareness import BOOT_CONTEXT_PATH
+            if not BOOT_CONTEXT_PATH.exists():
+                return []
+            payload = json.loads(BOOT_CONTEXT_PATH.read_text(encoding="utf-8"))
+            at = str(payload.get("at", ""))
+            dt = datetime.fromisoformat(at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except (OSError, ValueError, KeyError, ImportError):
+            return []
+        age_days = (datetime.now(timezone.utc) - dt).total_seconds() / 86400
+        if age_days < PHYSICAL_TTL_DAYS:
+            return []
+        date = dt.strftime("%Y-%m-%d")
+        return [GoalCandidate(
+            kind="PROBE",
+            description=(f"环境复核：身体/环境自检数据已 {age_days:.0f} 天未刷新"
+                         f"（最后 {date}）——只读重测网络可达性（国内/国际）、"
+                         f"GPU、磁盘与内存余量，并更新环境先验 boot_context"),
+            domain="research",
+            value=0.55,
+            feasibility=0.95,
+            evidence=f"physical_ttl boot_context age_days={age_days:.1f}",
         )]
 
     # ── 落地 ──────────────────────────────────────────────────────────
@@ -869,8 +990,13 @@ class MotivationHub:
         # 检查当前有没有 active goal
         try:
             conn = sqlite3.connect(self._db_path)
+            # AUD-FIX (2026-09-12): status 实际值域是大写 'PENDING'/'ACTIVE'/
+            # 'COMPLETED'（goals 表 DISTINCT 验证），原小写 IN 永远命中 0 →
+            # "无活跃目标"恒真 → 同一主题每 2-7 分钟注入一个新 follow-up
+            # （生产证据: 同描述 goal 49×/10× 重复）。UPPER() 双向兼容。
             active = conn.execute(
-                "SELECT COUNT(*) FROM goals WHERE status IN ('active','pending')"
+                "SELECT COUNT(*) FROM goals "
+                "WHERE UPPER(status) IN ('ACTIVE','PENDING','RUNNING')"
             ).fetchone()[0]
             conn.close()
         except Exception:
@@ -883,6 +1009,25 @@ class MotivationHub:
         description = self._pick_followup()
         if not description:
             return
+
+        # AUD-FIX (2026-09-12): 同描述去重闸 — 历史 PENDING/ACTIVE 或近期
+        # COMPLETED 里有同描述 goal 一律不再注入。这是对上游所有建议源
+        # (seed_topics / EpistemicDrive / fallback) 的统一防重复出口。
+        try:
+            conn = sqlite3.connect(self._db_path)
+            dup = conn.execute(
+                "SELECT COUNT(*) FROM goals WHERE description = ? "
+                "AND (UPPER(status) IN ('PENDING','ACTIVE','RUNNING') "
+                "     OR updated_at >= datetime('now','-1 day'))",
+                (description,),
+            ).fetchone()[0]
+            conn.close()
+            if dup > 0:
+                logger.debug("followup dedup: 同描述 goal 已存在, 跳过: %s",
+                             description[:50])
+                return
+        except Exception:
+            pass  # 去重查询失败不阻断注入
 
         # 用 _propose 的底层逻辑直接 save goal (绕过 GoalGenesis 限速)
         try:
@@ -910,18 +1055,21 @@ class MotivationHub:
         # (a) ReflectionEngine deepen_topics
         try:
             conn = sqlite3.connect(self._db_path)
+            # AUD-FIX (2026-09-12): SELECT 和 UPDATE 必须作用于同一 rowid。
+            # 原代码 SELECT 最新 (DESC) 但 UPDATE 最老 (MIN(rowid)) → pick 的
+            # 行永远不被标记 → 同一 topic 反复注入 ×10（生产证据）。
             row = conn.execute(
-                "SELECT topic FROM reflection_seed_topics WHERE used=0 "
+                "SELECT rowid, topic FROM reflection_seed_topics WHERE used=0 "
                 "ORDER BY rowid DESC LIMIT 1"
             ).fetchone()
             if row:
                 conn.execute(
-                    "UPDATE reflection_seed_topics SET used=1 "
-                    "WHERE rowid=(SELECT MIN(rowid) FROM reflection_seed_topics WHERE used=0)"
+                    "UPDATE reflection_seed_topics SET used=1 WHERE rowid=?",
+                    (row[0],),
                 )
                 conn.commit()
                 conn.close()
-                return f"【深入学习】{row[0]}"
+                return f"【深入学习】{row[1]}"
             conn.close()
         except Exception:
             pass

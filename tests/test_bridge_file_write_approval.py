@@ -1,8 +1,9 @@
-"""S1.1: DecisionBridge FILE_WRITE 强制审批回归（白皮书 P1-1）。
+"""S1.1: DecisionBridge FILE_WRITE 审批回归（白皮书 P1-1, 政策更新 2026-09-12）。
 
-FILE_WRITE 属强制审批动作：
-- LLM 规划的文件写入无 approval_id 时必须入待批队列，
-  不受 OCOS_APPROVAL_MODE=auto 影响；
+审批语义按模式划分（AUD-FIX 2026-09-12）：
+- auto 模式（自主循环无人值守）: FILE_WRITE 直通执行, 不入待批队列;
+  敏感路径（~/.ssh、/etc、/root…）由 file_ops._is_protected 拒绝落盘;
+- ask 模式（人工审批）: LLM 规划的文件写入无 approval_id 时必须入待批队列;
 - 伪造 / 未批准的 approval_id 在 execute_approved 与 _handler_file_op
   两层被拒（防自造 "task-approved" 绕过守门）。
 """
@@ -10,6 +11,8 @@ FILE_WRITE 属强制审批动作：
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -59,10 +62,39 @@ def _task(desc: str, task_type: str = "execute") -> Task:
 
 
 class TestFileWriteForcedApproval:
-    def test_llm_file_write_without_approval_goes_pending(self, store, bridge,
-                                                          monkeypatch, tmp_path):
-        """LLM 输出 FILE_WRITE 且无 approval_id → 入待批而非执行。"""
+    def test_llm_file_write_auto_mode_direct_execution(self, store, bridge,
+                                                       monkeypatch, tmp_path):
+        """AUD-FIX (2026-09-12) 政策更新: auto 模式 FILE_WRITE 直通执行,
+        不入待批队列 (自主循环无人值守); 敏感路径仍被 file_ops._is_protected
+        拒绝 (安全底线)。白皮书 S1.1 的"一律入待批"仅适用于 ask 模式。"""
         probe = tmp_path / "probe_s11.txt"
+        _stub_llm(bridge, monkeypatch,
+                  [f"FILE_WRITE|{probe}|hello"])
+        result = bridge.execute_dag_task(_task("创建文件并写入 hello"))
+        assert result["status"] == "completed", result
+        assert result["result"]["ok"] is True
+        assert probe.read_text(encoding="utf-8") == "hello"
+        assert store.list_by_status("pending") == []
+
+    def test_llm_file_write_auto_mode_protected_path_rejected(self, bridge,
+                                                              monkeypatch,
+                                                              tmp_path):
+        """auto 直通的底线: ~/.ssh 等敏感路径必须拒绝且不得落盘。"""
+        probe = Path.home() / ".ssh" / f"ocos_audit_{os.getpid()}.txt"
+        _stub_llm(bridge, monkeypatch,
+                  [f"FILE_WRITE|{probe}|evil"])
+        result = bridge.execute_dag_task(_task("写入敏感路径"))
+        assert probe.exists() is False, "敏感路径写入必须被拒"
+        # ok=False 或 status 诚实失败均可, 但绝不能成功落盘
+        if result["status"] == "completed":
+            assert result["result"].get("ok") is not True, result
+
+    def test_llm_file_write_ask_mode_goes_pending(self, store, bridge,
+                                                  monkeypatch, tmp_path):
+        """ask 模式（人工审批）下 FILE_WRITE 无 approval_id → 入待批,
+        白皮书 S1.1 语义在 ask 模式完整保留。"""
+        monkeypatch.setenv("OCOS_APPROVAL_MODE", "ask")
+        probe = tmp_path / "probe_ask.txt"
         _stub_llm(bridge, monkeypatch,
                   [f"FILE_WRITE|{probe}|hello"])
         result = bridge.execute_dag_task(_task("创建文件并写入 hello"))
@@ -89,7 +121,8 @@ class TestFileWriteForcedApproval:
         assert not probe.exists()
 
     def test_approved_file_write_flow(self, store, bridge, monkeypatch, tmp_path):
-        """完整审批流：待批 → 人工批准 → execute_approved 真实落盘。"""
+        """完整审批流（ask 模式）：待批 → 人工批准 → execute_approved 真实落盘。"""
+        monkeypatch.setenv("OCOS_APPROVAL_MODE", "ask")
         probe = tmp_path / "probe_approved.txt"
         _stub_llm(bridge, monkeypatch, [f"FILE_WRITE|{probe}|hello"])
         bridge.execute_dag_task(_task("创建文件并写入 hello"))

@@ -916,6 +916,46 @@ class ChatResponder:
         if ds:
             lines.append(ds)
 
+        # R10-UNIFY (2026-09-12): WM 观测召回 — 感知观测进入回答链上下文。
+        # 此前 learning_artifacts(MEM_CTX) 无生产调用方，WM 里的观测
+        # (attention:*) 对回答链不可见 → Observation 无法改变行为输出
+        # (R10 行为级 A/B 实锤: 注入 marker 落 WM 后回答 0/3 引用)。
+        # 现将最近 WM 观测(带 summary+trace_id)注入 context，回答可引用。
+        # R10-FIX2: user_input 来源优先（sensor 噪声每 tick 10+ 条会把
+        # 用户消息挤出小窗口）。
+        try:
+            from ocos.storage.working_memory import SQLiteWorkingMemory
+            wm = SQLiteWorkingMemory(self._db_path)
+            obs_pool = wm.recent(prefix="attention:", limit=20)
+            # R10-FIX: user_input 保底召回 — sensor 噪声吞吐（每秒数十条）
+            # 可在数秒内把 user_input 观测挤出时间窗口（行为级 A/B 实锤:
+            # marker 落库 3s 后即不可召回），时间窗口内排序守不住，
+            # 按信源直取兜底，去重后置前。
+            _seen_keys = {o.get("key") for o in obs_pool}
+            for _g in wm.recent_by_source(
+                    prefix="attention:", source="user_input", limit=2):
+                if _g.get("key") not in _seen_keys:
+                    obs_pool.insert(0, _g)
+            obs_pool.sort(
+                key=lambda o: (o.get("value") or {}).get("source", "")
+                == "user_input",
+                reverse=True)
+            obs_lines: list[str] = []
+            for obs in obs_pool:
+                val = obs.get("value") or {}
+                summary = str(val.get("summary", "") or "").strip()
+                if not summary:
+                    continue
+                obs_lines.append(
+                    f"  [观测 slot={val.get('slot', '?')} "
+                    f"trace={val.get('trace_id', '')}] {summary[:120]}")
+                if len(obs_lines) >= 3:
+                    break
+            if obs_lines:
+                lines.append("最新感知观测(WM):\n" + "\n".join(obs_lines))
+        except Exception as e:
+            logger.debug("wm observation context failed: %s", e)
+
         # P1-TEMPORAL: 时间窗口活动摘要（用户问"上午做了什么"等 → 按时间窗聚合真实数据）
         if _TEMPORAL_QUERY_RE.search(message or ""):
             asb = self._activity_summary_block(message)
@@ -1228,7 +1268,8 @@ class ChatResponder:
                 mods = sorted(
                     mi.name for mi in pkgutil.iter_modules(_eng.__path__)
                     if mi.name.endswith("_engine") or mi.name in (
-                        "narrative_pipeline", "consolidation_engine"))
+                        "consolidation_engine",))
+                # narrative_pipeline 经 COG-V2 Phase4 验尸归档至 _archive
                 if mods:
                     engine_mods = f"引擎模块(ocos.engines/{len(mods)}): " \
                                   f"{', '.join(mods)}"
@@ -1343,11 +1384,13 @@ class ChatResponder:
             hub.initialize()
             out["memory_stats"] = hub.get_stats()
             out["recent_episodes"] = [
-                {"context": str(getattr(ep, "context", {}))[:90],
+                {"action": str(getattr(ep, "action", ""))[:30],
                  "decision": str(getattr(ep, "decision", ""))[:90],
                  "created_at": str(getattr(ep, "created_at", ""))[:19],
                  "source": getattr(ep, "source", "")}
-                for ep in hub.episode.query_by_time(limit=8)
+                # AUD-FIX: active_only=False — episodes 会被 consolidation
+                # 置为 consolidated, active_only=True 使侧栏在归档后恒空
+                for ep in hub.episode.query_by_time(limit=8, active_only=False)
             ]
         except Exception as e:
             out["memory_stats"] = f"unavailable: {e}"
@@ -1398,7 +1441,10 @@ class ChatResponder:
                 {"time": datetime.fromtimestamp(ts).isoformat()[:19],
                  "events": [{"type": ev.event_type.value,
                              "source": ev.source,
-                             "summary": str(ev.payload)[:80]}
+                             # AUD-FIX: payload 可能是 dict/嵌套结构 —
+                             # str() 直出会把 {'status': ...} 原文泄漏到
+                             # UI 突触栏。取人类可读字段, 回退用 JSON 格式。
+                             "summary": self._humanize_payload(ev.payload)}
                             for ev in evs]}
                 for ts, evs in recent]
         except Exception as e:
@@ -1411,6 +1457,27 @@ class ChatResponder:
         out["db"] = self._db_path
         out["generated_at"] = datetime.now(timezone.utc).isoformat()
         return out
+
+    @staticmethod
+    def _humanize_payload(payload: Any) -> str:
+        """AUD-FIX (2026-09-12): 事件 payload → 人类可读摘要。
+
+        dict/嵌套结构取语义字段 (status/summary/decision/reason), 避免
+        str({'status': 'completed', ...}) 原文泄漏到 WebUI 突触栏。
+        """
+        if isinstance(payload, dict):
+            for k in ("summary", "decision", "reason", "message", "output"):
+                v = payload.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()[:80]
+            if payload:
+                try:
+                    import json as _json
+                    return _json.dumps(payload, ensure_ascii=False)[:80]
+                except Exception:
+                    return "（结构化事件）"
+            return "（空事件）"
+        return str(payload)[:80]
 
     # ── D: 自我迭代（自省 → 提案 → 审批 → 应用） ─────────────────────
 

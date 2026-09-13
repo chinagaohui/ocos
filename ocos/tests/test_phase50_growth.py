@@ -520,7 +520,7 @@ class TestGrowthEngine:
             "ocos/engagement/manager.py",  # L2: dormant 归档标注
             "ocos/orchestration/__init__.py",  # L2: dormant 归档标注
             "ocos/external_communication/manager.py",  # L2: dormant 归档标注
-            "ocos/engines/narrative_pipeline.py",  # L2: 范围澄清标注
+            "ocos/_archive/engines/narrative_pipeline.py",  # L2 范围澄清；COG-V2 Phase4 验尸归档
             "ocos/engines/reasoning_engine.py",  # L1
             "ocos/engines/planning_engine.py",  # L1
             "ocos/engines/decision_making_engine.py",  # L1

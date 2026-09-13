@@ -186,10 +186,17 @@ class ExperienceExtractor:
             )
 
         # 经验提取（纯规则，零 LLM）
+        # AUD-FIX (2026-09-12): lessons 质量闸 — 结构化 JSON 日志（评估器
+        # 输出 {"success":..., "cycle":...}）不是经验文本, 原样入库后
+        # 被 cognition/Pump 放大成"学习这条日志"的重复任务。
+        def _is_structured_log(s: str) -> bool:
+            t = (s or "").lstrip()
+            return t.startswith("{") or t.startswith("[")
+
         lessons: list[str] = []
-        if decision and len(decision) > 15:
+        if decision and len(decision) > 15 and not _is_structured_log(decision):
             lessons.append(decision.strip())
-        if outcome and len(outcome) > 15:
+        if outcome and len(outcome) > 15 and not _is_structured_log(outcome):
             lessons.append(outcome.strip())
 
         if not lessons:

@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -56,6 +58,18 @@ BLOCKED_COMMANDS: frozenset[str] = frozenset({
     "__import__('builtins').__dict__['sys'].modules",
     "compile(",
 })
+
+
+def _blocked_in(blocked: str, command: str) -> bool:
+    """黑名单命中判断：纯字母 token 用词边界，其余（含符号/空格模式）子串。
+
+    词边界防误伤：'eval' 不再命中 retrieval/evaluation 等英文查询词，
+    但仍拦截 shell 内建 `eval ...`（\b 在字母→空白/引号边界成立）。
+    """
+    if blocked.isalpha():
+        return re.search(rf"\b{re.escape(blocked)}\b", command,
+                         re.IGNORECASE) is not None
+    return blocked in command
 
 # ── 白名单 ────────────────────────────────────────────────────────────────────
 
@@ -251,8 +265,12 @@ class SandboxOps:
             SandboxResult
         """
         # ── 黑名单检查 ──────────────────────────────────────────
+        # AUD-FIX (2026-09-12): 纯字母 token（eval/shutdown/mkfs…）改词边界
+        # 匹配 — 生产实锤: 子串匹配把查询词 "retrieval"（含 eval）也拦了，
+        # 且拒绝文案被 lesson 生成器提取成 deny pattern → 二级毒化 7 天。
+        # 词边界 \beval\b 不命中 retrieval/evaluation，仍命中 `eval rm ...`。
         for blocked in BLOCKED_COMMANDS:
-            if blocked in cmd.command:
+            if _blocked_in(blocked, cmd.command):
                 self._audit_log.append(SandboxAuditRecord(
                     command=cmd.command,
                     allowed=False,
