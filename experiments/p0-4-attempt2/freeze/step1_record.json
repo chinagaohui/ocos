@@ -1,0 +1,69 @@
+{
+  "step": 1,
+  "action_1": {
+    "op": "recognize-kinds/categorize via category-detect",
+    "commands": {
+      "src_a.txt": {
+        "stdout": "bash: line 1: category-detect: command not found\n↶→_EXIT_127",
+        "exit_code": "127"
+      },
+      "src_b.txt": {
+        "stdout": "bash: line 1: category-detect: command not found\n↶→_EXIT_127",
+        "exit_code": "127"
+      },
+      "doc_c.md": {
+        "stdout": "bash: line 1: category-detect: command not found\n↶→_EXIT_127",
+        "exit_code": "127"
+      }
+    }
+  },
+  "reality": {
+    "attempted": [
+      "src_a.txt",
+      "src_b.txt",
+      "doc_c.md"
+    ],
+    "per_file_exit": {
+      "src_a.txt": "127",
+      "src_b.txt": "127",
+      "doc_c.md": "127"
+    },
+    "stderr_evidence": {
+      "src_a.txt": "bash: line 1: category-detect: command not found\n↶→_EXIT_127",
+      "src_b.txt": "bash: line 1: category-detect: command not found\n↶→_EXIT_127",
+      "doc_c.md": "bash: line 1: category-detect: command not found\n↶→_EXIT_127"
+    },
+    "files_moved": [],
+    "out_created": false,
+    "side_effect_zero": true
+  },
+  "failure_x": {
+    "cause_domain": "category-detect",
+    "observed": "3/3 files failed kind-detection",
+    "reason_from_reality": "每个目标文件的 kind 检测命令 `category-detect` 在 sandbox 上不存在（exit !=0），无文件被归类",
+    "status": "confirmed"
+  },
+  "observation_snapshot": {
+    "version": 1,
+    "content_hash": "5461b6841cd572639fb8d4e94025ca361cf7bcf6db30cedb26139981d5006067",
+    "capabilities": [
+      {
+        "name": "category-detect",
+        "attempts": 3,
+        "success_rate": 0.0
+      }
+    ],
+    "failure_modes": [
+      {
+        "cause": "category-detect",
+        "count": 3
+      }
+    ]
+  },
+  "evidence": {
+    "evidence_id": "S1E-863AF5B91BD2",
+    "data_hash": "310a18d815a0eaa748abfc734f39b2ca39ffbfe5a0deb810bc322372fbb2a0a2",
+    "s1_version": 1,
+    "source": "agent_self_model.snapshot"
+  }
+}
