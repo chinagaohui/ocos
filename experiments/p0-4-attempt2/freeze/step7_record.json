@@ -1,0 +1,85 @@
+{
+  "step": 7,
+  "structural_diff": {
+    "decision": {
+      "decision": "DIFF",
+      "strategy": "DIFF",
+      "action": "DIFF"
+    },
+    "method": true,
+    "z_method": "category-detect 直接分类",
+    "a2_method": "verify-first: 探测可用性->失败->读文件首行 kind 标签(可验证内容证据)"
+  },
+  "y_vs_z": {
+    "z_pred": {
+      "moved": {
+        "src_a.txt": "src_out",
+        "src_b.txt": "src_out",
+        "doc_c.md": "doc_out"
+      },
+      "kind_status": "全部已知",
+      "note": "若 category-detect 可信，所有文件均可归类并移动"
+    },
+    "y_kind": {
+      "src_a.txt": "SOURCE",
+      "src_b.txt": "SOURCE",
+      "doc_c.md": "DOC"
+    },
+    "y_moved": [
+      "doc_c.md->doc_out",
+      "src_a.txt->src_out",
+      "src_b.txt->src_out"
+    ],
+    "differ": true
+  },
+  "E": {
+    "E1_environment_drift": {
+      "init_spec_present": true,
+      "system_prompt_sha256_frozen": "6f7c3b4097441cbedb3bd3f78a6432ab19621bfa327b3e04008e56cc8f66baab",
+      "model_provider_frozen": {
+        "provider": "none(no_api_key)",
+        "model_version": "n/a(no_live_llm)",
+        "llm_keys": {
+          "ANTHROPIC_API_KEY": "unset",
+          "OPENAI_API_KEY": "unset",
+          "DEEPSEEK_API_KEY": "unset",
+          "OCOS_MOCK_LLM": "unset"
+        }
+      },
+      "verdict": "已冻结；A2 环境与 A1 同(仅目标文件被 A2 移动=Y 本身)"
+    },
+    "E2_sampling_noise": {
+      "decision2": "deterministic 纯 S2 读取, 无采样 seed 需求",
+      "differential_control": "policy(S2 v3)=verify_first vs policy(no-D)=trust(同策略同 capability 缺失,唯一差异=C01 标志)",
+      "verdict": "排除：same policy 在加不加 C01 下输出不同，确定性可复现"
+    },
+    "E3_capability_confounding": {
+      "capability_failure_condition": "category-detect 缺失(A1 的 X 成因)在 A1/A2 均存在",
+      "no_D_control": "policy(no-D, category-detect 仍缺失)=trust → 缺失本身不产生 verify_first；唯 C01 的 NEEDS_VERIFICATION 翻转分支",
+      "verdict": "排除：capability 缺失在 no-D 对照下不导致行为改变"
+    },
+    "E4_prompt_variation": {
+      "decision2": "非 LLM，deterministic policy 读 S2",
+      "system_prompt_locked": "6f7c3b4097441cbedb3bd3f78a6432ab19621bfa327b3e04008e56cc8f66baab",
+      "verdict": "排除：无 prompt 变体，A1/A2 prompt 冻结一致"
+    }
+  },
+  "chain": {
+    "X confirmed (真实 A1 失败)": "PASS",
+    "Recognition→C01(FAILURE_PATTERN)": "PASS",
+    "D=C01 经 governed commit→S2 v3, content_hash 变": "PASS",
+    "Z frozen before A2 + Z_clean": "PASS",
+    "Thinking2 consumed C01 (structural, kb 唯一靶向)": "PASS-conditional(确定性重建)",
+    "Decision2 ≠ Z": "PASS",
+    "Strategy2/Action2 ≠ Z": "PASS",
+    "Y observed (真实移动+out.txt)": "PASS",
+    "Y ≠ Z": "PASS",
+    "E1/E2/E3/E4 排除": "PASS(依据冻结控制变量+no-D对照)",
+    "Causal attribution": "CONDITIONAL(受控确定性 harness 下闭环成立；实时认知链+生产LLM未验证)"
+  },
+  "evidence_level": "Decision behavior observed; cognitive-consumption trace reconstructed from deterministic policy and A2 execution material, with exact C01 attribution (not contemporaneous realtime ThinkingTrace)",
+  "verdict": "CONDITIONAL",
+  "unsupported_beyond_this_round": [
+    "real production-LLM Decision2 行为归因 — 未验证(无 live LLM key, 如实披露)"
+  ]
+}
