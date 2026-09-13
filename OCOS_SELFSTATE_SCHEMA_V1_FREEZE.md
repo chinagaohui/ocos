@@ -676,29 +676,31 @@ P0 / P1 / P2 → Implementation
 
 ---
 
-## 15. ⑧ P0/P1/P2 方向契约（FREEZE，细则见 OCOS_P0_P1_P2_PLAN.md）
+## 15. ⑧ P0/P1/P2 方向契约（FREEZE，2026-09-13，细则见 OCOS_P0_P1_P2_PLAN.md）
 
 **阶段切换**：从"代码考古" → "主体生命链建设"。不再扩大反查范围。
 
+**⑧ 唯一交付物（Gate，冻结）**：建立并验证一条不可伪造的主体生命链 —— 真实 Experience X 经 Recognition 形成 Self/Cognition Delta D，D 被下一次 Thinking/Decision 实际消费，并在受控反事实基线 Z 下产生可归因的 Y ≠ Z。非"完成多少模块"。
+
 **P0 只有 4 条主链（不扩几十项）**：
 ```text
-P0-1 SelfState 真身通电   S2 = 唯一参与 Thinking 的 Self（T-S1 强制验收）；S1 = 能力证据（禁止独立进 Thinking）
+P0-1 SelfState 真身通电   S2 = 唯一参与 Thinking 的 Self（T-S1 强制验收）；S1 = 能力证据
 P0-2 Self Growth 主链     唯一合法 Self/Cognitive Growth 路径；Episode/Knowledge/Belief/Skill/SelfVersion/Prompt +1
                           单独存在不得宣称成长
 P0-3 Worldview            主体判断投影，非 WorldModel 镜像（WorldModel/Worldview/SelfDelta 三分）
-P0-4 第一次 X→D→Y 实验    同一 Goal：外1失败→Recognition→Δ→外2；验收 = Decision₂ consumes D ∧
-                          Behavioral Delta(结构性差异，非机械 Action≠) ∧ Y≠Z（唯一 Life-chain Gate）
+P0-4 第一次 X→D→Y 实验    含 P0-4-Z 前置门（Attempt 2 前冻结 Z，禁止事后定义）
 ```
 
 **P0 红线（修正口径）**：
-- S2"通电" ≠ 新建对象塞进 Prompt；是把 SelfState 变成**真实认知状态源**。**T-S1**：生产 Thinking 的 Self 来源必须是 S2，S1 只能经 Evidence→Claim/Delta 路径进入。
-- **P0-2 名称**："唯一合法成长路径" → "唯一合法 **Self Growth / Cognitive Growth** 路径"（Episode/Knowledge/Belief/Skill/Version/Prompt +1 是合法状态变化，但单独存在不得宣称 Self Growth）。
-- Worldview 不重建 WorldModel；只做引用与投影。**依赖**：P0-1→P0-2→P0-4（最小闭环），**P0-3 不阻塞 P0-4**。
+- **T-S1（精确化）**：Self representation 的 **authoritative source 必须是 S2**。不要求"所有自我信息只能来自 S2"（那会切断 S1 Evidence 路径）；S1 信息出现于 Thinking 必须以 S2 状态内的 Evidence/Claim/Capability projection 形态，不得以 S1 独立 Self representation 存在。
+- **P0-2 名称**："唯一合法成长路径" → "唯一合法 Self Growth / Cognitive Growth 路径"（Episode/Knowledge/Belief/Skill/Version/Prompt +1 是合法状态变化，但单独存在不得宣称 Self Growth）。
+- Worldview 不重建 WorldModel。**依赖**：P0-1→P0-2→P0-4（最小闭环），**P0-3 不阻塞 P0-4**。
 - P0 不是"让代码库证明自己会成长"——分层验收（§14.2）。
-- **P0-4 控制**：固定 Goal/Task/Env/初始态/capabilities/model/temperature/Prompt baseline，唯一变量 = X→Recognition→D；确保 attribution experiment 非普通 retry。
-- **P0-4 允许 FAIL**：实验失败首先是架构证据，禁止为 PASS 反复调 Prompt/规则补丁（ER2/A11/A12 纪律）。
+- **P0-4-Z（前置门，冻结）**：Attempt 2 执行前必须冻结 `Z = 在 X→D 不发生下基于已有证据预测的 Decision/Strategy/Action/Result`，记录 `Z.source/evidence[]/confidence/frozen_at`，标记 `reconstructed | controlled_baseline`。**Attempt 2 后不得重新定义 Z。**
+- **P0-4 控制**：固定 Goal/Task/Env/初始态/capabilities/model/temperature/Prompt baseline，唯一变量 = X→Recognition→D；attribution experiment 非普通 retry。
+- **P0-4 允许 FAIL**：实验失败是架构证据，禁止为 PASS 反复调 Prompt/规则补丁（ER2/A11/A12 纪律）。
 
-**P1（支撑，不抢 P0）**：WorldModel 持久化 · Experience/Memory/Wisdom 三层收敛 · Knowledge→Self/Worldview 边界 · Skill 进成长链。
-**P2（债务，不阻塞 P0）**：registry 统一 · event_store 三处 ownership 裁决 · dead paths / 重复 attention / 超大模块。**P2 不得为架构干净修改 P0 主体语义，不得再造第二条 Cognitive Runtime**。
+**P1（支撑，不抢 P0）**：WorldModel 持久化（= World Continuity，对应 P0 的 Cognitive Continuity，勿混）· Experience/Memory/Wisdom 三层收敛 · Knowledge→Self/Worldview 边界 · Skill 进成长链。
+**P2（债务，不阻塞 P0）**：registry 统一 · event_store 三处 ownership 裁决 · dead paths / 重复 attention / 超大模块。**P2 总红线（Protected Semantic Path）**：P0 主体生命链为受保护语义路径，P2 只可重构 implementation，不得改 semantics/evidence；不得再造第二条 Cognitive Runtime。
 
-**门**：P0-4 为唯一"生命链完成"闸门。PASS→持续主体；FAIL→结构完成而非生命链完成。
+**门**：P0-4 为唯一 Life-chain Gate。PASS→Life-chain established→可进 P1；FAIL→Architecture evidence，不进入 P1。

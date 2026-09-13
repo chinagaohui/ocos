@@ -1,9 +1,10 @@
 # OCOS P0 / P1 / P2 计划 — 主体生命链建设（⑧）
 
 > **性质：阶段切换宣言 —— 从"代码考古"切到"主体生命链建设"。** 只定契约方向，不进入 Implementation（⑨）。实现需本计划批准后逐项推进。
-> **状态：DRAFT（待裁决）。** 输入 = `OCOS_913_SEMANTIC_MAP.md` v0.5（⑥⑦完成）+ `OCOS_SELFSTATE_SCHEMA_V1_FREEZE.md`（v1 冻结 + §14.2/14.3 升级）。
+> **状态：FREEZE（⑧ 方向契约正式冻结，2026-09-13）。** 已吸收裁决修订：P0-4-Z Counterfactual Baseline Freeze（Attempt 2 前冻结 Z）、T-S1 authoritative source 精确化、P2 Protected Semantic Path 红线。
+> **输入** = `OCOS_913_SEMANTIC_MAP.md` v0.5（⑥⑦完成）+ `OCOS_SELFSTATE_SCHEMA_V1_FREEZE.md`（v1 冻结 + §14.2/14.3 升级 + §15）。
 > **日期：2026-09-13（Asia/Shanghai）**
-> **文档链**：FREEZE（契约）→ 913_MAP（反查）→ **本文件（⑧ P0/P1/P2）** → ⑨ Implementation（未进入）。
+> **文档链**：FREEZE（契约）→ 913_MAP（反查）→ **本文件（⑧ P0/P1/P2，FREEZE）** → ⑨ Implementation（待 P0-1→P0-2→P0-4 推进）。
 
 ---
 
@@ -13,10 +14,13 @@
 >
 > **"能不能让 OCOS 因为真实发生过的 X，形成可审计的 Self/Cognition Delta，并在下一次同类 Thinking 中产生可归因的 Y ≠ Z？"**
 
-- **PASS** → OCOS 第一次从"带记忆的 Agent / 带记忆的反射系统"跨到"有经验连续性与认知连续性的持续主体"。
-- **FAIL** → 即使 S2/Worldview/SelfState 都有数据库、有 version、有 Prompt 注入，也只能判为**结构完成，不是生命链完成**。
+**⑧ 的唯一交付物**（Gate，冻结）：
 
-**红线**：不要做成"让整个代码库证明自己会成长"的荒谬工程 —— 只有主体候选模块进入 Causal Attribution 验收（分层口径见 FREEZE §14.2）。
+> **不是"完成多少模块"，而是建立并验证一条不可伪造的主体生命链：真实 Experience X 经 Recognition 形成 Self/Cognition Delta D，D 被下一次 Thinking/Decision 实际消费，并在受控反事实基线 Z 下产生可归因的 Y ≠ Z。**
+
+- **PASS** → Life-chain established → 可进 P1。
+- **FAIL** → Architecture evidence（当前 OCOS 不具备被证明的 X→D→Y 因果成长能力），**不得以调 Prompt/规则补丁绕过，不进入 P1**。
+- **红线**：不要做成"让整个代码库证明自己会成长"的荒谬工程 —— 只有主体候选模块进入 Causal Attribution 验收（分层口径见 FREEZE §14.2）。
 
 ---
 
@@ -77,9 +81,19 @@ context += S1.render() + S2.render()      ← 只换壳：S2(形式) + S1(真身
 **强制验收（T-S1，P0-1 未过则不算 PASS）**：
 ```text
 T-S1:
-生产 Thinking 所消费的 Self 来源必须是 S2 SelfState。
-S1 只能通过 Evidence → Claim/Delta 路径影响 S2，不得作为独立的 Self 输入进入 DecisionBridge/LLM。
+Decision/LLM 所消费的 Self representation，其 authoritative source 必须是 S2 SelfState。
+任何 S1 信息若出现于 Thinking，必须能够追溯为 S2 当前状态中的
+Evidence / Claim / Capability projection，而不能以 S1 独立 Self representation 存在。
 ```
+
+**T-S1 精确化（修正）**：验收对象不是"代码里有没有调用 `AgentSelfModel.render()`"，而是——
+
+```text
+S1 ─→ Empirical Evidence ─→ Claim / Delta ─→ S2 ─→ Thinking     ✅
+S1 ─────────────────────────────────────────────→ Thinking      ✗
+```
+
+即：**不得错误理解成"所有关于自己的信息只能来自 SelfState"**（那会切断 S1 的 Evidence 路径）；而是 Self representation 的 **authoritative source** 必须是 S2 —— S1 信息出现在 Thinking 中必须是以 S2 状态内的 Evidence/Claim/Capability projection 形态。
 
 ### P0-2 · Self Growth 主链
 
@@ -196,6 +210,67 @@ Y ≠ Z
 
 `Y ≠ Z` 必须可解释为"为什么是 D 导致了 Y，而非原有策略本来就会产生 Y"。这样 Y≠Z 才有真正的反事实意义。
 
+### P0-4-Z · Counterfactual Baseline Freeze（前置门，冻结）
+
+> **Z 必须由谁产生、何时冻结、依据什么证据确定 —— 在 Attempt 2 执行之前冻结，禁止事后定义 Z。** 否则会重新引入 post-hoc attribution："结果变了 → 研究者事后解释'如果没有 D，应该还是原来的策略'"。
+
+**冻结规则**：Attempt 2 执行**之前**，必须先冻结：
+
+```text
+Z =
+在 X → D 不发生的条件下，
+基于已有证据所预测的
+Decision / Strategy / Action / Result
+```
+
+并记录：
+
+```text
+Z
+Z.source
+Z.evidence[]
+Z.confidence
+Z.frozen_at
+```
+
+**Z 的来源标记**：
+
+```text
+counterfactual_source = reconstructed         历史重建（基于先前认知/策略/同任务 baseline/历史 policy）
+counterfactual_source = controlled_baseline    真实受控 baseline（同条件对照跑）
+```
+
+**红线**：**Attempt 2 完成以后不得重新定义 Z。** Z 一旦冻结即为一等审计对象（与 FREEZE §5 G4 一致）。
+
+**完整实验流（P0-4 更新）**：
+
+```text
+                ┌───────────────┐
+                │ Freeze Z      │
+                │ before A2     │
+                └───────┬───────┘
+                        ↓
+Goal
+ ↓
+Attempt 1
+ ↓
+Failure X
+ ↓
+Recognition
+ ↓
+Self/Cognition Delta D
+ ↓
+Decision₂ consumes D
+ ↓
+Attempt 2
+ ↓
+Actual Y
+ ↓
+Compare(Y, Z)
+ ↓
+Causal Attribution
+```
+
 **实验控制条件（修正 4，冻结）**——确保 attribution experiment 而非普通 retry：
 
 ```text
@@ -251,8 +326,27 @@ P0-4 PASS = X → Recognition → D → Decision₂ consumes D → behavioral de
 - dead paths / duplicate attention / legacy cognitive packages / oversized modules
 ```
 
-**P2 红线（修正 5-补）：不得为了"架构干净"而修改 P0 的主体语义。**
+**P2 总红线（Protected Semantic Path，冻结）**：
 
+> **P0 通过的主体生命链属于 Protected Semantic Path。P2 任何重构不得改变其输入、输出、证据身份、因果关系及可审计性。**
+
+```text
+event_store · attention · registry · bridge · runtime · memory
+```
+即使以后发现结构很丑，也不能因为"架构不优雅"而改出 `Cognitive Runtime B`，或把 `Experience → Recognition → Delta → Thinking` 拆散成另一套。
+
+**P0 的生命链是 P2 重构之后的验收基准，而不是 P2 的重构对象。** P2 可以改 **implementation**，不得改 **semantics/evidence**。
+
+```text
+P0 semantic path
+     ↓
+  PROTECTED
+     ↓
+P2 may refactor implementation
+but may not alter semantics / evidence
+```
+
+**禁止**：
 ```text
 发现 event_store 三个     → 先重构
 发现 attention 两个       → 先统一
@@ -260,17 +354,6 @@ P0-4 PASS = X → Recognition → D → Decision₂ consumes D → behavioral de
 发现 registry 重复        → 先重写
 → 半年后回到代码考古        ← 禁止
 ```
-
-必须遵守：
-
-```text
-P0 已验证的生命链
-     ↓
-成为架构重构的保护对象
-     ↓
-P2 只能在不改变主体语义 / 证据链的前提下重构
-```
-
 尤其：**不要为追求"优雅架构"重新制造第二条 Cognitive Runtime**（继续作为红线）。
 
 > 判断标准：**都不应阻塞 P0 的"我能不能因为经历而改变"。** P2 在 P0/P1 之后做，或并行但不得抢 P0 资源。
@@ -287,6 +370,7 @@ P2 只能在不改变主体语义 / 证据链的前提下重构
 
 ## 6. 推进开关
 
-- 本文件为 **DRAFT**，需你批准冻结后才进入 ⑨ 逐项实现。
-- 执行顺序（修正依赖）：**P0-1 SelfState 通电 → P0-2 Self Growth 主链 → P0-4 实验（生命链最小闭环）；P0-3 Worldview 并行补齐，不阻塞 P0-4**。
-- P0-4 为唯一"生命链完成"闸门；未达 PASS 前不进入 P1/P2。
+- **状态**：已 FREEZE。⑨ **只允许按 P0-1 → P0-2 → P0-4 推进；P0-3 可并行，不作为 P0-4 前置。**
+- 依赖序：**P0-1（S2=Self，T-S1）→ P0-2（Self/Cognitive Growth 链）→ P0-4（X→D→Y Attribution，含 P0-4-Z 前置冻结）；P0-3 Worldview 并行补齐。**
+- P0-4 为唯一 Life-chain Gate：PASS → Life-chain established → 可进 P1；FAIL → Architecture evidence，不进入 P1。
+- **禁止**在 P0-4 PASS/FAIL 判明前：扩 P0 项目 · 扩大 913 审计 · 清 P2 · WorldModel 持久化 · 追求架构漂亮。
