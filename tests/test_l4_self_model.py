@@ -227,11 +227,14 @@ class TestRender:
         assert f"自我模型（v{snap['version']}" in text
 
     def test_build_context_contains_self_model(self, db, monkeypatch):
+        # frozen 语义（P1 恢复性迁移）：Thinking 的自我来源唯一是 committed
+        # S2 投影（"SelfState vN"），S1 画像块不再注入生产 context。
         monkeypatch.setenv("OCOS_AUDIT_DIR", str(db + ".audit"))
         AgentSelfModel(db).calibrate()
         from ocos.interaction.converse import ChatResponder
         ctx = ChatResponder(db_path=db).build_context("", session_id="t")
-        assert "自我模型（v1" in ctx
+        assert "SelfState v" in ctx
+        assert "自我模型（v" not in ctx
 
 
 # ── daemon 接线（源码级） ────────────────────────────────────────────

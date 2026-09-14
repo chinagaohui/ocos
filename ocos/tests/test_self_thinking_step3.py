@@ -105,10 +105,11 @@ def test_t32_no_s1_bypass_at_runtime(tmp_path, monkeypatch):
 
 
 def test_t32_no_s1_call_in_production_sources():
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
     files = [
-        "/workspace/ocos/interaction/converse.py",
-        "/workspace/ocos/execution/bridge.py",
-        "/workspace/ocos/memory/recall_router.py",
+        repo_root / "ocos/interaction/converse.py",
+        repo_root / "ocos/execution/bridge.py",
+        repo_root / "ocos/memory/recall_router.py",
     ]
     for f in files:
         src = pathlib.Path(f).read_text(encoding="utf-8")

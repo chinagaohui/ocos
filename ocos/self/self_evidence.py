@@ -56,7 +56,7 @@ _CAP_KNOWN_SR = 0.6
 # G3: worldview 凝结准入 — 真实经历串联观测数（derived，非 caller 输入）低于该阈值不凝结。
 _MIN_WV_OCCURRENCES = 3
 
-# G3: divergence_kind 分类家族（REFRAME 依赖类别改变，CONFLICT 依赖同维反方向）。
+# G3: divergence_type 分类家族（REFRAME 依赖类别改变，CONFLICT 依赖同维反方向）。
 _DIV_FAMILY = {
     "none": "stable",
     "unexpected_value": "expectation",
@@ -254,14 +254,14 @@ class WorldViewExperienceGate:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# G3: _classify_divergence — expected+actual → 结构化 divergence_kind（D）
+# G3: _classify_divergence — expected+actual → 结构化 divergence_type（D）
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 def _classify_divergence(expected: Any, actual: Any) -> str:
-    """确定性分类器：同输入同输出，产出结构化 divergence_kind（非 bool）。
+    """确定性分类器：同输入同输出，产出结构化 divergence_type（非 bool）。
 
-    divergence_kind ∈ {"none","type_mismatch","missing","unexpected_value",
+    divergence_type ∈ {"none","type_mismatch","missing","unexpected_value",
                        "exceeds_bound","falls_short"}（见 _DIV_FAMILY）。
     expected == actual → "none"（无差异 → 不触发 conflict/reframe 类）。
     """
@@ -309,8 +309,8 @@ def _div_family(kind: str) -> str:
 _DIVERGENCE_NOTE_RE = re.compile(r"divergence:([a-z_]+)")
 
 
-def _note_divergence_kind(note: str) -> str | None:
-    """从既有 judgment.note 提取上次 divergence_kind（用于类别改变检测）。"""
+def _note_divergence_type(note: str) -> str | None:
+    """从既有 judgment.note 提取上次 divergence_type（用于类别改变检测）。"""
     if not note:
         return None
     m = _DIVERGENCE_NOTE_RE.search(note)
@@ -326,7 +326,7 @@ class WorldViewRecognitionRule:
     """从验证过的真实经历 + 当前 worldview 推导结构化解（B+C+D+R 全推导）。
 
     调用方对 recognize --(gate)--> 这里，只给候选事实观测；所有语义字段
-    （judgment / frame / stance_type / recognition_type / divergence_kind /
+    （judgment / frame / stance_type / recognition_type / divergence_type /
     occurrences）都由本规则对事实 + 当前 worldview 确定性推导，禁预制。
     """
 
@@ -353,16 +353,16 @@ class WorldViewRecognitionRule:
         occurrences = self._gate.count(resolved)
         if occurrences < _MIN_WV_OCCURRENCES:
             return None
-        # ── D: divergence_kind 确定性分类 ──
-        divergence_kind = _classify_divergence(expected, actual)
+        # ── D: divergence_type 确定性分类 ──
+        divergence_type = _classify_divergence(expected, actual)
         # ── R: recognition_type / stance_type / frame / judgment / confidence ──
         prior = self._current.get(domain)
-        if divergence_kind == "none" and prior is None:
+        if divergence_type == "none" and prior is None:
             return None  # 无既有判断且无差异 → 无 distinguishable pattern
-        recognition_type = self._derive_recognition_type(prior, divergence_kind)
-        stance_type = self._derive_stance_type(prior, divergence_kind)
-        frame = self._derive_frame(domain, divergence_kind)
-        judgment = _derive_judgment(domain, divergence_kind)
+        recognition_type = self._derive_recognition_type(prior, divergence_type)
+        stance_type = self._derive_stance_type(prior, divergence_type)
+        frame = self._derive_frame(domain, divergence_type)
+        judgment = _derive_judgment(domain, divergence_type)
         confidence = self._derive_confidence(occurrences, recognition_type)
         return SelfClaim(
             claim_id=f"{evidence.evidence_id}-WV",
@@ -372,7 +372,7 @@ class WorldViewRecognitionRule:
             key=domain,
             meta={
                 "domain": domain,
-                "divergence_kind": divergence_kind,
+                "divergence_type": divergence_type,
                 "recognition_type": recognition_type,      # RecognitionType 实例（内部）
                 "trigger_episode": trigger_episode,        # 已过 provenance 门（C）
                 "occurrences": occurrences,                # derived（B）
@@ -385,31 +385,31 @@ class WorldViewRecognitionRule:
             confidence=confidence,
         )
 
-    def _derive_recognition_type(self, prior, divergence_kind) -> RecognitionType:
+    def _derive_recognition_type(self, prior, divergence_type) -> RecognitionType:
         if prior is None:
             return RecognitionType.NOVEL_PATTERN
-        if divergence_kind == "none":
+        if divergence_type == "none":
             return RecognitionType.CONFIRM
-        prior_div = _note_divergence_kind(getattr(prior, "note", ""))
+        prior_div = _note_divergence_type(getattr(prior, "note", ""))
         if prior_div is None:
             # 旧判断无 divergence 标注（遗留）：视为稳定理解被打破 → 冲突
             return RecognitionType.CONFLICT
-        if _div_family(divergence_kind) != _div_family(prior_div):
+        if _div_family(divergence_type) != _div_family(prior_div):
             return RecognitionType.REFRAME          # 类别改变 → 新组织框架
-        if _is_opposite(divergence_kind, prior_div):
+        if _is_opposite(divergence_type, prior_div):
             return RecognitionType.CONFLICT          # 同维反方向 → 修订
         return RecognitionType.CONFIRM               # 同类别重复 → 一致/强化
 
-    def _derive_stance_type(self, prior, divergence_kind) -> StanceType:
+    def _derive_stance_type(self, prior, divergence_type) -> StanceType:
         if prior is None:
             return StanceType.INTERPRETIVE
-        if divergence_kind == "none":
+        if divergence_type == "none":
             return StanceType.INTERPRETIVE
         # 出现冲突/重构 → 认识到自身理解边界
         return StanceType.EPISTEMIC if prior is not None else StanceType.NORMATIVE
 
-    def _derive_frame(self, domain: str, divergence_kind: str) -> str:
-        return f"在这类 {domain} 场景，观测可能出现 {divergence_kind} 差异"
+    def _derive_frame(self, domain: str, divergence_type: str) -> str:
+        return f"在这类 {domain} 场景，观测可能出现 {divergence_type} 差异"
 
     def _derive_confidence(self, occurrences: int, recog: RecognitionType) -> float:
         base = 0.5 + 0.06 * occurrences
@@ -424,8 +424,8 @@ def _is_opposite(kind: str, other: str) -> bool:
     return {kind, other} == {"exceeds_bound", "falls_short"}
 
 
-def _derive_judgment(domain: str, divergence_kind: str) -> str:
-    return f"对于 {domain}，同类情形可能出现 {divergence_kind} 偏离"
+def _derive_judgment(domain: str, divergence_type: str) -> str:
+    return f"对于 {domain}，同类情形可能出现 {divergence_type} 偏离"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -553,7 +553,7 @@ def delta_from_claim(current: SelfModel, claim: SelfClaim) -> SelfDelta:
             )
         impact = _worldview_impact(recog)
     else:
-        raise SelfEvidenceError(f"unknown claim kind: {kind}")
+        raise SelfEvidenceError(f"unknown claim type: {kind}")
     return SelfDelta(
         claim_id=claim.claim_id,
         evidence_id=claim.evidence.evidence_id,
@@ -589,7 +589,7 @@ def _build_worldview_judgment(old, claim: SelfClaim, meta: dict,
             created_tick=old.created_tick,
             last_updated_tick=tick,
             continuity=ContinuityKind.DERIVED,
-            note=f"confirm: divergence:{meta['divergence_kind']}, ev:{evidence_id}",
+            note=f"confirm: divergence:{meta['divergence_type']}, ev:{evidence_id}",
         )
     return WorldViewJudgment(
         domain=domain,
@@ -603,7 +603,7 @@ def _build_worldview_judgment(old, claim: SelfClaim, meta: dict,
         created_tick=old.created_tick if old is not None else tick,
         last_updated_tick=tick,
         continuity=_continuity_for(old, recog),
-        note=f"divergence:{meta['divergence_kind']} [recognition:{recog.value}, ev:{evidence_id}]",
+        note=f"divergence:{meta['divergence_type']} [recognition:{recog.value}, ev:{evidence_id}]",
     )
 
 
@@ -695,7 +695,7 @@ def apply_delta(candidate: SelfModel, delta: SelfDelta) -> None:
             candidate.worldview = wv
         wv.declare(delta.new_value)
     else:
-        raise SelfEvidenceError(f"unknown delta kind: {kind}")
+        raise SelfEvidenceError(f"unknown delta type: {kind}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

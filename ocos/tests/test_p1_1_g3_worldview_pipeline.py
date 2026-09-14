@@ -88,12 +88,12 @@ def _manager(tmp_path, db="g3.db"):
     return SelfStateManager(str(tmp_path / db))
 
 
-def _wview_with_note(divergence_kind: str) -> WorldView:
+def _wview_with_note(divergence_type: str) -> WorldView:
     """构造一个仅含单域、note 标注 divergence 的既有世界观（类别改变检测用）。"""
     wv = WorldView()
     j = WorldViewJudgment(
         domain="rate", judgment="j", stance_type=StanceType.INTERPRETIVE,
-        frame="f", confidence=0.7, note=f"divergence:{divergence_kind}",
+        frame="f", confidence=0.7, note=f"divergence:{divergence_type}",
         continuity=ContinuityKind.FIRST,
     )
     wv.declare(j)
@@ -221,7 +221,7 @@ def test_vsg_semantic_structure_gate(tmp_path):
 
 
 def test_vdk_divergence_classifier_and_reframe_gate():
-    """expected+actual → 确定性 divergence_kind；REFRAME 仅类别改变触发。"""
+    """expected+actual → 确定性 divergence_type；REFRAME 仅类别改变触发。"""
     assert _ev._classify_divergence("exit 0", "exit 127") == "unexpected_value"
     assert _ev._classify_divergence("file exists", "missing") == "missing"
     assert _ev._classify_divergence("exit 0", "exit 0") == "none"
@@ -264,7 +264,7 @@ def test_v1_v2_recognition_formation_and_rule_derived(tmp_path):
     assert "judgment" not in dict(ev.observations[0].meta)
     assert c.meta["recognition_type"] is RecognitionType.NOVEL_PATTERN
     assert c.meta["stance_type"] == "interpretive"
-    assert c.meta["divergence_kind"] == "unexpected_value"
+    assert c.meta["divergence_type"] == "unexpected_value"
     assert c.meta["frame"] == "在这类 tool 场景，观测可能出现 unexpected_value 差异"
     assert c.statement == "对于 tool，同类情形可能出现 unexpected_value 偏离"
     assert c.meta["occurrences"] == 3
