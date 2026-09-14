@@ -295,6 +295,7 @@ P1-1D 实施授权 = **NO-GO**；唯一开放下一步 = Decision Host / Semanti
 > 后续：该只读审计已于 2026-09-14 完成并获 Human Gate 终裁 =
 > **PASS / FROZEN（D1-D5 全 PASS；Situation B = ACCEPTED；P1-1D-B = 新架构能力建设；
 > Attribution Infrastructure 先于任何实施冻结）**。P1-1D 实施保持 NO-GO。
+> 同日经 Human Gate 确认 **P1-1D 正式收档**（详见审计文档 §9），本阶段不再开放任何实施项。
 
 ---
 

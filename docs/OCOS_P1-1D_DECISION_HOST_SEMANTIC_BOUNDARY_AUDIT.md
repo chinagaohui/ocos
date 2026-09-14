@@ -384,5 +384,70 @@ Execution
 
 ---
 
-*本文件为 P1-1D 只读审计材料（PASS / FROZEN）。未修改任何生产代码。*
+## 9. 正式收档（Human Gate 确认，2026-09-14）
+
+**P1-1D 正式收档。** 本阶段不再开放任何实施项。
+
+```text
+G3 Worldview Formation                 PASS / FROZEN
+G4 Worldview → Thinking                PASS / FROZEN
+P1-1D Scope Assessment                 PASS / FROZEN
+Decision Host / Semantic Boundary      PASS / FROZEN
+P1-1D-B                                NOT AUTHORIZED
+```
+
+**已钉死的架构边界**：
+
+- Cognitive Decision Host：**不存在**
+- Production Planning Host：存在（AgentRuntime step6）
+- TaskDAG：Action Carrier
+- DecisionBridge：Mutation Authorization / Execution Gate
+- Thinking → Decision Semantic Boundary：**不存在**
+- ChatResponder → DecisionBridge：**REJECTED**
+- 旧 `decision/` / `cognitive_loop/` 等：**不得作为现成 Cognitive Decision Host 重新启用**
+- Trace enhancement：**未授权**
+- 生产代码：**零改动**
+
+**关键架构结论**：
+
+```text
+                  OCOS 当前已有
+                       │
+       ┌───────────────┴───────────────┐
+       │                               │
+  Cognitive side                 Operational side
+       │                               │
+Worldview → Thinking              Goal → Planning
+       │                               ↓
+   ChatResponder                   TaskDAG
+       │                               ↓
+ Reply / Episode / Trace        DecisionBridge
+                                       ↓
+                              Mutation Authorization
+                                       ↓
+                                  Execution
+```
+
+中间明确存在 `Thinking ─── X ─── Decision`。这个 `X` 不是 bug，也不是 wiring gap，
+而是**尚未定义的认知语义边界**。
+
+**防漂移规则（FROZEN）**：任何人若提出
+
+> "既然 DecisionBridge 已经有了，把 Thinking 输出接进去不就行了？"
+
+直接判定为**架构漂移** —— 它把 `Thinking → Execution Gate` 伪装成
+`Thinking → Decision → Execution`，中间真正缺失的 Decision 语义并未因此产生。
+
+**收档规则（浓缩为一句）**：
+
+> **P1-1D 已经从"寻找 Decision Host"阶段结束；未来若重新开启，必须以新的
+> Scope Amendment 重新定义 Cognitive Decision Boundary，并先冻结 Attribution
+> Infrastructure，Human Gate GO 后才能进入实现。**
+
+**保留空白是发现，不是缺陷**：OCOS 已具备"认知"与"行动治理"，但还没有把认知
+正式转化为主体 Decision 的机制。这条边界已经审计、命名、证据化并冻结。
+
+---
+
+*本文件为 P1-1D 只读审计材料（PASS / FROZEN / 正式收档）。未修改任何生产代码。*
 *任何实施需 Human Gate 明确授权，且必须先完成 Semantic Boundary Design + Attribution Infrastructure Freeze。*
