@@ -122,7 +122,21 @@ class AgentSelfModel:
             conn.close()
         logger.info("SelfModel calibrated v%d (%d capabilities, %d failure modes)",
                     version, len(capabilities), len(failure_modes))
-        return self.load() or {}
+        snapshot = self.load() or {}
+        # P1 恢复性迁移（2026-09-14）：calibrate 是 S1 实测证据的唯一生产发射
+        # 点（goal_result 闭合 + daemon 每 50 tick 两处都收口于此）。校准落库
+        # 后同 tick 确定性喂 S2（零 LLM；进程注册表保证喂的是 runtime boot 的
+        # 同一 manager；内容无变化时管线语义 noop；失败只 debug，绝不阻断校准）。
+        # lazy import：保持本模块顶层只依赖标准库，且避开同包导入环。
+        try:
+            from ocos.self.self_state import get_or_boot_self_manager
+            from ocos.self.s2_feeder import feed_s1_snapshot
+            manager = get_or_boot_self_manager(self._db_path)
+            if manager is not None:
+                feed_s1_snapshot(manager, snapshot)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("S2 feed after calibrate skipped: %s", e)
+        return snapshot
 
     def _stat_capabilities(self, capability_names: list[str] | None) -> list[dict]:
         """实测统计: goal_result episodes 按 context.agent 分组成功率。

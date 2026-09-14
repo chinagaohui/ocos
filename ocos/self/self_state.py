@@ -54,8 +54,7 @@ from ocos.self.self_types import (
 )
 from ocos.self.worldview import WorldView
 from ocos.storage.connection import get_connection, transaction
-from ocos.storage.migrations import ensure_schema
-from ocos.storage.schema import TABLE_SELF_STATE
+from ocos.storage.schema import CREATE_SELF_STATE, TABLE_SELF_STATE
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +261,21 @@ class SelfStateStore:
         self._db_path = db_path
 
     def initialize(self) -> None:
-        ensure_schema(self._db_path)
+        """只确保 S2 专属表存在（自包含），不跑全量迁移链。
+
+        生产库的 schema 迁移由 persistence 启动链负责（S2 boot 前已完成）；
+        最小宿主/测试库可能只有异构简化 episodes 表，全量迁移里的
+        ALTER/INDEX 会因缺列失败（如 no such column: goal）。S2 的持久化
+        只依赖 self_state 一张表，CREATE TABLE IF NOT EXISTS 幂等且零副作用。
+
+        连接纪律：get_connection 返回进程池共享连接（goal/event-loop 等线程
+        并发持有同一引用），此处**只 commit 不 close** —— close 会制造
+        "Cannot operate on a closed database" 竞态；池连接由 atexit 统一回收。
+        """
+        conn = get_connection(self._db_path)
+        for stmt in CREATE_SELF_STATE:
+            conn.execute(stmt)
+        conn.commit()
 
     def exists(self, identity_ref: str) -> bool:
         conn = get_connection(self._db_path)
@@ -605,6 +618,11 @@ class SelfProjectionAccessor:
 _S2_LOCK = threading.Lock()
 _S2_ACCESSOR_REGISTRY: dict[str, SelfProjectionAccessor] = {}
 
+# 进程级确定性默认身份锚：与交互层 --agent-id 默认值一致。仅当库内 identity
+# 表缺失/为空（最小测试库、全新库首次 S1 校准）时使用；生产库一律以 identity
+# 表的持久化 agent_id 为准。这是系统配置常量，**不是**从 S1 推导的身份。
+DEFAULT_IDENTITY_REF = "ocos-master"
+
 
 def register_self_projection(db_path: str, accessor) -> None:
     """把已 boot 的 S2 accessor 注册为进程内 db 唯一 accessor（AgentRuntime boot 时调用）。"""
@@ -615,13 +633,47 @@ def register_self_projection(db_path: str, accessor) -> None:
 
 
 def _resolve_identity_ref(db_path: str) -> str | None:
-    """从持久化 identity 表解析唯一 agent_id（合法身份锚，非 S1 推导）。"""
+    """解析唯一 agent_id：持久化 identity 表优先；表缺失/为空回退系统默认锚。
+
+    合法身份锚只来自 identity 表或系统配置常量，绝不从 S1 画像推导。
+    """
     try:
         conn = get_connection(db_path)
         row = conn.execute("SELECT agent_id FROM identity LIMIT 1").fetchone()
-        return str(row["agent_id"]) if row else None
+        if row and row["agent_id"]:
+            return str(row["agent_id"])
     except Exception:
+        pass
+    return DEFAULT_IDENTITY_REF
+
+
+def get_or_boot_self_manager(db_path: str, identity_ref: str | None = None):
+    """进程内 db 唯一 S2 **manager**（供数侧入口；只读侧用 get_self_projection）。
+
+    - 已注册（AgentRuntime boot 持有）→ 经 accessor 反取**同一个 manager 实例**：
+      feeder 的提交与 converse/bridge/router 的读路径共享同一属主，提交即时可见；
+    - 未注册（无 runtime 的宿主：测试、独立脚本、S1 校准先于 S2 boot）→ 解析
+      身份后惰性 boot（SelfStateManager 初始化自建表）并注册，之后全进程复用；
+    - 无持久化载体（:memory:/空路径）→ None（调用方降级，绝不回退 S1）。
+    """
+    if not db_path or db_path == ":memory:":
         return None
+    with _S2_LOCK:
+        acc = _S2_ACCESSOR_REGISTRY.get(db_path)
+        if acc is not None:
+            return acc._manager
+    ident = identity_ref or _resolve_identity_ref(db_path)
+    if not ident:
+        return None
+    manager = SelfStateManager(db_path)
+    manager.boot(ident)
+    with _S2_LOCK:
+        existing = _S2_ACCESSOR_REGISTRY.get(db_path)
+        if existing is not None:
+            # 竞态：其他线程刚注册 → 放弃本实例，收敛到唯一属主
+            return existing._manager
+        _S2_ACCESSOR_REGISTRY[db_path] = manager.accessor
+    return manager
 
 
 def get_self_projection(db_path: str, identity_ref: str | None = None):
@@ -629,23 +681,10 @@ def get_self_projection(db_path: str, identity_ref: str | None = None):
 
     - 优先返回已注册（runtime boot）的 accessor；否则按身份从持久化 reload committed S2。
     - restart 后为持久化恢复的 committed 态，**不是**从 S1 重新构造。
-    - 无持久化载体(:memory:) 或 identity 不可解析 → None（调用方降级为空，绝不回退 S1）。
+    - 无持久化载体(:memory:) → None（调用方降级为空，绝不回退 S1）。
     """
-    if not db_path or db_path == ":memory:":
-        return None
-    with _S2_LOCK:
-        acc = _S2_ACCESSOR_REGISTRY.get(db_path)
-        if acc is not None:
-            return acc
-    ident = identity_ref or _resolve_identity_ref(db_path)
-    if not ident:
-        return None
-    manager = SelfStateManager(db_path)
-    manager.boot(ident)
-    acc = manager.accessor
-    with _S2_LOCK:
-        _S2_ACCESSOR_REGISTRY.setdefault(db_path, acc)
-    return acc
+    manager = get_or_boot_self_manager(db_path, identity_ref)
+    return manager.accessor if manager is not None else None
 
 
 __all__ = [
@@ -659,6 +698,8 @@ __all__ = [
     "SelfProjectionAccessor",
     "register_self_projection",
     "get_self_projection",
+    "get_or_boot_self_manager",
+    "DEFAULT_IDENTITY_REF",
     "serialize_state",
     "deserialize_state",
 ]

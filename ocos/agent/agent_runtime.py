@@ -580,6 +580,15 @@ class AgentRuntime:
             "S2 SelfState activated v%d (identity_ref=%s)",
             self._self_state.version, identity_ref,
         )
+        # P1 恢复性迁移（2026-09-14）：S2 结构先于生产供数上线 → 空骨架 v1。
+        # boot 后用 S1 已持久化实测画像做一次性 bootstrap（S1 仅作 Evidence；
+        # 幂等，语义 noop 门保证重复启动不重灌；零 LLM；失败不阻断启动）。
+        try:
+            from ocos.self.agent_self_model import AgentSelfModel
+            from ocos.self.s2_feeder import bootstrap_from_s1
+            bootstrap_from_s1(self._self_state, AgentSelfModel(self._db_path))
+        except Exception as _boot_e:  # noqa: BLE001
+            logger.debug("S2 bootstrap from S1 skipped: %s", _boot_e)
 
     def _init_user_model(self) -> None:
         """Phase G: 初始化 User Model — 用户画像与记忆中枢."""
@@ -1588,6 +1597,8 @@ class AgentRuntime:
             # COG-V2 Phase 2.3: 自我模型增量校准 — 每次目标闭合后更新能力
             # 实测胜率 / 反复失败模式 / 当前专注，使决策前必读的 [self]
             # 反映最新状态。确定性聚合零 LLM；失败静默不阻断主链。
+            # P1（2026-09-14）：calibrate 内部即 S2 生产供数发射点
+            # （S1 snapshot → evidence pipeline → committed S2），无需在此另接。
             try:
                 _sm = getattr(self, "_self_model", None)
                 if _sm is not None and hasattr(_sm, "calibrate"):

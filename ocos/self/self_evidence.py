@@ -636,6 +636,39 @@ def _worldview_impact(recog: RecognitionType) -> float:
     return 0.01
 
 
+def _delta_is_semantic_noop(delta: SelfDelta) -> bool:
+    """claim 相对 committed S2 无语义变化 → 不应产生新版本（生产 feeder 幂等门）。
+
+    仅 evidence 指针/claim_id（每次随机）变化、主体声明内容不变时判 noop：
+      - 能力：name / available / confidence 全等（source/notes 是溯源指针，非自我内容）
+      - 失败模式：domain / confidence / evidence_count 全等
+    这样同一 S1 实测快照重复喂（重启后补偿、S1 内容未变的闭合 tick）不会
+    bump version / 灌 update_history；而成功率跨越 0.6 翻转可用性、attempts
+    改变置信刻度、失败计数增长等真实变化照常提交。worldview 已由
+    _worldview_semantic_change 结构门守门，此处不重复判定。
+    """
+    old, new = delta.old_value, delta.new_value
+    if old is None or new is None:
+        return False
+    if delta.kind in (ClaimKind.CAPABILITY_KNOWN, ClaimKind.CAPABILITY_UNCERTAIN):
+        return (
+            getattr(old, "name", None) == getattr(new, "name", None)
+            and bool(getattr(old, "available", None))
+            == bool(getattr(new, "available", None))
+            and float(getattr(old, "confidence", 0.0))
+            == float(getattr(new, "confidence", 0.0))
+        )
+    if delta.kind is ClaimKind.FAILURE_PATTERN:
+        return (
+            getattr(old, "domain", None) == getattr(new, "domain", None)
+            and getattr(old, "confidence", None)
+            == getattr(new, "confidence", None)
+            and int(getattr(old, "evidence_count", -1))
+            == int(getattr(new, "evidence_count", -1))
+        )
+    return False
+
+
 def apply_delta(candidate: SelfModel, delta: SelfDelta) -> None:
     """把一个 Delta B 应用到 S2 candidate（进入候选态，尚未提交）。"""
     kind = delta.kind
@@ -711,6 +744,14 @@ class SelfEvidencePipeline:
                 delta = delta_from_claim(self._manager.current, claim)
             except Exception as e:  # noqa: BLE001 — 语义结构门/未知 kind 等按 claim 隔离
                 logger.info("claim %s produced no delta: %s", claim.claim_id, e)
+                continue
+            # 生产 feeder 幂等：claim 与 committed S2 语义相同（仅溯源指针刷新）
+            # → 不产新版本，防重复喂灌爆 version/update_history。
+            if _delta_is_semantic_noop(delta):
+                logger.info(
+                    "claim %s semantically identical to committed S2 — skipped",
+                    claim.claim_id,
+                )
                 continue
             candidate = self._manager.build_candidate()
             apply_delta(candidate, delta)
