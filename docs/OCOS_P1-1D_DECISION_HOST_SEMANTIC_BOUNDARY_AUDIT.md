@@ -1,6 +1,6 @@
 # OCOS P1-1D — Decision Host / Semantic Boundary Audit（D1-D5，只读）
 
-> 状态：**只读审计完成，提交 Human Gate 裁决**。
+> 状态：**P1-1D DECISION HOST / SEMANTIC BOUNDARY AUDIT = PASS / FROZEN**（Human Gate 终裁，2026-09-14）。
 > 承接：P1-1D Scope Assessment = PASS / FROZEN（2026-09-14）；P1-1D 实施 = NO-GO；
 > A（接 DecisionBridge）REJECTED；B（Trace 增强）NOT AUTHORIZED；C（继续冻结）SELECTED。
 > 本审计 = Human Gate 唯一开放的下一步，**只回答一个基础问题（不研究"怎么接线"）**：
@@ -10,6 +10,13 @@
 > 审计结构（Human Gate 固定五问）：
 > **D1** Decision Host Identity · **D2** Semantic Boundary · **D3** Authority Entry ·
 > **D4** Existing vs Legacy/Dead Host · **D5** 最小合法边界是否已存在。
+>
+> **Human Gate 终裁（2026-09-14）**：D1-D5 全部 PASS；Situation B = ACCEPTED（主判定）；
+> P1-1D-B = **新架构能力建设（Semantic Architecture Work），非 wiring**；P1-1D 实施保持 **NO-GO**；
+> 当前**不授权任何生产代码修改**；下一步 = 等待新 Scope Amendment。
+> 终裁附两项术语校正：**D1 双层定义**（Planning/Operational Decision Host ✅ /
+> Cognitive Decision Host ❌）、**D3 Decision ≠ Mutation Authorization ≠ Execution**
+> （DecisionBridge = Execution Gate，非 Cognitive Decision Host）。
 >
 > 注：本文件取代 7 点中间版审计（`OCOS_P1-1D_DECISION_HOST_SEMANTIC_BOUNDARY_AUDIT.md` 旧版），
 > 事实核验口径不变，证据与行号重新整理为 D1-D5 结构。
@@ -54,6 +61,23 @@
 > **它的输入不是 Thinking 输出。** 所有以"认知产物"为输入的决策组件
 > （DecisionLoop / MasterAgent.decide / DecisionMakingEngine / DecisionRuntimeEngine / decision/ 包）
 > 均**生产不可达**（停用 fallback 或无调用者）。
+
+### 1.3 D1 术语校正（Human Gate，2026-09-14）
+
+> `Goal → DAG` 严格说更接近 **Planning / Operational Action Selection**，
+> 而非 P1-1D 所寻找的 **Cognitive Decision Host**。正式术语采用双层定义：
+
+| 概念 | 当前生产现实 |
+| --- | --- |
+| Production Planning Host | ✅ AgentRuntime step6 |
+| Production Action Carrier | ✅ TaskDAG |
+| Production Execution/Authorization Gate | ✅ DecisionBridge |
+| **Cognitive Decision Host** | ❌ **不存在** |
+| **Thinking → Decision Semantic Boundary** | ❌ **不存在** |
+
+> **不要再把 `Goal → DAG` 直接等同于完整的 Cognitive Decision。**
+> 真正的问题是"OCOS 经过 Thinking 后，在哪里把 Thinking 形成的认知判断正式解释成 Decision"——
+> 答案仍然是：**没有**。
 
 ---
 
@@ -120,6 +144,38 @@ DecisionBridge.execute_dag_task(task)（bridge.py L405）
 > 生产上唯一的授权入口在 **DAG 执行裁决链**，其输入 = Goal 派生的任务，
 > **与 Thinking 输出无关**。任何 LLM 输出（含 `USE|`）不因此获得 mutation authority。
 
+### 3.4 D3 术语校正（Human Gate，2026-09-14）：Decision ≠ Authorization
+
+> **DecisionBridge 的核心职责不是"替 OCOS 思考应该做什么"，而是"对已经进入
+> 执行边界的动作进行治理裁决"** —— 它是 **Production Execution Gate /
+> Mutation Authorization Gate**，**不是 Cognitive Decision Host**。
+>
+> 正式冻结链：
+
+```text
+Decision / Action Selection
+        ↓
+TaskDAG
+        ↓
+DecisionBridge
+        ↓
+Mutation Authorization
+        ↓
+Dispatcher
+        ↓
+Execution
+```
+
+> 危险架构（**明确禁止**）：
+
+```text
+LLM Thinking
+     ↓
+DecisionBridge        ← 只因名字含 Decision 就声称"已有 Decision"
+```
+
+> 那只是把 LLM 输出塞进执行授权器 —— 属于架构漂移，必须防止。
+
 ---
 
 ## D4 — Existing Host vs Legacy / Dead Host 分类
@@ -177,18 +233,156 @@ DecisionBridge.execute_dag_task(task)（bridge.py L405）
 >    worldview 快照 / action_ids / W0-W1 配对宿主）；
 > 3. 以 **新 Scope Amendment** 授权，而非沿 P1-1D 实施。
 
----
+### D5 Human Gate 终裁（2026-09-14）：Situation B = ACCEPTED
 
-## 6. 提交 Human Gate
-
-- 本文件 = **Decision Host / Semantic Boundary 只读审计（D1-D5）**。
-- 请裁决：
-  1. D1-D5 结论是否认可？
-  2. 主判定 **Situation B**（生产 Decision Host 存在但语义域 = goal→DAG，与 Thinking 无接口；
-     缺 Semantic Boundary，非缺接线）是否成立？
-  3. 是否确认：P1-1D-B 若实施 = 新架构能力建设（新 Scope Amendment），
-     且必须先冻结最小 Attribution Infrastructure 需求清单？
+> **Situation B = ACCEPTED（主判定）。**
+>
+> 已存在：Goal / Planning / TaskDAG / Action selection / Authorization / Execution / Audit。
+> 尚不存在：Thinking-derived Decision / Decision semantic carrier /
+> Thinking→Decision boundary / Decision-level attribution / W0-W1 → Decision₂ 严格配对宿主。
+>
+> **P1-1D 不是 Wiring problem，而是 Semantic Architecture Problem。**
 
 ---
 
-*本文件为 P1-1D 只读审计材料。未修改任何生产代码。任何实施需 Human Gate 明确授权。*
+## 6. Human Gate 终裁（FROZEN，2026-09-14）
+
+```text
+P1-1D DECISION HOST / SEMANTIC BOUNDARY AUDIT
+=============================================
+
+D1  Decision Host Identity
+→   Planning / Operational Decision Host 存在（AgentRuntime step6 + TaskDAG）
+→   Cognitive Decision Host 不存在
+→   PASS（附术语校正：双层定义）
+
+D2  Semantic Boundary
+→   Thinking ≠ Decision ≠ Mutation Authority ≠ Execution 明确分离
+→   不存在 Thinking → Decision 的正式语义解释点（Semantic Boundary Gap）
+→   PASS / FROZEN
+
+D3  Authority Entry
+→   DecisionBridge.execute_dag_task = Production Mutation Authorization /
+    Execution Gate（gateway scan → confidence gate → adjudicate）
+→   不是 Cognitive Decision Host
+→   PASS / FROZEN（附术语校正：Decision ≠ Authorization）
+
+D4  Existing vs Legacy / Dead
+→   按生产可达性分类，不按模块名字
+→   旧 decision/、cognitive_loop/、DecisionLoop、CognitiveBridge
+    不得作为"现成 Decision Host"重新启用
+→   PASS / FROZEN
+
+D5  最小合法边界
+→   Situation B = ACCEPTED（主判定）
+→   生产存在 Goal→Planning→DAG→Authorization→Execution 链，
+    但不存在 Thinking→Decision 的 Cognitive Semantic Boundary
+→   P1-1D 不是 wiring problem，而是 Semantic Architecture Problem
+→   PASS / FROZEN
+
+VERDICT
+=======
+
+P1-1D-B 性质 = New Cognitive Decision Capability / Semantic Architecture Work
+（不是接线任务）。
+
+P1-1D 实施 = 继续保持 NO-GO / NOT AUTHORIZED。
+
+不授权：
+- ChatResponder → DecisionBridge 直接接线（REJECTED）
+- Trace 增强（NOT AUTHORIZED）
+- 任何生产代码修改（NOT AUTHORIZED）
+- 重新启用旧 decision/、cognitive_loop/、DecisionLoop、CognitiveBridge
+
+允许下一步：
+- 等待新的 Scope Amendment（先经 Human Gate）
+- Semantic Boundary Design
+- Attribution Infrastructure Freeze（先于任何 P1-1D-B 实施）
+```
+
+---
+
+## 7. 最小 Attribution Infrastructure（先于任何 P1-1D-B 实施冻结）
+
+Human Gate 确认：**Attribution Infrastructure 必须先于任何 P1-1D-B 实施进入设计冻结**。
+至少需解决：
+
+1. **Decision 到底是什么** —— 不能再出现 `decision = reply[:1000]`
+   （字段叫 Decision，语义不是 Decision）。
+2. **Decision 消费了什么** —— Decision₂ 需携带 `thinking_trace_id / worldview_snapshot /
+   consumed_delta_ids / consumed_claim_ids / semantic decision payload`。
+3. **Decision 最终选择了什么** —— 不能再是 `strategy="" / action="" / action_ids=()`；
+   必须存在可验证的 **Decision / Strategy / Action selection** 三者关系。
+4. **W0 / W1 必须能够配对** —— 否则无法证明 ΔDecision 来自 ΔWorldview，而非模型随机。
+5. **最终回到 Z** —— 目标链仍为：
+
+```text
+W0 → Thinking0 → Decision0 → Y0
+W1 → Thinking1 → Decision1 → Y1
+```
+
+需证明 `W1≠W0 ∧ Thinking1≠Thinking0 ∧ Decision1≠Decision0 ∧ Y1≠Y0`，
+且 `W1 → Thinking1 → Decision1 → Y1` 存在可审计因果链。
+否则只是"Worldview 改了、Prompt 变了、LLM 回复变了"，仍然不够。
+
+---
+
+## 8. 最终冻结图（2026-09-14）
+
+```text
+G3
+Experience
+   ↓
+Recognition
+   ↓
+Worldview W1
+   ↓
+────────────────────────
+G4
+Worldview
+   ↓
+Thinking
+   ↓
+ChatResponder / LLM
+   ↓
+Reply / Episode / Trace
+────────────────────────
+             X
+             X   ← Semantic Boundary 不存在
+             X
+────────────────────────
+Goal
+   ↓
+Planning
+   ↓
+TaskDAG
+   ↓
+DecisionBridge
+   ↓
+Mutation Authorization
+   ↓
+Execution
+```
+
+冻结状态：
+
+| 阶段 | 状态 |
+| --- | --- |
+| G3 Worldview 形成 | PASS / FROZEN |
+| G4 Worldview → Thinking | PASS / FROZEN |
+| P1-1D Scope Assessment | PASS / FROZEN |
+| Decision Host / Semantic Boundary Audit | **PASS / FROZEN** |
+| P1-1D-B | **NOT AUTHORIZED** |
+| ChatResponder → DecisionBridge | **REJECTED** |
+| Trace enhancement | **NOT AUTHORIZED** |
+
+> **下一步不是编码，而是等待新的 Scope Amendment。**
+>
+> 核心结论：OCOS 现在已有"行动选择 + 执行治理"，但还没有
+> "认知结果正式成为 Decision"的语义层 —— 这不是缺一根线，
+> 而是缺一个必须先定义清楚、再经 Human Gate 授权的主体认知边界。
+
+---
+
+*本文件为 P1-1D 只读审计材料（PASS / FROZEN）。未修改任何生产代码。*
+*任何实施需 Human Gate 明确授权，且必须先完成 Semantic Boundary Design + Attribution Infrastructure Freeze。*

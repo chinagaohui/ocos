@@ -292,6 +292,10 @@ B 仅可作为后续证据基础设施 Scope Amendment 候选，
 P1-1D 实施授权 = **NO-GO**；唯一开放下一步 = Decision Host / Semantic Boundary 只读审计
 （见 `OCOS_P1-1D_DECISION_HOST_SEMANTIC_BOUNDARY_AUDIT.md`）。
 
+> 后续：该只读审计已于 2026-09-14 完成并获 Human Gate 终裁 =
+> **PASS / FROZEN（D1-D5 全 PASS；Situation B = ACCEPTED；P1-1D-B = 新架构能力建设；
+> Attribution Infrastructure 先于任何实施冻结）**。P1-1D 实施保持 NO-GO。
+
 ---
 
 *本文件为 P1-1D 只读审计材料（PASS / FROZEN）。未修改任何生产代码。下一步仅限 Decision Host 只读审计，需 Human Gate 明确授权方可进入实施。*
