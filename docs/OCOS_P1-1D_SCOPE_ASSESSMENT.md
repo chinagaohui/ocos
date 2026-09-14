@@ -1,38 +1,43 @@
-# OCOS P1-1D — Scope Assessment（生产现实审计）
+# OCOS P1-1D — Scope Assessment（生产现实审计，Human Gate 五问）
 
 > 状态：**P1-1D SCOPE ASSESSMENT — 只读审计完成，提交 Human Gate 裁决**。
 > 承接：G4 PASS / FROZEN（Worldview → Thinking Consumption，2026-09-14）。
-> P1-1D = **NOT AUTHORIZED**（Human Gate 终裁）；本文件 = 进入 P1-1D 前的生产现实审计，
-> 回答 Human Gate 指定的第一个问题：
+> P1-1D = **NOT AUTHORIZED**（Human Gate 终裁）；本文件 = 进入 P1-1D 前的生产现实审计。
 >
-> > **"现在 OCOS 的生产 Thinking 输出，究竟在哪里被合法地消费为 Decision 输入？"**
+> 审计问题（Human Gate 指定，非"怎么接 Decision"）：
+>
+> > **G4 已证明的 Worldview → Thinking 输入差异，是否存在一条最小、可治理、可追踪、
+> > 可验证的路径，使这种认知差异进一步影响 Decision，而不破坏现有 Authority Boundary？**
 
 ---
 
 ## 0. 审计纪律
 
-- 本文件为**纯只读审计**，未修改任何生产代码、未新增任何文件（除本文档）。
-- 审计方法：源码追踪（Grep/Read）+ 生产宿主定位，所有结论附 `文件:行号` 证据。
-- 审计范围：生产 Thinking 宿主（converse.py）、生产 Decision 链（decision/、cognitive_loop/、AgentRuntime、DecisionBridge）、W1 消费点。
+- **纯只读审计**：未修改任何生产代码、未新增任何文件（除本文档）。
+- 审计方法：源码追踪（Grep/Read）+ 生产宿主定位，结论附 `文件:行号` 证据（I2）。
+- 冻结线（上游基准设施，本阶段**不触碰**）：`self_state.py`、`worldview_read_adapter.py`、
+  `converse.py`（G4 接线）、G4-D/E、P-E1~P-E6、I1/I2/I3。
+- 除非审计明确证明"生产架构不存在合法接线点"，否则不修改
+  `context_builder.py` / `decision_pipeline.py` / `agent_runtime.py` / `bridge.py`。
 
 ---
 
-## 1. 生产 Thinking 输出现状（ChatResponder）
+## Q1. Decision 消费入口：生产 Thinking 输出究竟到哪里
 
-### 1.1 生产 Thinking 宿主 = `ocos/interaction/converse.py::ChatResponder`
+### 1.1 生产 Thinking 宿主 = `ChatResponder.respond()`
 
 ```text
-converse.py::ChatResponder.respond()
-  ├─ build_context()（L1791-1803 附近）→ 生产 Thinking Context/Prompt
+converse.py::ChatResponder.respond()（L1791）
+  ├─ build_context()（L1802）→ 生产 Thinking Context/Prompt
   │    └─ L977-1003：G4 唯一生产接线（committed W1 → worldview 块 → Thinking input）
-  ├─ TextGenerator / LLM provider → 生产回复（L1831-1882）
+  ├─ TextGenerator / LLM provider → 生产回复（L1836-1966）
   └─ 回复生成后（L1968-1990）：
-       ├─ _remember_conversation()          → 记忆沉淀
-       ├─ session_manager.append_turn()      → 会话追加
-       └─ record_decision_trace()            → P0-4 B4：只读 trace 记录
+       ├─ _remember_conversation()（L1969）      → 记忆沉淀（Episode）
+       ├─ session_manager.append_turn()（L1973-74）→ 会话追加
+       └─ record_decision_trace()（L1981-1987）   → P0-4 B4：只读 trace 记录
 ```
 
-### 1.2 回复产出的唯一"决策"动作 = `record_decision_trace`（只读记录）
+### 1.2 回复产出的唯一"决策侧"动作 = `record_decision_trace`（只读记录）
 
 [converse.py L1979-1990](file:///workspace/ocos/interaction/converse.py#L1979-L1990)：
 
@@ -46,156 +51,122 @@ if thinking_trace_id:
         strategy="", action="", action_ids=())
 ```
 
-**关键事实**：
-- `record_decision_trace` 把 reply 文本作为 `decision` 字段落 trace，`strategy/action/action_ids` 为空。
-- 这是 **P0-4 实验证据链的记录**，**不产生任何决策执行**，不进入任何 Decision 生产链。
-- **生产 Thinking 输出（reply）→ 无任何 Decision 消费点。** 回复只用于对话展示 + 记忆 + trace。
+**结论（Q1）**：生产 Thinking 输出的唯一去向 = 对话展示 + 记忆（Episode）+ 只读 trace。
+**不存在**任何"Thinking result → Decision input"的结构化接口或生产调用路径。
+回复文本被当作 `decision` 字段落 trace，但 `action_ids=()` / `strategy=""` / `action=""` —— 无行为。
 
 ---
 
-## 2. 生产 Decision 链现状
+## Q2. Decision 是否真的读取 Thinking 输出
 
-### 2.1 决策智能链（`decision/` 包）= **备用引擎，无生产消费者**
+### 2.1 三级证据区分（本审计的判定标准）
+
+| 证据等级 | 含义 | 当前状态 |
+| --- | --- | --- |
+| E1: Thinking output 存在 | 生产回复确实产生 | ✅ 存在 |
+| E2: Decision 实际消费 Thinking output | 某 Decision 组件以 reply/context 为输入 | ❌ 无任何消费者 |
+| E3: Decision 因 Thinking output 不同而不同 | ΔThinking → ΔDecision 因果 | ❌ 无宿主，无法验证 |
+
+### 2.2 生产 Decision 链逐条核对
+
+**决策智能链（`decision/` 包）= 备用引擎，无生产消费者**
 
 [decision/__init__.py L5-8](file:///workspace/ocos/decision/__init__.py#L5-L8)：
+组件链由 GAP-P1-1 接入 `cognitive_loop/decision_pipeline`（真实调用），
+但该循环**无生产消费者**（备用引擎，见 [cognitive_loop/__init__.py L5-10](file:///workspace/ocos/cognitive_loop/__init__.py#L5-L10)）。
+`DecisionPipeline` 消费 `LoopContext`（perception_input / active_wisdom），
+**不消费 ChatResponder 回复**，亦无 worldview 字段（[context_builder.py](file:///workspace/ocos/decision/context_builder.py)：goal/self/wisdom/world/constraints 五槽，无 worldview）。
 
-```text
-接线状态（AUD-F13 选项 A, 2026-08-30）: 本组件链由 GAP-P1-1 接入
-cognitive_loop/decision_pipeline（真实调用, decision_pipeline.py:73-114），
-但该循环当前无生产消费者（备用引擎定位，见 cognitive_loop/__init__）。
-生产 tick 决策 = AgentRuntime + DecisionBridge。组件本身完整可用。
-```
+**生产 tick 决策 = AgentRuntime + DecisionBridge**
 
-[cognitive_loop/__init__.py L5-10](file:///workspace/ocos/cognitive_loop/__init__.py#L5-L10)：
+- `DecisionBridge.execute_dag_task(task)`（[agent_runtime.py L2213-2218](file:///workspace/ocos/agent/agent_runtime.py#L2213-L2218)）：
+  输入 = TaskDAG task（来自 `_tick_step_planning_trigger` 规划，L1400 `self._active_dag = dag`），
+  **与 Thinking 输出无交集**。
+- `DecisionBridge.process(core_loop_result)`（[agent_runtime.py L2452-2461](file:///workspace/ocos/agent/agent_runtime.py#L2452-L2461)，
+  [bridge.py L334-341](file:///workspace/ocos/execution/bridge.py#L334-L341)）：
+  输入 = `_last_core_loop_result`，其唯一赋值点（L2421）位于 legacy cognitive loop fallback 内，
+  而该 fallback **已永久停用**（L2416 `_enable_cognitive_loop = False`）→ **生产基本不会触发**。
 
-```text
-定位裁决（AUD-F13 选项 A, 2026-08-30）:
-    本包 = 自治循环编排视图（AutonomousLoop 激活路径）。生产 tick 的
-    决策路径 = AgentRuntime step7/8 + DecisionBridge（RuntimeKernel 驱动），
-    不经过 LoopOrchestrator — 本链是"已接好线的备用引擎"，当前无生产
-    消费者。
-```
-
-**关键事实**：
-- `ContextBuilder → OptionGenerator → RiskEngine → ValueModel → DecisionProposal` 链完整存在，
-  且由 `cognitive_loop/decision_pipeline.py:73-114` 真实调用。
-- 但 cognitive_loop 本身 **无生产消费者**（不经过 LoopOrchestrator）。
-- `DecisionPipeline.process()` 消费 `LoopContext`（perception_input / active_wisdom），
-  **不消费 ChatResponder 回复**。
-
-### 2.2 生产 tick 决策 = AgentRuntime + DecisionBridge
-
-[agent_runtime.py L2213-2218](file:///workspace/ocos/agent/agent_runtime.py#L2213-L2218)：
-
-```python
-# R4-A: 真实任务优先经 DecisionBridge 执行
-bridge = getattr(self, "_decision_bridge", None)
-if bridge is not None:
-    dag_result = bridge.execute_dag_task(task)
-```
-
-[agent_runtime.py L2452-2461](file:///workspace/ocos/agent/agent_runtime.py#L2452-L2461)：
-
-```python
-# ── R4-A: DecisionBridge — 决策输出 → 真实执行 (AUTO) / 待批 (ASK) ──
-decision_bridge = getattr(self, "_decision_bridge", None)
-last_result = getattr(self, "_last_core_loop_result", None)
-if decision_bridge is not None and last_result:
-    report = decision_bridge.process(last_result)
-```
-
-[execution/bridge.py L334-404](file:///workspace/ocos/execution/bridge.py#L334-L404)：
-
-```python
-def process(self, core_loop_result: dict, attention_focus: str = "") -> BridgeReport:
-    """处理一次 core_loop 决策输出 (step 7 → step 8 调用)。"""
-    text = self._extract_decision_text(core_loop_result)   # ← 输入来自 core_loop_result
-    ...
-    actions = self._dispatcher.interpret_decision(text, attention_focus)
-```
-
-**关键事实**：
-- `DecisionBridge.process()` 的输入 = `core_loop_result`（core_loop 决策输出），
-  `_extract_decision_text` 递归取 `action_result.based_on` 文本。
-- `DecisionBridge.execute_dag_task()` 输入 = TaskDAG task。
-- **DecisionBridge 输入源 = AgentRuntime 的 core_loop / DAG 任务，与 ChatResponder 回复无交集。**
-
-### 2.3 `_last_core_loop_result` 生产赋值点 —— 已永久停用
-
-[agent_runtime.py L2411-2425](file:///workspace/ocos/agent/agent_runtime.py#L2411-L2425)：
-
-```python
-# ── Fallback: original cognitive loop (or idle if not booted) ──
-# FIX-01 + P0-C (2026-09-11): **永久停用** legacy cognitive loop fallback.
-_enable_cognitive_loop = False
-if _enable_cognitive_loop and hasattr(self, "loop") and self.loop is not None:
-    ...
-    self._last_core_loop_result = result if isinstance(result, dict) else {}
-```
-
-**关键事实**：
-- `_last_core_loop_result` 唯一赋值点在 legacy cognitive loop fallback 内，而该 fallback **已永久停用**
-  （`_enable_cognitive_loop = False`，环境变量开关已删除）。
-- 因此 `DecisionBridge.process()` 在生产 tick 上**基本不会触发**（last_result 恒为空）。
-- 生产上真实生效的 Decision 执行 = `DecisionBridge.execute_dag_task()`（DAG 任务路径）。
+**结论（Q2）**：三处候选 Decision 消费点（decision/ 包、AgentRuntime core_loop、DecisionBridge）
+输入源均与生产 Thinking 输出（ChatResponder 回复）**无交集**。E2/E3 均为 ❌。
 
 ---
 
-## 3. W1 → Thinking → Decision 真实路径审计（核心结论）
+## Q3. Authority Boundary：Thinking → Self 写路径全枚举
 
-### 3.1 逐段审计结果
+核心风险：`Worldview → Thinking → Decision` 过程中是否出现
+`Thinking → 修改 Worldview / Self / Claim / Goal / Governance`。
 
-| 链段 | 是否存在 | 证据 | 状态 |
-| --- | --- | --- | --- |
-| W1 → Thinking Input | ✅ 存在 | converse.py L977-1003（G4 唯一生产接线） | **G4 PASS/FROZEN** |
-| Thinking Input → Reasoning | ✅ 存在 | G4-E 机制证据 + P-E1/P-E2 生产 prompt 差分 | **G4 PASS/FROZEN** |
-| Thinking 输出 → Decision 消费 | ❌ **不存在** | converse.py L1968-1990：回复仅记忆+会话+只读 trace；无任何 Decision 组件消费 reply | **断开** |
-| Thinking → decision/ 包链 | ❌ 不存在 | decision/__init__ L7-8：cognitive_loop 无生产消费者 | **断开** |
-| Thinking → AgentRuntime core_loop | ❌ 不存在 | agent_runtime L2411-2416：legacy fallback 永久停用 | **断开** |
-| Thinking → DecisionBridge | ❌ 不存在 | bridge.process 输入 = core_loop_result，非 ChatResponder reply | **断开** |
+### 3.1 生产代码中所有"Thinking 侧 → Self 侧"写路径（穷举）
 
-### 3.2 唯一"决策侧读 Self"的旁路（需显式排除）
+| 写路径 | 位置 | 写入对象 | 是否涉及 worldview 链 | 状态 |
+| --- | --- | --- | --- | --- |
+| `_remember_conversation` | converse.py L1969 | Episode（记忆） | ❌ | 既有机制，非 Self 组件 |
+| `record_thinking_trace` / `record_decision_trace` | decision_trace.py L283-332 | trace 表（append-only） | ❌ | 只记录，零行为偏移 |
+| `self_improve` | converse.py L1499-1576 | self_knowledge.md（经治理链） | ❌ | 既有机制；人工批准/审批关闭才应用 |
+| `apply_self_upgrade` | converse.py L1578-1582 | self_knowledge.md | ❌ | 同上 |
+| S2 boot 注册 | agent_runtime.py L574-582 | SelfStateManager 激活 + register_self_projection | ❌ | boot 时一次性，注册读出口 |
 
-[execution/bridge.py L2410-2436](file:///workspace/ocos/execution/bridge.py#L2410-L2436)：
+### 3.2 关键事实
 
-```python
-def _self_knowledge_hint(self, description: str) -> str:
-    # 仅当任务文本含 复盘/总结/自我/能力/数字生命/成长/反思 等关键词才触发
-    if not any(k in text for k in ("复盘", "总结", "差距", "自我", ...)):
-        return ""
-    facts: list[str] = ["【自我能力事实（实测真值，分析自身必须引用）】"]
-    from ocos.self.self_state import get_self_projection
-    s2 = get_self_projection(self._db_path)
-    if s2 is not None:
-        facts.append(s2.render())        # ← 整 S2 render，非 worldview 块
-```
+1. **S2/Worldview 的唯一写入口 = `update_worldview`**（[self_model.py L178-197](file:///workspace/ocos/self/self_model.py#L178-L197)），
+   仅经 `SelfEvidencePipeline.ingest()`（[self_evidence.py L673](file:///workspace/ocos/self/self_evidence.py#L673)）可达。
+2. **`SelfEvidencePipeline` 无任何生产调用者**（全库 Grep：仅测试与 counterfactual_baseline 提及，
+   而 [counterfactual_baseline.py L16](file:///workspace/ocos/self/counterfactual_baseline.py#L16) 明确声明"不写 S2、不碰 SelfEvidencePipeline"）。
+   → **生产 tick/Thinking/Decision 没有任何代码能修改 Worldview / Claim / Governance。**
+3. G4-H（既有测试）已证：修改 ThinkingContext 或消费产物**不反向改变** WorldView/Claim/Delta/Govern。
+4. 既有 `self_improve` 通道：对话 → 提案 → 治理链（`propose_upgrade` → 影响分析/沙箱/快照）
+   → 待批/自动应用至 `~/.ocos/self_knowledge.md`。这是**前 G1 时代既有**的"对话影响提示词层"
+   机制，**与 worldview 链正交**（不写 S2、不写 Worldview），且需人工批准（`approval_disabled()` 例外）。
 
-**关键事实**：
-- DecisionBridge 自省类任务会读 `S2.render()`（整 S2 文本）注入决策 prompt。
-- 这是 **S2 整体 render**，**不是 G4 的 worldview 结构化块**（`get_committed_worldview()`）。
-- 触发条件 = 关键词匹配（复盘/总结/自我等），非 worldview 驱动的决策。
-- **结论：这不算 W1→Decision 接线**，但它是 P1-1D 必须注意的既有 S2 决策侧读取通道。
-
-### 3.3 核心结论
-
-> **生产 Thinking 输出（ChatResponder 回复）当前不存在任何合法 Decision 消费点。**
->
-> `W1 → Thinking Input`（G4，FROZEN）与 `Thinking → Decision`（P1-1D 目标）之间
-> **在真实生产路径上没有接线**。断开点 = ChatResponder 回复产出后，只走
-> 记忆 + 会话 + 只读 trace，不进入 decision/ 包、不进入 AgentRuntime core_loop、
-> 不进入 DecisionBridge。
+**结论（Q3）**：**Authority Boundary 未被破坏**。`W1 → Thinking → Decision` 链路上
+不存在 Thinking → 修改 Worldview/Self/Claim/Goal/Governance 的任何生产写路径。
+唯一现存"Thinking 影响自身"通道（self_improve → self_knowledge.md）是既有、人工门控、
+且不属于 worldview 因果链。
 
 ---
 
-## 4. Behavior Delta（Y ≠ Z）验证宿主审计
+## Q4. Decision Delta 可归因性：证据基础设施盘点
 
-### 4.1 P0-4 现有宿主（可复用的事实链）
+沿用 G4 证据哲学（Input changed + Output changed + Attributable），审计 P1-1D 需要的
+`ΔW → ΔThinking → ΔDecision` 归因设施现状。
 
-- `record_decision_trace`（converse.py L1981-1987）：`thinking_trace_id → decision_id → action_ids → Y`，
-  已把 reply 作为 `decision` 落 trace。这是 P0-4 实验 Join 的既有宿主。
-- 但 `action_ids=()` / `strategy=""` / `action=""` —— **尚未接任何 Behavior/执行动作**。
+### 4.1 现有可复用设施
 
-### 4.2 合法 Behavior Delta 验证宿主候选（只读盘点，不实施）
+| 设施 | 内容 | 位置 |
+| --- | --- | --- |
+| ThinkingTrace | `thinking_trace_id + self_version + consumed_delta_ids + consumed_evidence_ids` | [decision_trace.py L35-43](file:///workspace/ocos/self/decision_trace.py#L35-L43) |
+| DecisionRecord | `decision_id + thinking_trace_id + decision + strategy + action + action_ids + y_ref` | [decision_trace.py L46-57](file:///workspace/ocos/self/decision_trace.py#L46-L57) |
+| 同链 Join | `decisions_for_trace(thinking_trace_id)` 按身份 join 回 ThinkingTrace | [decision_trace.py L220-227](file:///workspace/ocos/self/decision_trace.py#L220-L227) |
+| Counterfactual Baseline Z | P0-4A 冻结的不可变反事实基准 | counterfactual_baseline.py |
+| S2 版本号 | W1 commit 使 S2 v1→v2，可作 W0/W1 决策分组的代理键 | self_state.py |
+
+### 4.2 归因缺口（关键）
+
+| 缺口 | 说明 | 影响 |
+| --- | --- | --- |
+| **trace 无 worldview 快照** | ThinkingTrace 只记 `self_version + claim ids`，**不记 worldview 块内容**（domain/judgment/frame/claim_id） | ΔW 无法在单条 trace 上直接归因；只能靠 S2 版本号代理分组 |
+| **decision=reply 文本** | DecisionRecord.decision 存的是回复文本，非"决策" | ΔDecision 的"决策语义"与"回复文本"混同 |
+| **action_ids 恒空** | 生产上 `action_ids=()` / `strategy=""` / `action=""` | ΔBehavior（Y≠Z）无动作身份，无法归因 |
+| **无 W0/W1 对照宿主** | P0-4 的 Z 是反事实基线，但 P1-1D 需要"同一宿主在 W0 与 W1 下分别决策"的配对 | ΔDecision≠0 无法与随机性/prompt 其它变量/provider 差异分离 |
+
+**结论（Q4）**：归因基础设施**部分存在**（同链 identity + S2 版本代理 + Z 基线），
+但**缺少 worldview 级快照与动作级身份**，不足以支撑 `ΔWorldview → ΔDecision` 的严格归因。
+任何 P1-1D 实施必须先补 trace 的 worldview 快照字段（只读、append-only）。
+
+---
+
+## Q5. Behavior Delta 阶段切分（P1-1D-A/B/C）
+
+`Thinking → Decision` 与 `Decision → Behavior` 是两个不同的证据问题，单独切分：
+
+```text
+P1-1D-A  Worldview → Thinking       = G4（PASS/FROZEN，上游基准）
+P1-1D-B  Thinking → Decision        = 本阶段的真正目标（当前 ❌）
+P1-1D-C  Decision → Behavior        = 独立证据问题（P0-4 Y/action_ids 的宿主域）
+```
+
+### 5.1 现有 Behavior Delta 宿主盘点（只读）
 
 | 候选宿主 | 现状 | 可验证性 |
 | --- | --- | --- |
@@ -204,45 +175,57 @@ def _self_knowledge_hint(self, description: str) -> str:
 | `converse.py respond()` | 生产生效，输入 = 用户消息 | 输出 = 回复文本（可作 Y，但无 action_ids） |
 | `record_decision_trace` | 生产生效，只读 | 已记录 decision=reply，缺 action_ids 与行为差分 |
 
-**审计结论**：当前**不存在**"生产 Thinking 输出 → 决策 → 行为"的完整宿主。
+**结论（Q5）**：当前**不存在**"生产 Thinking 输出 → 决策 → 行为"的完整宿主。
 P0-4 的 Y 目前是 reply 文本，不是行为；action_ids 为空。
+**P1-1D-C（Behavior Delta）应排除在本阶段之外** —— 最小授权只需跨越
+P1-1D-B 边界（Thinking → Decision 的可审计消费），且该边界当前也不存在生产宿主。
 
 ---
 
-## 5. 最小授权范围建议（Scope 候选，待 Human Gate 裁决）
+## 6. 核心结论
 
-依据 Human Gate 指示："如果生产链已经存在，就只接真实链；如果不存在，再做最小 Scope Amendment。"
+> 1. **生产 Thinking 输出（ChatResponder 回复）当前不存在任何合法 Decision 消费点**
+>    （Q1/Q2：E2/E3 均为 ❌，断开点 = 回复只走记忆 + 会话 + 只读 trace）。
+> 2. **Authority Boundary 未被破坏**（Q3：W1→Thinking→Decision 链上无任何
+>    Thinking→Self/Worldview/Claim/Goal/Governance 写路径；SelfEvidencePipeline 无生产调用者）。
+> 3. **归因基础设施有缺口**（Q4：trace 无 worldview 快照、action_ids 恒空、无 W0/W1 配对宿主）。
+> 4. **Behavior Delta（P1-1D-C）应切出本阶段**（Q5：无完整宿主，Y 目前是文本不是行为）。
+> 5. **W1 形成的生产可达性存疑**：`SelfEvidencePipeline` 无生产调用者 —— 即使接入 Decision，
+>   生产上 W1 也仅在测试/手工凝结后存在。这是 P1-1D 授权前必须向 Human Gate 澄清的事实。
 
-### 5.1 生产现实结论
+---
 
-1. 生产 Thinking 输出（converse reply）→ Decision：**链不存在**。
-2. 生产 Decision 宿主存在（AgentRuntime + DecisionBridge），但输入源与 Thinking 输出无交集。
-3. decision/ 包链存在但无生产消费者（备用引擎）。
+## 7. 最小授权范围建议（Scope 候选，待 Human Gate 裁决）
 
-### 5.2 Scope 选项（不实施，仅供裁决）
+### 7.1 Scope 选项
 
 | 选项 | 内容 | 风险 | 建议 |
 | --- | --- | --- | --- |
-| **A. 只接真实链** | 把 worldview 块接入 DecisionBridge 的决策 prompt（DAG 任务执行时消费） | 需证明"世界观看进决策输入"且不改变 DAG 任务语义；跨 G4 冻结边界 | 不推荐直接做 |
-| **B. 最小 Scope Amendment** | 在 `record_decision_trace` 的 trace 中补充 action_ids（把 reply 的 USE 协议动作行解析为 action_ids） | 只补证据链，不改决策语义；P0-4 已授权只读记录 | **候选**（若目标=Behavior Delta 可审计） |
+| **A. 只接真实链** | 把 worldview 块接入 DecisionBridge 决策 prompt（DAG 任务执行时消费） | 需证明"世界观看进决策输入"且不改变 DAG 任务语义；跨 G4 冻结边界；且 DAG 输入与 Thinking 输出本就无交集 | 不推荐直接做 |
+| **B. 最小 Scope Amendment** | 在 trace 中补 worldview 快照字段 + 解析 reply 的 USE| 动作行为 action_ids | 只补证据链（append-only），不改决策语义；与 P0-4 兼容；是 ΔW→ΔDecision 归因的前提 | **候选**（若目标 = 可审计的 Decision Delta） |
 | **C. 保持 NOT AUTHORIZED** | 维持 P1-1D 冻结，不实施 | 无风险 | **默认**（证据不足时） |
 
-### 5.3 本审计的推荐结论
+### 7.2 本审计的推荐结论
 
 - **当前证据强度不足以授权任何 P1-1D 实施**。生产 Thinking 输出→Decision 的接线不存在，
   且现有宿主（AgentRuntime/DecisionBridge）的输入语义与"Thinking 输出消费"不匹配。
-- 若 Human Gate 认为 P1-1D 的阶段性目标只是"可审计的 Behavior Delta 证据链"，
-  选项 B（trace 补 action_ids）是最小、只读、与 P0-4 兼容的候选。
-- 任何选项均需**单独授权**，不得自动推进。
+- **不修改** `context_builder.py` / `decision_pipeline.py` / `agent_runtime.py` / `bridge.py`：
+  审计未发现这些文件存在满足目标的合法接线点。
+- 若 Human Gate 认为 P1-1D 阶段性目标 = **"可审计的 Thinking → Decision 消费证据"**，
+  选项 B（补 trace 证据字段）是最小、只读、与 P0-4 兼容的候选 —— 但它**只建证据链，
+  不产生 Decision Delta**。
+- 若目标 = **"真实 Decision Delta / Behavior Delta"**，则生产链不存在，需新的 Scope Amendment
+  （且必须先解决 Q4 归因缺口与 W1 生产形成可达性）。
 
 ---
 
-## 6. 提交 Human Gate
+## 8. 提交 Human Gate
 
-- 本文件 = **P1-1D Scope Assessment（生产现实审计）**。
+- 本文件 = **P1-1D Scope Assessment（生产现实审计，五问结构）**。
 - 请 Human Gate 裁决：
-  1. 审计结论是否认可（生产 Thinking 输出当前无合法 Decision 消费点）？
+  1. Q1-Q5 审计结论是否认可？
   2. Scope 选项 A / B / C 是否选择其一，或要求补充审计？
+  3. 若选 B：是否同时要求先澄清 W1 生产形成可达性（SelfEvidencePipeline 无生产调用者）？
 
 ---
 
