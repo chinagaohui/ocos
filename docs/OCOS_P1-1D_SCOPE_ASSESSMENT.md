@@ -1,6 +1,9 @@
 # OCOS P1-1D — Scope Assessment（生产现实审计，Human Gate 五问）
 
-> 状态：**P1-1D SCOPE ASSESSMENT — 只读审计完成，提交 Human Gate 裁决**。
+> 状态：**P1-1D SCOPE ASSESSMENT = PASS / FROZEN**（Human Gate 终裁，2026-09-14）。
+> 裁决：**P1-1D 实施授权 = NO-GO（NOT AUTHORIZED）**；B（Trace 增强）暂不实施；
+> A（接 DecisionBridge）否决；C（继续冻结）当前有效。
+> 下一步（唯一开放）：**Decision Host / Semantic Boundary 只读审计**。
 > 承接：G4 PASS / FROZEN（Worldview → Thinking Consumption，2026-09-14）。
 > P1-1D = **NOT AUTHORIZED**（Human Gate 终裁）；本文件 = 进入 P1-1D 前的生产现实审计。
 >
@@ -229,4 +232,66 @@ P1-1D-B 边界（Thinking → Decision 的可审计消费），且该边界当�
 
 ---
 
-*本文件为 P1-1D 只读审计材料。未修改任何生产代码。下一步行动需 Human Gate 明确授权。*
+## 9. Human Gate 终裁（FROZEN，2026-09-14）
+
+```text
+P1-1D SCOPE ASSESSMENT
+======================
+
+Q1 生产 Thinking 输出宿主
+→ ChatResponder.respond()
+→ PASS
+
+Q2 Decision 是否消费生产 Thinking
+→ E1 PASS
+→ E2 FAIL
+→ E3 FAIL
+→ PASS（审计结论：不存在生产消费路径）
+
+Q3 Authority Boundary
+→ 未发现 Thinking → Self/Worldview/Claim/Goal/Governance
+   生产写路径
+→ PASS
+
+Q4 Decision Attribution Infrastructure
+→ 部分存在
+→ 缺少 worldview snapshot / action identity /
+   W0-W1 paired Decision host
+→ PASS（缺口确认）
+
+Q5 Behavior Delta Separation
+→ Decision→Behavior 与 Thinking→Decision 必须分离
+→ 当前 P1-1D-C 不纳入
+→ PASS
+
+SCOPE VERDICT
+=============
+
+P1-1D 当前仍 NOT AUTHORIZED。
+
+不授权：
+- ChatResponder → DecisionBridge 直接接线
+- Worldview → DecisionBridge prompt 直接注入
+- 修改 decision_pipeline.py
+- 修改 agent_runtime.py
+- 修改 bridge.py
+- 修改 context_builder.py
+- 任何 Decision→Behavior 实施
+
+允许下一步：
+- Decision Host / Semantic Boundary 只读审计
+- 明确现有生产 Decision 语义宿主
+- 明确 Thinking→Decision 是否存在合法最小接口
+- 明确所需最小 Attribution Infrastructure
+
+B 仅可作为后续证据基础设施 Scope Amendment 候选，
+不得解释为已经建立 Thinking→Decision。
+```
+
+**冻结状态**：P1-1D Scope Assessment = **PASS / FROZEN**；
+P1-1D 实施授权 = **NO-GO**；唯一开放下一步 = Decision Host / Semantic Boundary 只读审计
+（见 `OCOS_P1-1D_DECISION_HOST_SEMANTIC_BOUNDARY_AUDIT.md`）。
+
+---
+
+*本文件为 P1-1D 只读审计材料（PASS / FROZEN）。未修改任何生产代码。下一步仅限 Decision Host 只读审计，需 Human Gate 明确授权方可进入实施。*
